@@ -1,0 +1,108 @@
+{
+  "name": "avc",
+  "displayName": "AVC — Agentic Version Control",
+  "description": "Save, browse, and restore project snapshots without Git.",
+  "version": "0.1.0",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "avc-sidebar",
+          "title": "AVC Snapshots",
+          "icon": "media/avc-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "avc-sidebar": [
+        {
+          "id": "avcSnapshots",
+          "name": "Snapshots"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "avc.saveSnapshot",
+        "title": "AVC: Save Snapshot",
+        "icon": "$(add)"
+      },
+      {
+        "command": "avc.refreshSnapshots",
+        "title": "AVC: Refresh Snapshots",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "avc.restoreSnapshot",
+        "title": "AVC: Restore This Snapshot"
+      },
+      {
+        "command": "avc.viewDiff",
+        "title": "AVC: View Diff"
+      },
+      {
+        "command": "avc.deleteSnapshot",
+        "title": "AVC: Delete Snapshot"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "avc.saveSnapshot",
+          "when": "view == avcSnapshots",
+          "group": "navigation"
+        },
+        {
+          "command": "avc.refreshSnapshots",
+          "when": "view == avcSnapshots",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "avc.restoreSnapshot",
+          "when": "viewItem == snapshot",
+          "group": "inline"
+        },
+        {
+          "command": "avc.deleteSnapshot",
+          "when": "viewItem == snapshot"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "AVC",
+      "properties": {
+        "avc.projectPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the AVC-initialized project. Defaults to the workspace root."
+        },
+        "avc.defaultAgentName": {
+          "type": "string",
+          "default": "",
+          "description": "Default agent name to use when creating snapshots."
+        },
+        "avc.cliPath": {
+          "type": "string",
+          "default": "avc",
+          "description": "Path to the avc CLI binary."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0"
+  }
+}

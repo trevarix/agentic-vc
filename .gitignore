@@ -1,0 +1,11 @@
+*.exe
+.env
+.env.*
+.env.local
+.env.production
+node_modules/
+.npm/
+.next/
+.nuxt/
+.svelte-kit/
+*.tsbuildinfo

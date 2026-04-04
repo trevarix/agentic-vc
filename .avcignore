@@ -1,0 +1,90 @@
+# AVC ignore rules — patterns listed here are excluded from all snapshots.
+# Syntax is identical to .gitignore.
+
+# ── Python ────────────────────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+.env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+htmlcov/
+.coverage
+
+# ── Node / JavaScript / TypeScript ────────────────────────────────────────────
+node_modules/
+.npm/
+.next/
+.nuxt/
+.svelte-kit/
+*.tsbuildinfo
+
+# ── Go ────────────────────────────────────────────────────────────────────────
+vendor/
+
+# ── Rust ──────────────────────────────────────────────────────────────────────
+target/
+
+# ── Java / Kotlin / Gradle / Maven ────────────────────────────────────────────
+.gradle/
+.mvn/
+*.class
+*.jar
+
+# ── .NET / C# ─────────────────────────────────────────────────────────────────
+obj/
+
+# ── Ruby ──────────────────────────────────────────────────────────────────────
+.bundle/
+
+# ── Terraform ─────────────────────────────────────────────────────────────────
+.terraform/
+*.tfstate
+*.tfstate.backup
+
+# ── Build output (cross-stack) ────────────────────────────────────────────────
+dist/
+build/
+out/
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+*.o
+*.a
+
+# ── Logs and coverage ─────────────────────────────────────────────────────────
+*.log
+logs/
+coverage/
+
+# ── Environment and secrets ───────────────────────────────────────────────────
+.env
+.env.*
+.env.local
+.env.production
+*.pem
+*.key
+*.cert
+*.p12
+*.pfx
+
+# ── OS artifacts ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Editor metadata ───────────────────────────────────────────────────────────
+.idea/
+*.swp
+*.swo
+*.suo
+*.user
