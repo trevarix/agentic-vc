@@ -1,4 +1,4 @@
-module github.com/agentic-version-ctl/avc
+module github.com/SkillMythOrg/agentic-vc/avc
 
 go 1.22
 

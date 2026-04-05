@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/agentic-version-ctl/avc/internal/db"
-	"github.com/agentic-version-ctl/avc/internal/fileutil"
-	"github.com/agentic-version-ctl/avc/internal/restore"
+	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
+	"github.com/SkillMythOrg/agentic-vc/avc/internal/fileutil"
+	"github.com/SkillMythOrg/agentic-vc/avc/internal/restore"
 )
 
 // Result is returned by Create after a successful snapshot.

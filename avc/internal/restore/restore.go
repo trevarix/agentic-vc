@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/agentic-version-ctl/avc/internal/db"
-	"github.com/agentic-version-ctl/avc/internal/fileutil"
+	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
+	"github.com/SkillMythOrg/agentic-vc/avc/internal/fileutil"
 )
 
 // Result is returned by Restore on success.

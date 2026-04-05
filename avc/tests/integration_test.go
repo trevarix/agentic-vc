@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/agentic-version-ctl/avc/internal/diff"
-	"github.com/agentic-version-ctl/avc/internal/restore"
-	"github.com/agentic-version-ctl/avc/internal/snapshot"
+	"github.com/SkillMythOrg/agentic-vc/avc/internal/diff"
+	"github.com/SkillMythOrg/agentic-vc/avc/internal/restore"
+	"github.com/SkillMythOrg/agentic-vc/avc/internal/snapshot"
 )
 
 // TestIntegration_FullSnapshotRestoreCycle covers the primary user workflow:

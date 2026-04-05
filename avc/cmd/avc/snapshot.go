@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/agentic-version-ctl/avc/internal/snapshot"
+	"github.com/SkillMythOrg/agentic-vc/avc/internal/snapshot"
 	"github.com/spf13/cobra"
 )
 

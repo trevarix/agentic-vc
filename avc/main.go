@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/agentic-version-ctl/avc/cmd/avc"
+	"github.com/SkillMythOrg/agentic-vc/avc/cmd/avc"
 )
 
 func main() {

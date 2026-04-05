@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/agentic-version-ctl/avc/internal/restore"
-	"github.com/agentic-version-ctl/avc/internal/snapshot"
+	"github.com/SkillMythOrg/agentic-vc/avc/internal/restore"
+	"github.com/SkillMythOrg/agentic-vc/avc/internal/snapshot"
 )
 
 func TestRestore_RollsBackModifiedFile(t *testing.T) {
