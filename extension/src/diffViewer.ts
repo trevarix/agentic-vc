@@ -3,7 +3,6 @@ import { DiffResult, FileDiff, getDiff, resolveProjectPath } from './cliProxy';
 
 /** Opens a webview panel showing the diff between two snapshots. */
 export async function showDiff(
-  context: vscode.ExtensionContext,
   fromId: string,
   fromLabel: string,
   toId: string,

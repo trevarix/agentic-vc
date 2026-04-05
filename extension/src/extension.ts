@@ -11,17 +11,27 @@ import {
 export function activate(context: vscode.ExtensionContext): void {
   const provider = new SnapshotProvider();
 
+  const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 10);
+  statusBar.command = 'avc.refreshSnapshots';
+  statusBar.show();
+  context.subscriptions.push(statusBar);
+
+  function updateStatusBar(): void {
+    const count = provider.getChildren().length;
+    statusBar.text = `$(history) AVC: ${count} snapshot${count === 1 ? '' : 's'}`;
+  }
+
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider('avcSnapshots', provider)
   );
 
   // Load snapshot list on activation.
-  provider.load();
+  provider.load().then(updateStatusBar);
 
   // ─── Commands ────────────────────────────────────────────────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('avc.refreshSnapshots', () => provider.load()),
+    vscode.commands.registerCommand('avc.refreshSnapshots', () => provider.load().then(updateStatusBar)),
 
     vscode.commands.registerCommand('avc.saveSnapshot', async () => {
       const label = await vscode.window.showInputBox({
@@ -49,7 +59,8 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.window.showInformationMessage(
           `AVC: Snapshot "${snap.label}" saved (${snap.files_changed} files)`
         );
-        provider.load();
+        await provider.load();
+        updateStatusBar();
       } catch (err) {
         vscode.window.showErrorMessage(`AVC: Snapshot failed — ${(err as Error).message}`);
       }
@@ -74,7 +85,8 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.window.showInformationMessage(
           `AVC: Restored ${result.restored_files} files from "${item.snapshot.label}"`
         );
-        provider.load();
+        await provider.load();
+        updateStatusBar();
       } catch (err) {
         vscode.window.showErrorMessage(`AVC: Restore failed — ${(err as Error).message}`);
       }
@@ -95,7 +107,6 @@ export function activate(context: vscode.ExtensionContext): void {
       }
 
       await showDiff(
-        context,
         prev.snapshot.id,
         prev.snapshot.label,
         item.snapshot.id,
@@ -116,7 +127,8 @@ export function activate(context: vscode.ExtensionContext): void {
 
       try {
         await deleteSnapshot(projectPath, item.snapshot.id);
-        provider.load();
+        await provider.load();
+        updateStatusBar();
       } catch (err) {
         vscode.window.showErrorMessage(`AVC: Delete failed — ${(err as Error).message}`);
       }

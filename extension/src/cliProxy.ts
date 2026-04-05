@@ -56,7 +56,7 @@ function runAvcCommand<T>(args: string[], projectPath?: string): Promise<T> {
       ? { ...process.env, AVC_PROJECT: projectPath }
       : process.env;
 
-    execFile(cliPath, [...args, '--json'], { env }, (error, stdout, stderr) => {
+    execFile(cliPath, [...args, '--json'], { env, cwd: projectPath }, (error, stdout, stderr) => {
       if (error) {
         reject(new Error(stderr?.trim() || error.message));
         return;
@@ -79,7 +79,6 @@ export function resolveProjectPath(): string | undefined {
 }
 
 export async function listSnapshots(projectPath: string): Promise<Snapshot[]> {
-  process.chdir(projectPath);
   return runAvcCommand<Snapshot[]>(['list'], projectPath);
 }
 

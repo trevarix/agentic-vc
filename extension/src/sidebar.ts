@@ -19,7 +19,7 @@ export class SnapshotItem extends vscode.TreeItem {
       .join('\n');
 
     this.contextValue = 'snapshot';
-    this.iconPath = new vscode.ThemeIcon('git-commit');
+    this.iconPath = new vscode.ThemeIcon('history');
     this.command = {
       command: 'avc.viewDiff',
       title: 'View Changes',
