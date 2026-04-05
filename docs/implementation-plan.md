@@ -18,6 +18,7 @@ Progress key: ✅ done · 🔧 scaffolded (code exists but incomplete) · ⬜ no
 ### CLI commands (`cmd/avc/`)
 - ✅ `root.go` — Cobra root, `--json` persistent flag, subcommand registration
 - ✅ `helpers.go` — `requireInitializedProject()` walks up to find `.avc/`
+- ✅ `color.go` — ANSI color helpers, terminal detection, `NO_COLOR` support
 - ✅ `init.go` — `avc init [path]`
 - ✅ `snapshot.go` — `avc snapshot <label> [--agent] [--notes]`
 - ✅ `list.go` — `avc list`
@@ -25,21 +26,31 @@ Progress key: ✅ done · 🔧 scaffolded (code exists but incomplete) · ⬜ no
 - ✅ `restore.go` — `avc restore <id>`
 - ✅ `info.go` — `avc info <id>`
 - ✅ `delete.go` — `avc delete <id>`
+- ✅ `log.go` — `avc log` tree diagram of snapshot history
 
 ### Internal packages
 - ✅ `internal/db/db.go` — SQLite schema (projects, snapshots, files, diffs), migrations, all CRUD
 - ✅ `internal/db/util.go` — `newID()`, `nowUnix()`
-- ✅ `internal/fileutil/fileutil.go` — SHA256 hashing, directory walk, `.avcignore` parsing
-- ✅ `internal/config/config.go` — `config.toml` read/write, `.avcignore` generation, `.gitignore` append
+- ✅ `internal/fileutil/fileutil.go` — SHA256 hashing, directory walk, `.avcignore` parsing; `.git/.hg/.svn/.bzr` hardcoded exclusions
+- ✅ `internal/config/config.go` — `config.toml` read/write, `.avcignore` generation (cross-stack patterns), `.gitignore` append
 - ✅ `internal/snapshot/snapshot.go` — walks project, hashes files, stores blobs, inserts DB records
-- ✅ `internal/restore/restore.go` — object store read-back and file write; `StoreObject` helper
-- ✅ `internal/diff/diff.go` — two-snapshot comparison, added/modified/deleted, line count preview
+- ✅ `internal/restore/restore.go` — object store read-back, file write, deletion of files absent from target snapshot
+- ✅ `internal/diff/diff.go` — LCS-based line counting, CRLF normalisation, `filepath.Join` for object paths, line counts for added/deleted files
 
 ### Init side effects
 - ✅ Creates `.avc/` directory and `avc.db`, runs migrations
 - ✅ Writes `.avc/config.toml`
-- ✅ Writes `.avcignore` to project root (if absent)
+- ✅ Writes `.avcignore` to project root (if absent) with cross-stack patterns
 - ✅ Appends `.avc/` and `.avcignore` to root `.gitignore` if one exists
+
+### Bug fixes (resolved during testing)
+- ✅ Diff line counts wrong — set-based approach replaced with LCS algorithm
+- ✅ Objects not found on Windows — `fmt.Sprintf` path replaced with `filepath.Join`
+- ✅ Mixed CRLF/LF line endings counted as different lines — normalised in `splitLines`
+- ✅ Added/deleted files always showed `+0 -0` — `enrichWithLineCounts` now called for all change types
+- ✅ Restore left behind files added after the target snapshot — restore now deletes tracked files absent from the target
+- ✅ `.git/` and other VCS dirs tracked by AVC — hardcoded exclusions in `WalkProject`
+- ✅ `.venv/` and other stack-specific dirs tracked — expanded default `.avcignore`
 
 ### Tests
 - ✅ `tests/snapshot_test.go`
@@ -64,12 +75,12 @@ Progress key: ✅ done · 🔧 scaffolded (code exists but incomplete) · ⬜ no
 
 ### Extension scaffolding
 - ✅ `extension/package.json` — manifest, commands, views, configuration schema
-- ✅ `extension/tsconfig.json`
-- ⬜ `extension/media/avc-icon.svg` — icon referenced in `package.json`, file missing
-- ⬜ `npm install` run, `node_modules/` present
+- ✅ `extension/tsconfig.json` — `"types": ["node"]` added to resolve `child_process` types
+- ✅ `extension/media/avc-icon.svg` — camera icon for activity bar
+- ✅ `npm install` run, `node_modules/` present
 
 ### Core TypeScript files
-- ✅ `extension/src/cliProxy.ts` — typed wrappers for all CLI commands, `resolveProjectPath()`
+- ✅ `extension/src/cliProxy.ts` — typed wrappers for all CLI commands, `resolveProjectPath()`; `cwd` passed to `execFile` (replaced broken `process.chdir`)
 - ✅ `extension/src/sidebar.ts` — `SnapshotProvider` TreeDataProvider, `SnapshotItem`
 - ✅ `extension/src/extension.ts` — activation, command registration (save, refresh, restore, diff, delete)
 
@@ -80,9 +91,9 @@ Progress key: ✅ done · 🔧 scaffolded (code exists but incomplete) · ⬜ no
 - ✅ "Delete Snapshot" command with confirmation prompt
 - ✅ Snapshot list auto-refreshes after save / restore / delete
 - ✅ Each snapshot shows label, timestamp, agent name, file count (tooltip)
-- ⬜ Status bar item: "AVC: X snapshots" — defined in `package.json` contributes but not implemented in `extension.ts`
-- ⬜ `npm run compile` passes with no TypeScript errors
-- ⬜ Manual smoke test in Extension Development Host
+- ✅ Status bar item: "AVC: X snapshots" — updates after every save / restore / delete
+- ✅ `npm run compile` passes with no TypeScript errors
+- ✅ Manual smoke test in Extension Development Host
 
 ---
 
@@ -91,12 +102,13 @@ Progress key: ✅ done · 🔧 scaffolded (code exists but incomplete) · ⬜ no
 **Goal:** Users can see exactly what their agent changed, with readable syntax highlighting.
 
 ### Diff viewer
-- 🔧 `extension/src/diffViewer.ts` — Webview HTML built from diff JSON; color-coded lines, file headers, line stats
+- ✅ `extension/src/diffViewer.ts` — table-based unified diff; actual file line numbers, green/red row highlights, muted context lines, `@@` hunk headers
+- ✅ `internal/diff/diff.go` — LCS backtracking produces proper unified diff with `diffContextLines = 3` context and `@@ -a,b +c,d @@` headers; replaces broken multiset `buildPreview`
+- ✅ "View Changes" command in sidebar wired to show diff against previous snapshot (click on any snapshot item)
 - ⬜ Syntax highlighting — integrate Prism.js (loaded via CDN in Webview HTML)
 - ⬜ Side-by-side layout option (currently unified only)
 - ⬜ File-by-file navigation (dropdown or prev/next buttons when diff spans multiple files)
 - ⬜ Copy-to-clipboard button per file diff
-- ⬜ "View Changes" command in sidebar wired to show diff against previous snapshot
 
 ### Performance
 - ⬜ Diff view loads in < 1s for files up to 10k lines
@@ -182,7 +194,7 @@ Progress key: ✅ done · 🔧 scaffolded (code exists but incomplete) · ⬜ no
 - ✅ `docs/cli-reference.md`
 - ✅ `docs/contributing.md`
 - ✅ `docs/project-description.md`
-- ⬜ `README.md` — quick-start guide (install, init, first snapshot, restore)
+- ✅ `README.md` — quick-start guide (install, init, first snapshot, restore; CLI and extension dev setup; Windows Smart App Control note)
 - ⬜ `docs/cli-reference.md` updated with Phase 4–5 commands (branch, merge)
 - ⬜ `docs/architecture.md` updated with branches/merges schema section
 
@@ -193,11 +205,58 @@ Progress key: ✅ done · 🔧 scaffolded (code exists but incomplete) · ⬜ no
 
 ---
 
-## Immediate next actions (unblock Phase 1)
+## Phase 7 — Agentic Integration
 
-1. `go mod tidy` — generates `go.sum`, downloads `cobra`, `modernc.org/sqlite`, `BurntSushi/toml`
-2. Wire `restore.StoreObject` into `internal/snapshot/snapshot.go` — without this, `avc restore` cannot retrieve file content
-3. Add `cmd/avc/delete.go` — extension already calls `avc delete <id>`, CLI doesn't have it yet
-4. Write `.avc/.gitignore` in `db.InitProject` or `config.WriteDefault`
-5. `go build ./...` — verify it compiles
-6. `go test ./...` — verify all tests pass
+**Goal:** Make AVC the default safety layer for agent-assisted development across the major coding frameworks.
+
+### MCP Server
+
+- ⬜ `cmd/avc/mcp.go` — `avc mcp serve` subcommand; starts a stdio MCP server
+- ⬜ `internal/mcp/server.go` — JSON-RPC 2.0 readline loop over stdio; dispatches `initialize`, `tools/list`, `tools/call`
+- ⬜ `internal/mcp/tools.go` — tool registry and input schema definitions
+- ⬜ `internal/mcp/handlers.go` — one function per tool; calls existing `internal/` packages directly (no CLI re-invocation)
+- ⬜ Server is project-scoped — resolves `.avc/` from `cwd` at startup, same as all other commands
+- ⬜ Each tool call returns the same JSON the CLI already produces — no new data layer
+- ⬜ Tool results wrapped in MCP `content` envelope: `{"content": [{"type": "text", "text": "<json>"}]}`
+- ⬜ Output is pretty-printed JSON for readability in agent context windows; `--compact` flag available for token-sensitive environments
+
+### MCP Tools
+
+| Tool | Input | Maps to |
+|------|-------|---------|
+| `avc_snapshot` | `label`, `agent_name?`, `notes?` | `snapshot.Create` |
+| `avc_list` | *(none)* | `db.ListSnapshots` |
+| `avc_diff` | `from_id`, `to_id` | `diff.Compare` |
+| `avc_restore` | `id` | `restore.Restore` |
+| `avc_info` | `id` | `db.GetSnapshot` + `db.GetSnapshotFiles` |
+| `avc_delete` | `id` | `db.DeleteSnapshot` |
+
+### Agent SKILLs (`avc init --skills <framework>`)
+
+Each `--skills` flag writes two things: the MCP server config for that framework, and a behavior instruction file that tells the agent when and how to use AVC.
+
+| Flag | MCP config written | Instruction file written |
+|------|-------------------|--------------------------|
+| `--skills claude-code` | `.claude/settings.json` | `.claude/commands/avc-*.md` skill files |
+| `--skills cursor` | `.cursor/mcp.json` | `.cursorrules` AVC block appended |
+| `--skills windsurf` | `.codeium/windsurf/mcp_config.json` | `.windsurfrules` AVC block appended |
+| `--skills cline` | `.roo/mcp.json` | `.clinerules` AVC block appended |
+| `--skills generic` | *(none)* | `AGENT_INSTRUCTIONS.md` drop-in prompt block |
+
+- ⬜ All instruction files include: when to snapshot (before risky edits), when to restore (on task failure), how to read diff output
+- ⬜ JSON config files (`.claude/settings.json`, `.cursor/mcp.json`, etc.) — **merge operation**: read existing file, insert `avc` entry under `mcpServers` key, write back; create file if absent; no-op if `avc` entry already present
+- ⬜ Rules files (`.cursorrules`, `.clinerules`, `.windsurfrules`) — **append operation**: add AVC block after existing content, guarded by a `# AVC` marker to prevent duplicate appends on re-run
+- ⬜ Multiple flags supported: `avc init --skills claude-code --skills cursor`
+
+### Documentation
+
+- ⬜ `docs/mcp-integration.md` — MCP server setup guide per framework
+- ⬜ `docs/agent-skills.md` — what each skill file does and how to customize it
+
+---
+
+## Immediate next actions (Phase 3)
+
+1. Integrate Prism.js for syntax highlighting in the diff viewer Webview
+2. Add file-by-file navigation (dropdown or prev/next) when a diff spans multiple files
+3. Add copy-to-clipboard button per file diff block
