@@ -149,20 +149,39 @@ func splitLines(data []byte) []string {
 	return strings.Split(normalized, "\n")
 }
 
-// computeUnifiedDiff returns accurate added/removed line counts and a short
-// preview using the Longest Common Subsequence algorithm. This correctly
-// handles duplicate lines (e.g. blank lines, repeated patterns) that the
-// previous set-based approach miscounted.
+const (
+	// maxDiffFileLines guards the O(m*n) LCS table allocation.
+	// Files larger than this show counts only, no inline diff.
+	maxDiffFileLines = 2000
+	// diffContextLines is the number of unchanged lines shown around each hunk.
+	diffContextLines = 3
+)
+
+type editOp int
+
+const (
+	editKeep   editOp = iota
+	editAdd
+	editDelete
+)
+
+type editLine struct {
+	op   editOp
+	text string
+}
+
+// computeUnifiedDiff returns accurate added/removed line counts and a proper
+// unified diff preview with hunk headers and context lines.
 func computeUnifiedDiff(oldLines, newLines []string) (added, removed int, preview string) {
 	lcs := lcsLength(oldLines, newLines)
 	added = len(newLines) - lcs
 	removed = len(oldLines) - lcs
-	preview = buildPreview(oldLines, newLines)
+	preview = buildUnifiedDiff(oldLines, newLines)
 	return
 }
 
-// lcsLength computes the length of the Longest Common Subsequence of two line
-// slices using a space-efficient two-row DP table (O(n) space, O(m*n) time).
+// lcsLength computes the length of the Longest Common Subsequence using a
+// space-efficient two-row DP table (O(n) space, O(m*n) time).
 func lcsLength(a, b []string) int {
 	if len(a) == 0 || len(b) == 0 {
 		return 0
@@ -184,36 +203,160 @@ func lcsLength(a, b []string) int {
 	return prev[len(b)]
 }
 
-// buildPreview produces a short unified-style excerpt of the changes.
-// It uses multiset counting so duplicate lines are handled correctly.
-func buildPreview(oldLines, newLines []string) string {
-	const maxPreviewLines = 10
-
-	oldCounts := make(map[string]int, len(oldLines))
-	for _, l := range oldLines {
-		oldCounts[l]++
+// computeEdits returns an in-order edit sequence from oldLines to newLines
+// using LCS backtracking (O(m*n) space). Returns nil when either file exceeds
+// maxDiffFileLines.
+func computeEdits(oldLines, newLines []string) []editLine {
+	m, n := len(oldLines), len(newLines)
+	if m > maxDiffFileLines || n > maxDiffFileLines {
+		return nil
 	}
-	newCounts := make(map[string]int, len(newLines))
-	for _, l := range newLines {
-		newCounts[l]++
+	// Full DP table for backtracking.
+	dp := make([][]int, m+1)
+	for i := range dp {
+		dp[i] = make([]int, n+1)
 	}
-
-	var preview []string
-	for _, l := range newLines {
-		if oldCounts[l] > 0 {
-			oldCounts[l]--
-		} else if len(preview) < maxPreviewLines {
-			preview = append(preview, "+"+l)
+	for i := 1; i <= m; i++ {
+		for j := 1; j <= n; j++ {
+			if oldLines[i-1] == newLines[j-1] {
+				dp[i][j] = dp[i-1][j-1] + 1
+			} else if dp[i-1][j] >= dp[i][j-1] {
+				dp[i][j] = dp[i-1][j]
+			} else {
+				dp[i][j] = dp[i][j-1]
+			}
 		}
 	}
-	for _, l := range oldLines {
-		if newCounts[l] > 0 {
-			newCounts[l]--
-		} else if len(preview) < maxPreviewLines {
-			preview = append(preview, "-"+l)
+	// Backtrack to produce the edit sequence (built in reverse, then flipped).
+	edits := make([]editLine, 0, m+n)
+	i, j := m, n
+	for i > 0 || j > 0 {
+		switch {
+		case i > 0 && j > 0 && oldLines[i-1] == newLines[j-1]:
+			edits = append(edits, editLine{editKeep, oldLines[i-1]})
+			i--
+			j--
+		case j > 0 && (i == 0 || dp[i][j-1] >= dp[i-1][j]):
+			edits = append(edits, editLine{editAdd, newLines[j-1]})
+			j--
+		default:
+			edits = append(edits, editLine{editDelete, oldLines[i-1]})
+			i--
 		}
 	}
-	return strings.Join(preview, "\n")
+	for l, r := 0, len(edits)-1; l < r; l, r = l+1, r-1 {
+		edits[l], edits[r] = edits[r], edits[l]
+	}
+	return edits
+}
+
+// posEdit is an edit line annotated with its 1-based old and new line numbers.
+// oldLine is 0 for added lines; newLine is 0 for deleted lines.
+type posEdit struct {
+	op      editOp
+	text    string
+	oldLine int
+	newLine int
+}
+
+// buildUnifiedDiff produces a unified diff with @@ hunk headers and
+// diffContextLines of context around each changed region.
+// Returns an empty string when files exceed maxDiffFileLines.
+func buildUnifiedDiff(oldLines, newLines []string) string {
+	edits := computeEdits(oldLines, newLines)
+	if edits == nil {
+		return ""
+	}
+
+	// Annotate each edit with line numbers.
+	positioned := make([]posEdit, len(edits))
+	ol, nl := 1, 1
+	for i, e := range edits {
+		switch e.op {
+		case editKeep:
+			positioned[i] = posEdit{editKeep, e.text, ol, nl}
+			ol++
+			nl++
+		case editAdd:
+			positioned[i] = posEdit{editAdd, e.text, 0, nl}
+			nl++
+		case editDelete:
+			positioned[i] = posEdit{editDelete, e.text, ol, 0}
+			ol++
+		}
+	}
+
+	// Mark which positions belong to a hunk (changed ± context).
+	inHunk := make([]bool, len(positioned))
+	for i, e := range positioned {
+		if e.op != editKeep {
+			start := i - diffContextLines
+			if start < 0 {
+				start = 0
+			}
+			end := i + diffContextLines
+			if end >= len(positioned) {
+				end = len(positioned) - 1
+			}
+			for k := start; k <= end; k++ {
+				inHunk[k] = true
+			}
+		}
+	}
+
+	var sb strings.Builder
+	i := 0
+	for i < len(positioned) {
+		if !inHunk[i] {
+			i++
+			continue
+		}
+		hunkStart := i
+		for i < len(positioned) && inHunk[i] {
+			i++
+		}
+		slice := positioned[hunkStart:i]
+
+		// Compute @@ header values.
+		firstOld, firstNew := 0, 0
+		oldCount, newCount := 0, 0
+		for _, e := range slice {
+			switch e.op {
+			case editKeep:
+				if firstOld == 0 {
+					firstOld = e.oldLine
+				}
+				if firstNew == 0 {
+					firstNew = e.newLine
+				}
+				oldCount++
+				newCount++
+			case editAdd:
+				if firstNew == 0 {
+					firstNew = e.newLine
+				}
+				newCount++
+			case editDelete:
+				if firstOld == 0 {
+					firstOld = e.oldLine
+				}
+				oldCount++
+			}
+		}
+
+		fmt.Fprintf(&sb, "@@ -%d,%d +%d,%d @@\n", firstOld, oldCount, firstNew, newCount)
+		for _, e := range slice {
+			switch e.op {
+			case editKeep:
+				fmt.Fprintf(&sb, " %s\n", e.text)
+			case editAdd:
+				fmt.Fprintf(&sb, "+%s\n", e.text)
+			case editDelete:
+				fmt.Fprintf(&sb, "-%s\n", e.text)
+			}
+		}
+	}
+	return sb.String()
 }
 
 func sortDiffs(diffs []*FileDiff) {

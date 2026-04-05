@@ -67,10 +67,21 @@ function buildDiffHtml(result: DiffResult, fromLabel: string, toLabel: string): 
     .line-stats { font-size: 11px; }
     .added-count   { color: #3fb950; }
     .removed-count { color: #f85149; }
-    .diff-preview  { padding: 8px 12px; white-space: pre-wrap; word-break: break-all;
-                     border-top: 1px solid var(--vscode-panel-border); }
-    .diff-line-add { color: #3fb950; }
-    .diff-line-del { color: #f85149; }
+    .diff-body  { border-top: 1px solid var(--vscode-panel-border); overflow-x: auto; }
+    .diff-table { border-collapse: collapse; width: 100%; font-size: 12px; }
+    .diff-table tr:hover { filter: brightness(1.08); }
+    .ln   { width: 1%; white-space: nowrap; text-align: right; padding: 1px 8px;
+            color: var(--vscode-editorLineNumber-foreground); user-select: none;
+            border-right: 1px solid var(--vscode-panel-border); }
+    .sign { width: 1%; white-space: nowrap; padding: 1px 6px; user-select: none; }
+    .code { padding: 1px 8px; white-space: pre; }
+    .hunk-row td { background: var(--vscode-editor-inactiveSelectionBackground);
+                   color: var(--vscode-textLink-foreground); padding: 2px 8px; font-size: 11px; }
+    .add-row      { background: rgba(63,185,80,0.15); }
+    .add-row .sign { color: #3fb950; }
+    .del-row      { background: rgba(248,81,73,0.15); }
+    .del-row .sign { color: #f85149; }
+    .ctx-row      { color: var(--vscode-descriptionForeground); }
   </style>
 </head>
 <body>
@@ -86,20 +97,8 @@ function buildDiffHtml(result: DiffResult, fromLabel: string, toLabel: string): 
 
 function renderFileDiff(f: FileDiff): string {
   const badgeClass = `badge-${f.type}`;
-  const previewLines = (f.diff_preview ?? '')
-    .split('\n')
-    .map((line) => {
-      const cls = line.startsWith('+')
-        ? 'diff-line-add'
-        : line.startsWith('-')
-        ? 'diff-line-del'
-        : '';
-      return `<span class="${cls}">${escapeHtml(line)}</span>`;
-    })
-    .join('\n');
-
-  const preview = previewLines
-    ? `<div class="diff-preview">${previewLines}</div>`
+  const body = f.diff_preview
+    ? `<div class="diff-body">${renderUnifiedDiff(f.diff_preview)}</div>`
     : '';
 
   return `
@@ -114,8 +113,49 @@ function renderFileDiff(f: FileDiff): string {
         </span>
       </span>
     </div>
-    ${preview}
+    ${body}
   </div>`;
+}
+
+function renderUnifiedDiff(preview: string): string {
+  let oldLine = 1;
+  let newLine = 1;
+
+  const rows = preview
+    .split('\n')
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      if (line.startsWith('@@ ')) {
+        const match = line.match(/@@ -(\d+)[,\d]* \+(\d+)/);
+        if (match) {
+          oldLine = parseInt(match[1], 10);
+          newLine = parseInt(match[2], 10);
+        }
+        return `<tr class="hunk-row"><td colspan="3">${escapeHtml(line)}</td></tr>`;
+      }
+
+      const prefix = line[0];
+      const content = `<td class="code">${escapeHtml(line.slice(1))}</td>`;
+
+      if (prefix === '+') {
+        const n = newLine++;
+        return `<tr class="add-row"><td class="ln">${n}</td><td class="sign">+</td>${content}</tr>`;
+      }
+      if (prefix === '-') {
+        const n = oldLine++;
+        return `<tr class="del-row"><td class="ln">${n}</td><td class="sign">-</td>${content}</tr>`;
+      }
+      if (prefix === ' ') {
+        const n = oldLine++;
+        newLine++;
+        return `<tr class="ctx-row"><td class="ln">${n}</td><td class="sign"> </td>${content}</tr>`;
+      }
+      return '';
+    })
+    .filter(Boolean)
+    .join('');
+
+  return `<table class="diff-table">${rows}</table>`;
 }
 
 function escapeHtml(text: string): string {
