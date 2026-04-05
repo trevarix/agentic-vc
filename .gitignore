@@ -4,8 +4,10 @@
 .env.local
 .env.production
 node_modules/
+extension/out/
 .npm/
 .next/
 .nuxt/
 .svelte-kit/
 *.tsbuildinfo
+.vscode/
