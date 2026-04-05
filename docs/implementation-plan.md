@@ -170,42 +170,7 @@ Progress key: ✅ done · 🔧 scaffolded (code exists but incomplete) · ⬜ no
 
 ---
 
-## Phase 6 — Polish, Testing & Release
-
-**Goal:** Production-ready on all four primitives.
-
-### Testing
-- ⬜ All Phase 1 unit tests passing
-- ⬜ Integration test: `init → snapshot → diff → restore` round-trip
-- ⬜ Integration test: `init → branch create → snapshot on branch → merge → verify main`
-- ⬜ Integration test: `merge --abort` restores pre-merge state
-- ⬜ VSCode extension tests (snapshot save + restore flow)
-- ⬜ Race condition tests: `go test -race ./...`
-
-### Performance benchmarks
-- ⬜ Snapshot a 50 MB project: < 2s
-- ⬜ Generate diff view: < 500ms
-- ⬜ Restore: < 5s
-- ⬜ Branch create / switch: < 100ms
-- ⬜ Clean merge (no conflicts): < 3s
-
-### Documentation
-- ✅ `docs/architecture.md`
-- ✅ `docs/cli-reference.md`
-- ✅ `docs/contributing.md`
-- ✅ `docs/project-description.md`
-- ✅ `README.md` — quick-start guide (install, init, first snapshot, restore; CLI and extension dev setup; Windows Smart App Control note)
-- ⬜ `docs/cli-reference.md` updated with Phase 4–5 commands (branch, merge)
-- ⬜ `docs/architecture.md` updated with branches/merges schema section
-
-### Release
-- ⬜ Cross-platform binaries: `avc` (Linux), `avc.exe` (Windows), `avc-mac` (macOS arm64)
-- ⬜ VSCode extension packaged: `vsce package` → `.vsix`
-- ⬜ VSCode Marketplace listing
-
----
-
-## Phase 7 — Agentic Integration
+## Phase 6 — Agentic Integration
 
 **Goal:** Make AVC the default safety layer for agent-assisted development across the major coding frameworks.
 
@@ -252,6 +217,41 @@ Each `--skills` flag writes two things: the MCP server config for that framework
 
 - ⬜ `docs/mcp-integration.md` — MCP server setup guide per framework
 - ⬜ `docs/agent-skills.md` — what each skill file does and how to customize it
+
+---
+
+## Phase 7 — Polish, Testing & Release
+
+**Goal:** Production-ready on all four primitives.
+
+### Testing
+- ⬜ All Phase 1 unit tests passing
+- ⬜ Integration test: `init → snapshot → diff → restore` round-trip
+- ⬜ Integration test: `init → branch create → snapshot on branch → merge → verify main`
+- ⬜ Integration test: `merge --abort` restores pre-merge state
+- ⬜ VSCode extension tests (snapshot save + restore flow)
+- ⬜ Race condition tests: `go test -race ./...`
+
+### Performance benchmarks
+- ⬜ Snapshot a 50 MB project: < 2s
+- ⬜ Generate diff view: < 500ms
+- ⬜ Restore: < 5s
+- ⬜ Branch create / switch: < 100ms
+- ⬜ Clean merge (no conflicts): < 3s
+
+### Documentation
+- ✅ `docs/architecture.md`
+- ✅ `docs/cli-reference.md`
+- ✅ `docs/contributing.md`
+- ✅ `docs/project-description.md`
+- ✅ `README.md` — quick-start guide (install, init, first snapshot, restore; CLI and extension dev setup; Windows Smart App Control note)
+- ⬜ `docs/cli-reference.md` updated with Phase 4–5 commands (branch, merge)
+- ⬜ `docs/architecture.md` updated with branches/merges schema section
+
+### Release
+- ⬜ Cross-platform binaries: `avc` (Linux), `avc.exe` (Windows), `avc-mac` (macOS arm64)
+- ⬜ VSCode extension packaged: `vsce package` → `.vsix`
+- ⬜ VSCode Marketplace listing
 
 ---
 
