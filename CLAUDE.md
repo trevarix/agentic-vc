@@ -25,6 +25,7 @@ CLI commands: [docs/cli-reference.md](docs/cli-reference.md)
 
 ```bash
 # CLI
+cd avc_core
 go mod tidy
 go build -o avc .
 go test ./...
@@ -39,18 +40,20 @@ cd extension && npm install && npm run compile
 ## Project layout
 
 ```
-main.go                  # entry point — delegates to cmd/avc
-cmd/avc/                 # one file per CLI subcommand; thin — parse flags, call internal/, format output
-internal/
-  db/         # SQLite schema, migrations, all CRUD
-  fileutil/   # SHA256 hashing, directory walk, .avcignore
-  snapshot/   # orchestrates snapshot creation
-  restore/    # reads object store, writes files back to disk
-  diff/       # compares two snapshots; returns FileDiff list
-  config/     # reads/writes .avc/config.toml
-tests/                   # integration and cross-package tests
+avc/                # Go CLI and core engine
+  main.go                # entry point — delegates to cmd/avc
+  cmd/avc/               # one file per CLI subcommand; thin — parse flags, call internal/, format output
+  internal/
+    db/         # SQLite schema, migrations, all CRUD
+    fileutil/   # SHA256 hashing, directory walk, .avcignore
+    snapshot/   # orchestrates snapshot creation
+    restore/    # reads object store, writes files back to disk
+    diff/       # compares two snapshots; returns FileDiff list
+    config/     # reads/writes .avc/config.toml
+  tests/                 # integration and cross-package tests
 extension/src/           # TypeScript — extension.ts, sidebar.ts, diffViewer.ts, cliProxy.ts
 docs/                    # architecture.md, cli-reference.md, contributing.md, project-description.md
+examples/                # example agent workflow scripts
 ```
 
 ---

@@ -26,7 +26,7 @@ A local version control system built for the agent era. AVC gives agents and use
 
 ```bash
 git clone <repo-url>
-cd agentic-vc
+cd agentic-vc/avc_core
 go mod tidy
 ```
 
@@ -127,6 +127,7 @@ If `avc` is not on the system `PATH` in the dev host, set it explicitly in VSCod
 After editing Go source files, reinstall the binary:
 
 ```bash
+cd avc_core
 go install .
 ```
 
@@ -145,7 +146,7 @@ Then reload the Extension Development Host window (`Ctrl+Shift+P` → **Develope
 
 ```bash
 # Go tests
-go test ./...
+cd avc_core && go test ./...
 
 # TypeScript compile check
 cd extension && npm run compile
@@ -156,18 +157,21 @@ cd extension && npm run compile
 ## Project layout
 
 ```
-main.go                  # entry point
-cmd/avc/                 # one file per CLI subcommand
-internal/
-  db/                    # SQLite schema and CRUD
-  fileutil/              # SHA256 hashing, directory walk, .avcignore
-  snapshot/              # snapshot creation
-  restore/               # object store read-back and file write
-  diff/                  # two-snapshot comparison
-  config/                # .avc/config.toml read/write
-tests/                   # integration and cross-package tests
-extension/src/           # TypeScript — extension, sidebar, diff viewer, CLI proxy
+avc/                # Go CLI and core engine
+  main.go                # entry point
+  cmd/avc/               # one file per CLI subcommand
+  internal/
+    db/                  # SQLite schema and CRUD
+    fileutil/            # SHA256 hashing, directory walk, .avcignore
+    snapshot/            # snapshot creation
+    restore/             # object store read-back and file write
+    diff/                # two-snapshot comparison
+    config/              # .avc/config.toml read/write
+  tests/                 # integration and cross-package tests
+extension/               # VSCode extension (TypeScript)
+  src/                   # extension, sidebar, diff viewer, CLI proxy
 docs/                    # architecture, CLI reference, contributing guide
+examples/                # example agent workflow scripts
 ```
 
 ---

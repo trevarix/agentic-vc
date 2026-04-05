@@ -9,13 +9,13 @@ Progress key: ✅ done · 🔧 scaffolded (code exists but incomplete) · ⬜ no
 **Goal:** A working `avc` binary that agents and users can call today.
 
 ### Project scaffolding
-- ✅ `go.mod` with correct module name and dependencies declared
-- ✅ `go.sum` — generated via `go mod tidy`
-- ✅ `main.go` entry point
+- ✅ `avc/go.mod` with correct module name and dependencies declared
+- ✅ `avc/go.sum` — generated via `go mod tidy`
+- ✅ `avc/main.go` entry point
 - ✅ `CLAUDE.md` project instructions
 - ✅ `.avcignore` default ignore patterns (at repo root)
 
-### CLI commands (`cmd/avc/`)
+### CLI commands (`avc/cmd/avc/`)
 - ✅ `root.go` — Cobra root, `--json` persistent flag, subcommand registration
 - ✅ `helpers.go` — `requireInitializedProject()` walks up to find `.avc/`
 - ✅ `color.go` — ANSI color helpers, terminal detection, `NO_COLOR` support
@@ -29,13 +29,13 @@ Progress key: ✅ done · 🔧 scaffolded (code exists but incomplete) · ⬜ no
 - ✅ `log.go` — `avc log` tree diagram of snapshot history
 
 ### Internal packages
-- ✅ `internal/db/db.go` — SQLite schema (projects, snapshots, files, diffs), migrations, all CRUD
-- ✅ `internal/db/util.go` — `newID()`, `nowUnix()`
-- ✅ `internal/fileutil/fileutil.go` — SHA256 hashing, directory walk, `.avcignore` parsing; `.git/.hg/.svn/.bzr` hardcoded exclusions
-- ✅ `internal/config/config.go` — `config.toml` read/write, `.avcignore` generation (cross-stack patterns), `.gitignore` append
-- ✅ `internal/snapshot/snapshot.go` — walks project, hashes files, stores blobs, inserts DB records
-- ✅ `internal/restore/restore.go` — object store read-back, file write, deletion of files absent from target snapshot
-- ✅ `internal/diff/diff.go` — LCS-based line counting, CRLF normalisation, `filepath.Join` for object paths, line counts for added/deleted files
+- ✅ `avc/internal/db/db.go` — SQLite schema (projects, snapshots, files, diffs), migrations, all CRUD
+- ✅ `avc/internal/db/util.go` — `newID()`, `nowUnix()`
+- ✅ `avc/internal/fileutil/fileutil.go` — SHA256 hashing, directory walk, `.avcignore` parsing; `.git/.hg/.svn/.bzr` hardcoded exclusions
+- ✅ `avc/internal/config/config.go` — `config.toml` read/write, `.avcignore` generation (cross-stack patterns), `.gitignore` append
+- ✅ `avc/internal/snapshot/snapshot.go` — walks project, hashes files, stores blobs, inserts DB records
+- ✅ `avc/internal/restore/restore.go` — object store read-back, file write, deletion of files absent from target snapshot
+- ✅ `avc/internal/diff/diff.go` — LCS-based line counting, CRLF normalisation, `filepath.Join` for object paths, line counts for added/deleted files
 
 ### Init side effects
 - ✅ Creates `.avc/` directory and `avc.db`, runs migrations
@@ -53,16 +53,16 @@ Progress key: ✅ done · 🔧 scaffolded (code exists but incomplete) · ⬜ no
 - ✅ `.venv/` and other stack-specific dirs tracked — expanded default `.avcignore`
 
 ### Tests
-- ✅ `tests/snapshot_test.go`
-- ✅ `tests/restore_test.go`
-- ✅ `tests/diff_test.go`
-- ✅ `tests/integration_test.go`
+- ✅ `avc/tests/snapshot_test.go`
+- ✅ `avc/tests/restore_test.go`
+- ✅ `avc/tests/diff_test.go`
+- ✅ `avc/tests/integration_test.go`
 - ✅ `go test ./...` passes — all 13 tests green
 
 ### Phase 1 completion checklist
-- ✅ `go mod tidy` — dependencies downloaded, `go.sum` generated
-- ✅ `restore.StoreObject` wired into `internal/snapshot/snapshot.go`
-- ✅ `cmd/avc/delete.go` implemented
+- ✅ `go mod tidy` — dependencies downloaded, `avc/go.sum` generated
+- ✅ `restore.StoreObject` wired into `avc/internal/snapshot/snapshot.go`
+- ✅ `avc/cmd/avc/delete.go` implemented
 - ✅ `.avcignore` written to project root on `avc init`
 - ✅ `go build ./...` passes with no errors
 - ✅ `go test ./...` passes with no failures
@@ -103,7 +103,7 @@ Progress key: ✅ done · 🔧 scaffolded (code exists but incomplete) · ⬜ no
 
 ### Diff viewer
 - ✅ `extension/src/diffViewer.ts` — table-based unified diff; actual file line numbers, green/red row highlights, muted context lines, `@@` hunk headers
-- ✅ `internal/diff/diff.go` — LCS backtracking produces proper unified diff with `diffContextLines = 3` context and `@@ -a,b +c,d @@` headers; replaces broken multiset `buildPreview`
+- ✅ `avc/internal/diff/diff.go` — LCS backtracking produces proper unified diff with `diffContextLines = 3` context and `@@ -a,b +c,d @@` headers; replaces broken multiset `buildPreview`
 - ✅ "View Changes" command in sidebar wired to show diff against previous snapshot (click on any snapshot item)
 - ⬜ Syntax highlighting — integrate Prism.js (loaded via CDN in Webview HTML)
 - ⬜ Side-by-side layout option (currently unified only)
@@ -135,8 +135,8 @@ Progress key: ✅ done · 🔧 scaffolded (code exists but incomplete) · ⬜ no
 - ⬜ `avc restore` scoped to the branch being restored — does not affect main
 
 ### Internal packages
-- ⬜ `internal/branch/branch.go` — create, list, switch, delete, resolve branch point
-- ⬜ `internal/diff/diff.go` updated — accept optional branch context for cumulative diffs
+- ⬜ `avc/internal/branch/branch.go` — create, list, switch, delete, resolve branch point
+- ⬜ `avc/internal/diff/diff.go` updated — accept optional branch context for cumulative diffs
 
 ### VSCode extension
 - ⬜ Branch selector in sidebar header (dropdown showing all branches)
@@ -151,7 +151,7 @@ Progress key: ✅ done · 🔧 scaffolded (code exists but incomplete) · ⬜ no
 **Goal:** Approved agent branches flow to main cleanly; conflicts surface clearly.
 
 ### Merge logic
-- ⬜ `internal/merge/merge.go` — three-way comparison: base snapshot, main HEAD, branch HEAD
+- ⬜ `avc/internal/merge/merge.go` — three-way comparison: base snapshot, main HEAD, branch HEAD
 - ⬜ Clean merge: files only modified on branch → apply automatically
 - ⬜ Conflict detection: files modified on both branch and main since branch point
 - ⬜ Conflict markers written to working tree for conflicted files
@@ -176,10 +176,10 @@ Progress key: ✅ done · 🔧 scaffolded (code exists but incomplete) · ⬜ no
 
 ### MCP Server
 
-- ⬜ `cmd/avc/mcp.go` — `avc mcp serve` subcommand; starts a stdio MCP server
-- ⬜ `internal/mcp/server.go` — JSON-RPC 2.0 readline loop over stdio; dispatches `initialize`, `tools/list`, `tools/call`
-- ⬜ `internal/mcp/tools.go` — tool registry and input schema definitions
-- ⬜ `internal/mcp/handlers.go` — one function per tool; calls existing `internal/` packages directly (no CLI re-invocation)
+- ⬜ `avc/cmd/avc/mcp.go` — `avc mcp serve` subcommand; starts a stdio MCP server
+- ⬜ `avc/internal/mcp/server.go` — JSON-RPC 2.0 readline loop over stdio; dispatches `initialize`, `tools/list`, `tools/call`
+- ⬜ `avc/internal/mcp/tools.go` — tool registry and input schema definitions
+- ⬜ `avc/internal/mcp/handlers.go` — one function per tool; calls existing `internal/` packages directly (no CLI re-invocation)
 - ⬜ Server is project-scoped — resolves `.avc/` from `cwd` at startup, same as all other commands
 - ⬜ Each tool call returns the same JSON the CLI already produces — no new data layer
 - ⬜ Tool results wrapped in MCP `content` envelope: `{"content": [{"type": "text", "text": "<json>"}]}`
