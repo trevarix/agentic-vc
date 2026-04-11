@@ -105,10 +105,10 @@ Progress key: ✅ done · 🔧 scaffolded (code exists but incomplete) · ⬜ no
 - ✅ `extension/src/diffViewer.ts` — table-based unified diff; actual file line numbers, green/red row highlights, muted context lines, `@@` hunk headers
 - ✅ `avc/internal/diff/diff.go` — LCS backtracking produces proper unified diff with `diffContextLines = 3` context and `@@ -a,b +c,d @@` headers; replaces broken multiset `buildPreview`
 - ✅ "View Changes" command in sidebar wired to show diff against previous snapshot (click on any snapshot item)
-- ⬜ Syntax highlighting — integrate Prism.js (loaded via CDN in Webview HTML)
+- ✅ Syntax highlighting — Prism.js loaded via CDN; language auto-detected from file extension; `<code class="language-*">` per cell; autoloader fetches grammars on demand
 - ⬜ Side-by-side layout option (currently unified only)
-- ⬜ File-by-file navigation (dropdown or prev/next buttons when diff spans multiple files)
-- ⬜ Copy-to-clipboard button per file diff
+- ✅ File-by-file navigation — sticky jump-link nav bar rendered when diff spans multiple files; each file block has anchor `#file-N`
+- ✅ Copy-to-clipboard button per file diff — "Copy" button in file header; flashes "Copied!" for 2s; writes raw unified diff text to clipboard
 
 ### Performance
 - ⬜ Diff view loads in < 1s for files up to 10k lines
@@ -137,6 +137,15 @@ Progress key: ✅ done · 🔧 scaffolded (code exists but incomplete) · ⬜ no
 ### Internal packages
 - ⬜ `avc/internal/branch/branch.go` — create, list, switch, delete, resolve branch point
 - ⬜ `avc/internal/diff/diff.go` updated — accept optional branch context for cumulative diffs
+
+### Implementation note — branch creation must not snapshot
+`avc branch create` records `base_snapshot_id` in the `branches` table and writes
+the active branch to `.avc/config.toml`. It must **not** take an automatic snapshot
+of all project files to establish the branch point. The base snapshot already exists
+and its file records already reference the correct objects — inheriting by ID is
+instant and storage-free. Taking a new snapshot here would write 1,000 DB rows and
+trigger 1,000 `StoreObject` calls (all no-ops, but still unnecessary) for every
+branch creation regardless of project size.
 
 ### VSCode extension
 - ⬜ Branch selector in sidebar header (dropdown showing all branches)
@@ -255,8 +264,8 @@ Each `--skills` flag writes two things: the MCP server config for that framework
 
 ---
 
-## Immediate next actions (Phase 3)
+## Immediate next actions (Phase 4)
 
-1. Integrate Prism.js for syntax highlighting in the diff viewer Webview
-2. Add file-by-file navigation (dropdown or prev/next) when a diff spans multiple files
-3. Add copy-to-clipboard button per file diff block
+1. Add `branches` table and migration to `avc/internal/db/db.go`
+2. Implement `avc/internal/branch/branch.go` — create, list, switch, delete
+3. Add `avc branch` CLI subcommands in `avc/cmd/avc/`

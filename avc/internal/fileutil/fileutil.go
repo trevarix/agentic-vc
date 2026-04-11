@@ -30,6 +30,17 @@ func ReadFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
+// ReadAndHash reads the file at path once and returns its contents and SHA256
+// hex digest. Use this in preference to calling HashFile + ReadFile separately.
+func ReadAndHash(path string) (data []byte, hash string, err error) {
+	data, err = os.ReadFile(path)
+	if err != nil {
+		return nil, "", err
+	}
+	sum := sha256.Sum256(data)
+	return data, hex.EncodeToString(sum[:]), nil
+}
+
 // WriteFile writes data to path, creating parent directories as needed.
 func WriteFile(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
