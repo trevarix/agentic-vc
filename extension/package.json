@@ -47,6 +47,28 @@
       {
         "command": "avc.deleteSnapshot",
         "title": "AVC: Delete Snapshot"
+      },
+      {
+        "command": "avc.createBranch",
+        "title": "AVC: Create Branch",
+        "icon": "$(git-branch-create)"
+      },
+      {
+        "command": "avc.switchBranch",
+        "title": "AVC: Switch Branch"
+      },
+      {
+        "command": "avc.deleteBranch",
+        "title": "AVC: Delete Branch"
+      },
+      {
+        "command": "avc.mergeBranch",
+        "title": "AVC: Merge Branch to Main",
+        "icon": "$(git-merge)"
+      },
+      {
+        "command": "avc.abortMerge",
+        "title": "AVC: Abort Merge"
       }
     ],
     "menus": {
@@ -58,6 +80,16 @@
         },
         {
           "command": "avc.refreshSnapshots",
+          "when": "view == avcSnapshots",
+          "group": "navigation"
+        },
+        {
+          "command": "avc.createBranch",
+          "when": "view == avcSnapshots",
+          "group": "navigation"
+        },
+        {
+          "command": "avc.mergeBranch",
           "when": "view == avcSnapshots",
           "group": "navigation"
         }

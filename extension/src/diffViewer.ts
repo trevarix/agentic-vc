@@ -26,6 +26,17 @@ export async function showDiff(
 
   panel.webview.html = loadingHtml();
 
+  // Route copy requests from the webview through the extension host,
+  // which has access to vscode.env.clipboard. navigator.clipboard is not
+  // reliably available inside VSCode Webviews.
+  panel.webview.onDidReceiveMessage((msg: { type: string; text: string; index: number }) => {
+    if (msg.type === 'copy') {
+      vscode.env.clipboard.writeText(msg.text).then(() => {
+        panel.webview.postMessage({ type: 'copied', index: msg.index });
+      });
+    }
+  });
+
   try {
     const result = await getDiff(projectPath, fromId, toId);
     panel.webview.html = buildDiffHtml(result, fromLabel, toLabel, panel.webview);
@@ -208,12 +219,18 @@ function buildDiffHtml(
       Prism.highlightAll();
     }
 
+    var vscode = acquireVsCodeApi();
     var rawDiffs = ${rawDiffsJson};
 
     function copyDiff(index) {
-      var text = rawDiffs[index] || '';
-      navigator.clipboard.writeText(text).then(function () {
-        var btn = document.querySelector('[data-copy-index="' + index + '"]');
+      vscode.postMessage({ type: 'copy', text: rawDiffs[index] || '', index: index });
+    }
+
+    // Extension host confirms the write succeeded — update button state.
+    window.addEventListener('message', function (event) {
+      var msg = event.data;
+      if (msg.type === 'copied') {
+        var btn = document.querySelector('[data-copy-index="' + msg.index + '"]');
         if (btn) {
           btn.textContent = 'Copied!';
           btn.classList.add('copied');
@@ -222,8 +239,8 @@ function buildDiffHtml(
             btn.classList.remove('copied');
           }, 2000);
         }
-      });
-    }
+      }
+    });
   </script>
 </body>
 </html>`;

@@ -15,7 +15,7 @@ func TestSnapshot_Create_BasicSnapshot(t *testing.T) {
 	writeFile(t, projectRoot, "main.go", "package main\n\nfunc main() {}\n")
 	writeFile(t, projectRoot, "README.md", "# My Project\n")
 
-	result, err := snapshot.Create(projectRoot, "initial", "test-agent", "first snapshot")
+	result, err := snapshot.Create(projectRoot, "initial", "test-agent", "first snapshot", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestSnapshot_Create_IgnoresAVCDirectory(t *testing.T) {
 	// Write a file inside .avc/ — it must not be included.
 	writeFile(t, projectRoot, ".avc/secret.txt", "internal")
 
-	result, err := snapshot.Create(projectRoot, "test", "", "")
+	result, err := snapshot.Create(projectRoot, "test", "", "", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestSnapshot_Create_PersistsToDatabase(t *testing.T) {
 	projectRoot := setupTestProject(t)
 	writeFile(t, projectRoot, "file.txt", "hello")
 
-	result, err := snapshot.Create(projectRoot, "persisted", "", "")
+	result, err := snapshot.Create(projectRoot, "persisted", "", "", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestSnapshot_Create_PersistsToDatabase(t *testing.T) {
 
 func TestSnapshot_Create_RequiresInitializedProject(t *testing.T) {
 	dir := t.TempDir()
-	_, err := snapshot.Create(dir, "label", "", "")
+	_, err := snapshot.Create(dir, "label", "", "", "", "")
 	if err == nil {
 		t.Error("expected error for uninitialized project, got nil")
 	}

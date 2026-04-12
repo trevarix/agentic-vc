@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 
+	branchpkg "github.com/SkillMythOrg/agentic-vc/avc/internal/branch"
+	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/restore"
 	"github.com/spf13/cobra"
 )
@@ -13,6 +15,7 @@ var restoreCmd = &cobra.Command{
 	Use:   "restore <snapshot_id>",
 	Short: "Restore the project to a previous snapshot",
 	Long: `Overwrites current project files with the contents from the specified snapshot.
+The snapshot must belong to the active branch.
 This is a destructive operation — save a snapshot of the current state first if needed.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runRestore,
@@ -26,7 +29,37 @@ func runRestore(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	result, err := restore.Restore(projectPath, snapshotID)
+	// Branch scoping: verify the snapshot belongs to the active branch.
+	store, err := db.Open(projectPath)
+	if err != nil {
+		return err
+	}
+	snap, snapErr := store.GetSnapshot(snapshotID)
+	store.Close()
+
+	if snapErr != nil {
+		return fmt.Errorf("snapshot '%s' not found", snapshotID)
+	}
+	if snap.BranchID != "" {
+		activeBranchID, err := branchpkg.GetActiveBranchID(projectPath)
+		if err == nil && snap.BranchID != activeBranchID {
+			return fmt.Errorf(
+				"snapshot '%s' belongs to a different branch\n"+
+					"Switch branches first: avc branch switch <name>",
+				snapshotID,
+			)
+		}
+	}
+
+	// For non-main branches, restore into the workspace rather than the real
+	// project root so that main is not touched.
+	targetDir := projectPath
+	branchName := branchpkg.GetActiveBranchName(projectPath)
+	if ws := branchpkg.WorkspacePath(projectPath, branchName); ws != "" {
+		targetDir = ws
+	}
+
+	result, err := restore.RestoreToDir(projectPath, snapshotID, targetDir)
 	if err != nil {
 		return fmt.Errorf("restore failed: %w", err)
 	}

@@ -16,10 +16,6 @@ var logCmd = &cobra.Command{
 	RunE:  runLog,
 }
 
-func init() {
-	rootCmd.AddCommand(logCmd)
-}
-
 func runLog(cmd *cobra.Command, args []string) error {
 	projectPath, err := requireInitializedProject()
 	if err != nil {

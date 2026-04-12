@@ -13,7 +13,7 @@ func TestRestore_RollsBackModifiedFile(t *testing.T) {
 	projectRoot := setupTestProject(t)
 	writeFile(t, projectRoot, "app.go", "version 1")
 
-	snap, err := snapshot.Create(projectRoot, "v1", "", "")
+	snap, err := snapshot.Create(projectRoot, "v1", "", "", "", "")
 	if err != nil {
 		t.Fatalf("create snapshot: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestRestore_ReturnsCorrectFileCounts(t *testing.T) {
 	writeFile(t, projectRoot, "a.txt", "a")
 	writeFile(t, projectRoot, "b.txt", "b")
 
-	snap, err := snapshot.Create(projectRoot, "two-files", "", "")
+	snap, err := snapshot.Create(projectRoot, "two-files", "", "", "", "")
 	if err != nil {
 		t.Fatalf("create snapshot: %v", err)
 	}

@@ -83,6 +83,12 @@ func Invalidate(projectRoot string) {
 	_ = os.Remove(filepath.Join(projectRoot, cacheFile))
 }
 
+// Empty returns a new cache with no entries. Used when the stat cache should
+// not be consulted (e.g. when snapshotting a workspace rather than the project root).
+func Empty() *Cache {
+	return empty()
+}
+
 func empty() *Cache {
 	return &Cache{Entries: make(map[string]*Entry)}
 }

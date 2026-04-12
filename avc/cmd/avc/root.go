@@ -29,4 +29,9 @@ func init() {
 	rootCmd.AddCommand(diffCmd)
 	rootCmd.AddCommand(restoreCmd)
 	rootCmd.AddCommand(infoCmd)
+	rootCmd.AddCommand(deleteCmd)
+	rootCmd.AddCommand(logCmd)
+	rootCmd.AddCommand(branchCmd)
+	rootCmd.AddCommand(mcpCmd)
+	rootCmd.AddCommand(mergeCmd)
 }

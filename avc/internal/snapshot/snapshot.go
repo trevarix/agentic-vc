@@ -22,22 +22,30 @@ type Result struct {
 	Notes     string
 	FileCount int
 	TotalSize int64
+	BranchID  string
 }
 
-// Create walks the project directory, hashes all tracked files, and persists
-// a snapshot record to the database. Returns the snapshot result on success.
+// Create walks sourceDir, hashes all tracked files, and persists a snapshot
+// record to the database. projectRoot is where .avc/ lives; sourceDir is the
+// directory to walk (pass "" to use projectRoot, which is the default for main).
+// For branch workspaces, sourceDir is the workspace path and projectRoot is the
+// real project root.
 //
-// Each file is read at most once (ReadAndHash). Files whose mtime and size
-// match the stat cache from the previous snapshot are not read at all — the
-// cached hash is reused and the object store write is skipped.
-// All file DB records are inserted in a single transaction.
-func Create(projectRoot, label, agentName, notes string) (*Result, error) {
+// branchID associates the snapshot with a branch; pass "" for unscoped snapshots.
+//
+// The stat cache optimisation is active only when sourceDir == projectRoot
+// (workspace snapshots are infrequent enough that cache overhead is not worth it).
+func Create(projectRoot, label, agentName, notes, branchID, sourceDir string) (*Result, error) {
+	if sourceDir == "" {
+		sourceDir = projectRoot
+	}
+
 	ignore, err := fileutil.LoadIgnoreRules(projectRoot)
 	if err != nil {
 		return nil, fmt.Errorf("load ignore rules: %w", err)
 	}
 
-	paths, err := fileutil.WalkProject(projectRoot, ignore)
+	paths, err := fileutil.WalkProject(sourceDir, ignore)
 	if err != nil {
 		return nil, fmt.Errorf("walk project: %w", err)
 	}
@@ -53,8 +61,12 @@ func Create(projectRoot, label, agentName, notes string) (*Result, error) {
 		return nil, fmt.Errorf("project not initialized (run `avc init`): %w", err)
 	}
 
-	// Load stat cache — a missing or corrupt cache returns an empty one (safe miss).
+	// Stat cache is only useful when snapshotting the real project root.
+	useCache := sourceDir == projectRoot
 	cache, _ := statcache.Load(projectRoot)
+	if !useCache {
+		cache = statcache.Empty()
+	}
 
 	snapID := newSnapID()
 	now := time.Now().Unix()
@@ -63,7 +75,7 @@ func Create(projectRoot, label, agentName, notes string) (*Result, error) {
 	files := make([]*db.File, 0, len(paths))
 
 	for _, absPath := range paths {
-		rel, _ := filepath.Rel(projectRoot, absPath)
+		rel, _ := filepath.Rel(sourceDir, absPath)
 		rel = filepath.ToSlash(rel)
 
 		info, err := os.Stat(absPath)
@@ -111,6 +123,7 @@ func Create(projectRoot, label, agentName, notes string) (*Result, error) {
 		Notes:     notes,
 		FileCount: len(files),
 		TotalSize: totalSize,
+		BranchID:  branchID,
 	}
 
 	if err := store.InsertSnapshot(snap); err != nil {
@@ -120,9 +133,11 @@ func Create(projectRoot, label, agentName, notes string) (*Result, error) {
 		return nil, fmt.Errorf("insert files: %w", err)
 	}
 
-	// Persist updated cache — best-effort; a stale cache only causes misses.
-	cache.SnapshotID = snapID
-	_ = cache.Save(projectRoot)
+	// Persist updated cache — best-effort; only meaningful for project root snapshots.
+	if useCache {
+		cache.SnapshotID = snapID
+		_ = cache.Save(projectRoot)
+	}
 
 	return &Result{
 		ID:        snapID,
@@ -132,5 +147,6 @@ func Create(projectRoot, label, agentName, notes string) (*Result, error) {
 		Notes:     notes,
 		FileCount: len(files),
 		TotalSize: totalSize,
+		BranchID:  branchID,
 	}, nil
 }

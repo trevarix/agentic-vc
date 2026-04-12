@@ -13,14 +13,14 @@ func TestDiff_DetectsModifiedFile(t *testing.T) {
 	projectRoot := setupTestProject(t)
 	writeFile(t, projectRoot, "main.go", "package main\n")
 
-	snap1, err := snapshot.Create(projectRoot, "before", "", "")
+	snap1, err := snapshot.Create(projectRoot, "before", "", "", "", "")
 	if err != nil {
 		t.Fatalf("snapshot 1: %v", err)
 	}
 
 	writeFile(t, projectRoot, "main.go", "package main\n\nfunc main() {}\n")
 
-	snap2, err := snapshot.Create(projectRoot, "after", "", "")
+	snap2, err := snapshot.Create(projectRoot, "after", "", "", "", "")
 	if err != nil {
 		t.Fatalf("snapshot 2: %v", err)
 	}
@@ -45,9 +45,9 @@ func TestDiff_DetectsAddedFile(t *testing.T) {
 	projectRoot := setupTestProject(t)
 	writeFile(t, projectRoot, "existing.go", "package p\n")
 
-	snap1, _ := snapshot.Create(projectRoot, "before", "", "")
+	snap1, _ := snapshot.Create(projectRoot, "before", "", "", "", "")
 	writeFile(t, projectRoot, "new.go", "package p\n")
-	snap2, _ := snapshot.Create(projectRoot, "after", "", "")
+	snap2, _ := snapshot.Create(projectRoot, "after", "", "", "", "")
 
 	result, err := diff.Compare(projectRoot, snap1.ID, snap2.ID)
 	if err != nil {
@@ -69,10 +69,10 @@ func TestDiff_DetectsDeletedFile(t *testing.T) {
 	projectRoot := setupTestProject(t)
 	writeFile(t, projectRoot, "to-delete.go", "package p\n")
 
-	snap1, _ := snapshot.Create(projectRoot, "before", "", "")
+	snap1, _ := snapshot.Create(projectRoot, "before", "", "", "", "")
 
 	removeTestFile(t, projectRoot, "to-delete.go")
-	snap2, _ := snapshot.Create(projectRoot, "without file", "", "")
+	snap2, _ := snapshot.Create(projectRoot, "without file", "", "", "", "")
 
 	result, err := diff.Compare(projectRoot, snap1.ID, snap2.ID)
 	if err != nil {
@@ -104,8 +104,8 @@ func TestDiff_NoChangesReturnsEmptyList(t *testing.T) {
 	projectRoot := setupTestProject(t)
 	writeFile(t, projectRoot, "same.go", "unchanged")
 
-	snap1, _ := snapshot.Create(projectRoot, "s1", "", "")
-	snap2, _ := snapshot.Create(projectRoot, "s2", "", "")
+	snap1, _ := snapshot.Create(projectRoot, "s1", "", "", "", "")
+	snap2, _ := snapshot.Create(projectRoot, "s2", "", "", "", "")
 
 	result, err := diff.Compare(projectRoot, snap1.ID, snap2.ID)
 	if err != nil {

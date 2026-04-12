@@ -2,6 +2,7 @@
 package config
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 
@@ -14,6 +15,7 @@ const configFile = ".avc/config.toml"
 type Config struct {
 	Project ProjectConfig `toml:"project"`
 	Ignore  IgnoreConfig  `toml:"ignore"`
+	Branch  BranchConfig  `toml:"branch"`
 }
 
 // ProjectConfig holds project-level settings.
@@ -26,14 +28,16 @@ type IgnoreConfig struct {
 	ExtraPatterns []string `toml:"extra_patterns"`
 }
 
+// BranchConfig holds branch settings.
+type BranchConfig struct {
+	Active string `toml:"active"`
+}
+
 // defaultConfig is written during `avc init`.
 var defaultConfig = Config{
-	Project: ProjectConfig{
-		DefaultAgent: "",
-	},
-	Ignore: IgnoreConfig{
-		ExtraPatterns: []string{},
-	},
+	Project: ProjectConfig{DefaultAgent: ""},
+	Ignore:  IgnoreConfig{ExtraPatterns: []string{}},
+	Branch:  BranchConfig{Active: "main"},
 }
 
 // Load reads and parses the config file from the project root.
@@ -53,7 +57,31 @@ func Load(projectRoot string) (*Config, error) {
 	if _, err := toml.Decode(string(data), &cfg); err != nil {
 		return nil, err
 	}
+	// Ensure Active is set if the file predates Phase 4.
+	if cfg.Branch.Active == "" {
+		cfg.Branch.Active = "main"
+	}
 	return &cfg, nil
+}
+
+// Save writes cfg to the config file, overwriting any existing content.
+func Save(projectRoot string, cfg *Config) error {
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(cfg); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(projectRoot, configFile), buf.Bytes(), 0644)
+}
+
+// SetActiveBranch updates only the active branch name in the config file.
+func SetActiveBranch(projectRoot, name string) error {
+	cfg, err := Load(projectRoot)
+	if err != nil {
+		c := defaultConfig
+		cfg = &c
+	}
+	cfg.Branch.Active = name
+	return Save(projectRoot, cfg)
 }
 
 // WriteDefault writes the default config.toml to the project's .avc/ directory,
@@ -147,6 +175,9 @@ const defaultTOML = `# AVC configuration file
 
 [ignore]
 # extra_patterns = ["*.log", "dist/"]
+
+[branch]
+active = "main"
 `
 
 const defaultAVCIgnore = `# AVC ignore rules — patterns listed here are excluded from all snapshots.

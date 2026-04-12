@@ -1,0 +1,453 @@
+package mcp
+
+import (
+	"fmt"
+
+	branchpkg "github.com/SkillMythOrg/agentic-vc/avc/internal/branch"
+	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
+	diffpkg "github.com/SkillMythOrg/agentic-vc/avc/internal/diff"
+	mergepkg "github.com/SkillMythOrg/agentic-vc/avc/internal/merge"
+	"github.com/SkillMythOrg/agentic-vc/avc/internal/restore"
+	"github.com/SkillMythOrg/agentic-vc/avc/internal/snapshot"
+)
+
+// dispatchTool executes the named tool with the given arguments and wraps the
+// result in the MCP content envelope.
+func dispatchTool(projectRoot string, compact bool, name string, args map[string]any) (map[string]any, error) {
+	var result any
+	var err error
+
+	switch name {
+	case "avc_snapshot":
+		result, err = toolSnapshot(projectRoot, args)
+	case "avc_list":
+		result, err = toolList(projectRoot)
+	case "avc_diff":
+		result, err = toolDiff(projectRoot, args)
+	case "avc_restore":
+		result, err = toolRestore(projectRoot, args)
+	case "avc_info":
+		result, err = toolInfo(projectRoot, args)
+	case "avc_delete":
+		result, err = toolDelete(projectRoot, args)
+	case "avc_branch_create":
+		result, err = toolBranchCreate(projectRoot, args)
+	case "avc_branch_list":
+		result, err = toolBranchList(projectRoot)
+	case "avc_branch_switch":
+		result, err = toolBranchSwitch(projectRoot, args)
+	case "avc_branch_diff":
+		result, err = toolBranchDiff(projectRoot, args)
+	case "avc_merge_preview":
+		result, err = toolMergePreview(projectRoot, args)
+	case "avc_merge":
+		result, err = toolMerge(projectRoot, args)
+	case "avc_merge_abort":
+		result, err = toolMergeAbort(projectRoot)
+	default:
+		return nil, fmt.Errorf("unknown tool: %s", name)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+	return wrapContent(result, compact)
+}
+
+// ─── Snapshot tools ───────────────────────────────────────────────────────────
+
+func toolSnapshot(projectRoot string, args map[string]any) (any, error) {
+	label := strArg(args, "label")
+	if label == "" {
+		return nil, fmt.Errorf("label is required")
+	}
+
+	branchID, err := branchpkg.GetActiveBranchID(projectRoot)
+	if err != nil {
+		return nil, fmt.Errorf("could not determine active branch: %w", err)
+	}
+	branchName := branchpkg.GetActiveBranchName(projectRoot)
+	sourceDir := branchpkg.WorkspacePath(projectRoot, branchName) // "" for main
+
+	snap, err := snapshot.Create(
+		projectRoot,
+		label,
+		strArg(args, "agent_name"),
+		strArg(args, "notes"),
+		branchID,
+		sourceDir,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"id":            snap.ID,
+		"label":         snap.Label,
+		"timestamp":     snap.Timestamp,
+		"agent_name":    snap.AgentName,
+		"files_changed": snap.FileCount,
+		"total_size":    snap.TotalSize,
+		"notes":         snap.Notes,
+		"branch_id":     snap.BranchID,
+		"success":       true,
+	}, nil
+}
+
+func toolList(projectRoot string) (any, error) {
+	store, err := db.Open(projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	defer store.Close()
+
+	var snapshots []*db.Snapshot
+	branchID, branchErr := branchpkg.GetActiveBranchID(projectRoot)
+	if branchErr == nil {
+		snapshots, err = store.ListSnapshotsByBranch(branchID)
+	} else {
+		snapshots, err = store.ListSnapshots()
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	type snapJSON struct {
+		ID           string `json:"id"`
+		Label        string `json:"label"`
+		Timestamp    int64  `json:"timestamp"`
+		AgentName    string `json:"agent_name"`
+		FilesChanged int    `json:"files_changed"`
+		TotalSize    int64  `json:"total_size"`
+		Notes        string `json:"notes"`
+		BranchID     string `json:"branch_id"`
+	}
+	out := make([]snapJSON, len(snapshots))
+	for i, s := range snapshots {
+		out[i] = snapJSON{s.ID, s.Label, s.Timestamp, s.AgentName, s.FileCount, s.TotalSize, s.Notes, s.BranchID}
+	}
+	return out, nil
+}
+
+func toolDiff(projectRoot string, args map[string]any) (any, error) {
+	fromID := strArg(args, "from_id")
+	toID := strArg(args, "to_id")
+	if fromID == "" || toID == "" {
+		return nil, fmt.Errorf("from_id and to_id are required")
+	}
+
+	result, err := diffpkg.Compare(projectRoot, fromID, toID)
+	if err != nil {
+		return nil, err
+	}
+
+	type fileDiffJSON struct {
+		Path         string `json:"path"`
+		Type         string `json:"type"`
+		OldHash      string `json:"old_hash,omitempty"`
+		NewHash      string `json:"new_hash,omitempty"`
+		LinesAdded   int    `json:"lines_added"`
+		LinesRemoved int    `json:"lines_removed"`
+		DiffPreview  string `json:"diff_preview,omitempty"`
+	}
+	files := make([]fileDiffJSON, len(result.Files))
+	for i, f := range result.Files {
+		files[i] = fileDiffJSON{
+			Path:         f.Path,
+			Type:         string(f.Type),
+			OldHash:      f.OldHash,
+			NewHash:      f.NewHash,
+			LinesAdded:   f.LinesAdded,
+			LinesRemoved: f.LinesRemoved,
+			DiffPreview:  f.DiffPreview,
+		}
+	}
+	return map[string]any{
+		"from_snapshot": fromID,
+		"to_snapshot":   toID,
+		"files":         files,
+	}, nil
+}
+
+func toolRestore(projectRoot string, args map[string]any) (any, error) {
+	id := strArg(args, "id")
+	if id == "" {
+		return nil, fmt.Errorf("id is required")
+	}
+
+	// Restore into the workspace on non-main branches; project root on main.
+	targetDir := projectRoot
+	branchName := branchpkg.GetActiveBranchName(projectRoot)
+	if ws := branchpkg.WorkspacePath(projectRoot, branchName); ws != "" {
+		targetDir = ws
+	}
+
+	result, err := restore.RestoreToDir(projectRoot, id, targetDir)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"id":             result.SnapshotID,
+		"restored_files": result.RestoredFiles,
+		"restored_size":  result.RestoredSize,
+		"target_dir":     targetDir,
+		"success":        true,
+	}, nil
+}
+
+func toolInfo(projectRoot string, args map[string]any) (any, error) {
+	id := strArg(args, "id")
+	if id == "" {
+		return nil, fmt.Errorf("id is required")
+	}
+
+	store, err := db.Open(projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	defer store.Close()
+
+	snap, err := store.GetSnapshot(id)
+	if err != nil {
+		return nil, err
+	}
+	files, err := store.GetSnapshotFiles(id)
+	if err != nil {
+		return nil, err
+	}
+
+	type fileJSON struct {
+		Path string `json:"path"`
+		Hash string `json:"hash"`
+		Size int64  `json:"size"`
+	}
+	fileList := make([]fileJSON, len(files))
+	for i, f := range files {
+		fileList[i] = fileJSON{f.RelativePath, f.FileHash, f.FileSize}
+	}
+	return map[string]any{
+		"id":         snap.ID,
+		"label":      snap.Label,
+		"timestamp":  snap.Timestamp,
+		"agent_name": snap.AgentName,
+		"notes":      snap.Notes,
+		"file_count": snap.FileCount,
+		"total_size": snap.TotalSize,
+		"branch_id":  snap.BranchID,
+		"files":      fileList,
+	}, nil
+}
+
+func toolDelete(projectRoot string, args map[string]any) (any, error) {
+	id := strArg(args, "id")
+	if id == "" {
+		return nil, fmt.Errorf("id is required")
+	}
+
+	store, err := db.Open(projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	defer store.Close()
+
+	if err := store.DeleteSnapshot(id); err != nil {
+		return nil, err
+	}
+	return map[string]any{"id": id, "success": true}, nil
+}
+
+// ─── Branch tools ─────────────────────────────────────────────────────────────
+
+func toolBranchCreate(projectRoot string, args map[string]any) (any, error) {
+	name := strArg(args, "name")
+	if name == "" {
+		return nil, fmt.Errorf("name is required")
+	}
+
+	b, err := branchpkg.Create(projectRoot, name, strArg(args, "from_snapshot_id"))
+	if err != nil {
+		return nil, err
+	}
+
+	// Auto-switch — creating a branch means you're about to work on it.
+	if err := branchpkg.Switch(projectRoot, name); err != nil {
+		return nil, fmt.Errorf("branch created but auto-switch failed: %w", err)
+	}
+
+	return map[string]any{
+		"id":               b.ID,
+		"name":             b.Name,
+		"base_snapshot_id": b.BaseSnapshotID,
+		"workspace":        branchpkg.WorkspacePath(projectRoot, b.Name),
+		"active":           true,
+		"success":          true,
+	}, nil
+}
+
+func toolBranchList(projectRoot string) (any, error) {
+	branches, err := branchpkg.List(projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	activeName := branchpkg.GetActiveBranchName(projectRoot)
+
+	type branchJSON struct {
+		ID             string `json:"id"`
+		Name           string `json:"name"`
+		BaseSnapshotID string `json:"base_snapshot_id"`
+		Workspace      string `json:"workspace"`
+		Active         bool   `json:"active"`
+	}
+	out := make([]branchJSON, len(branches))
+	for i, b := range branches {
+		out[i] = branchJSON{
+			ID:             b.ID,
+			Name:           b.Name,
+			BaseSnapshotID: b.BaseSnapshotID,
+			Workspace:      branchpkg.WorkspacePath(projectRoot, b.Name),
+			Active:         b.Name == activeName,
+		}
+	}
+	return out, nil
+}
+
+func toolBranchSwitch(projectRoot string, args map[string]any) (any, error) {
+	name := strArg(args, "name")
+	if name == "" {
+		return nil, fmt.Errorf("name is required")
+	}
+	if err := branchpkg.Switch(projectRoot, name); err != nil {
+		return nil, err
+	}
+	return map[string]any{"name": name, "success": true}, nil
+}
+
+func toolBranchDiff(projectRoot string, args map[string]any) (any, error) {
+	name := strArg(args, "name")
+	if name == "" {
+		return nil, fmt.Errorf("name is required")
+	}
+
+	branches, err := branchpkg.List(projectRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	var branchID, baseSnapshotID string
+	for _, b := range branches {
+		if b.Name == name {
+			branchID = b.ID
+			baseSnapshotID = b.BaseSnapshotID
+			break
+		}
+	}
+	if branchID == "" {
+		return nil, fmt.Errorf("branch '%s' not found", name)
+	}
+	if baseSnapshotID == "" {
+		return nil, fmt.Errorf("branch '%s' has no base snapshot (main has no cumulative diff)", name)
+	}
+
+	store, err := db.Open(projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	head, headErr := store.GetHeadSnapshot(branchID)
+	store.Close()
+	if headErr != nil {
+		return nil, fmt.Errorf("branch '%s' has no snapshots yet", name)
+	}
+
+	result, err := diffpkg.Compare(projectRoot, baseSnapshotID, head.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	type fileDiffJSON struct {
+		Path         string `json:"path"`
+		Type         string `json:"type"`
+		OldHash      string `json:"old_hash,omitempty"`
+		NewHash      string `json:"new_hash,omitempty"`
+		LinesAdded   int    `json:"lines_added"`
+		LinesRemoved int    `json:"lines_removed"`
+		DiffPreview  string `json:"diff_preview,omitempty"`
+	}
+	files := make([]fileDiffJSON, len(result.Files))
+	for i, f := range result.Files {
+		files[i] = fileDiffJSON{
+			Path:         f.Path,
+			Type:         string(f.Type),
+			OldHash:      f.OldHash,
+			NewHash:      f.NewHash,
+			LinesAdded:   f.LinesAdded,
+			LinesRemoved: f.LinesRemoved,
+			DiffPreview:  f.DiffPreview,
+		}
+	}
+	return map[string]any{
+		"branch":        name,
+		"from_snapshot": baseSnapshotID,
+		"to_snapshot":   head.ID,
+		"files":         files,
+	}, nil
+}
+
+// ─── Merge tools ──────────────────────────────────────────────────────────────
+
+func mergeResultToMap(result *mergepkg.Result, preview bool) map[string]any {
+	type fileJSON struct {
+		Path     string `json:"path"`
+		Decision string `json:"decision"`
+	}
+	files := make([]fileJSON, len(result.Files))
+	for i, f := range result.Files {
+		files[i] = fileJSON{f.Path, f.Decision}
+	}
+	return map[string]any{
+		"merge_id":  result.MergeID,
+		"branch":    result.BranchName,
+		"preview":   preview,
+		"clean":     result.Clean,
+		"conflicts": result.Conflicts,
+		"skipped":   result.Skipped,
+		"files":     files,
+	}
+}
+
+func toolMergePreview(projectRoot string, args map[string]any) (any, error) {
+	branch := strArg(args, "branch")
+	if branch == "" {
+		return nil, fmt.Errorf("branch is required")
+	}
+	result, err := mergepkg.Preview(projectRoot, branch)
+	if err != nil {
+		return nil, err
+	}
+	return mergeResultToMap(result, true), nil
+}
+
+func toolMerge(projectRoot string, args map[string]any) (any, error) {
+	branch := strArg(args, "branch")
+	if branch == "" {
+		return nil, fmt.Errorf("branch is required")
+	}
+	result, err := mergepkg.Merge(projectRoot, branch)
+	if err != nil {
+		return nil, err
+	}
+	return mergeResultToMap(result, false), nil
+}
+
+func toolMergeAbort(projectRoot string) (any, error) {
+	if err := mergepkg.Abort(projectRoot); err != nil {
+		return nil, err
+	}
+	return map[string]any{"aborted": true, "success": true}, nil
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+// strArg extracts a string value from an args map, returning "" if absent or wrong type.
+func strArg(args map[string]any, key string) string {
+	v, _ := args[key].(string)
+	return v
+}
