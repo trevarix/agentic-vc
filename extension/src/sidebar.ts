@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { Snapshot, listSnapshots, resolveProjectPath } from './cliProxy';
+import { formatBytes } from './webviewUtil';
 
 /** A single snapshot entry shown in the sidebar tree. */
 export class SnapshotItem extends vscode.TreeItem {
@@ -21,8 +22,8 @@ export class SnapshotItem extends vscode.TreeItem {
     this.contextValue = 'snapshot';
     this.iconPath = new vscode.ThemeIcon('history');
     this.command = {
-      command: 'avc.viewDiff',
-      title: 'View Changes',
+      command: 'avc.viewInfo',
+      title: 'View Details',
       arguments: [this],
     };
   }
@@ -35,9 +36,15 @@ export class SnapshotProvider implements vscode.TreeDataProvider<SnapshotItem> {
 
   private snapshots: Snapshot[] = [];
   private loading = false;
+  private filterText = '';
 
   refresh(): void {
     this._onDidChangeTreeData.fire(undefined);
+  }
+
+  setFilter(text: string): void {
+    this.filterText = text.toLowerCase();
+    this.refresh();
   }
 
   async load(): Promise<void> {
@@ -64,12 +71,16 @@ export class SnapshotProvider implements vscode.TreeDataProvider<SnapshotItem> {
   }
 
   getChildren(): SnapshotItem[] {
-    return this.snapshots.map((s) => new SnapshotItem(s));
+    const items = this.snapshots.map((s) => new SnapshotItem(s));
+    if (!this.filterText) return items;
+    return items.filter((item) => {
+      const s = item.snapshot;
+      const searchable = [
+        s.label, s.agent_name, s.notes, s.id,
+        new Date(s.timestamp * 1000).toLocaleString(),
+      ].join(' ').toLowerCase();
+      return searchable.includes(this.filterText);
+    });
   }
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}

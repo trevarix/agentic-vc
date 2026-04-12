@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
-import * as crypto from 'crypto';
 import { DiffResult, FileDiff, getDiff, resolveProjectPath } from './cliProxy';
+import { makeNonce, escapeHtml, buildCsp, prismCdn } from './webviewUtil';
 
-const PRISM_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0';
+const PRISM_CDN = prismCdn();
 
 /** Opens a webview panel showing the diff between two snapshots. */
 export async function showDiff(
@@ -34,8 +34,20 @@ export async function showDiff(
   }
 }
 
-function makeNonce(): string {
-  return crypto.randomBytes(16).toString('base64');
+/** Opens a webview panel from a pre-fetched DiffResult. */
+export function showDiffResult(
+  result: DiffResult,
+  fromLabel: string,
+  toLabel: string
+): void {
+  const panel = vscode.window.createWebviewPanel(
+    'avcDiff',
+    `AVC Diff: ${fromLabel} → ${toLabel}`,
+    vscode.ViewColumn.One,
+    { enableScripts: true }
+  );
+
+  panel.webview.html = buildDiffHtml(result, fromLabel, toLabel, panel.webview);
 }
 
 function loadingHtml(): string {
@@ -81,13 +93,7 @@ function buildDiffHtml(
     '<\\/'
   );
 
-  const csp = [
-    `default-src 'none'`,
-    `style-src ${webview.cspSource} ${PRISM_CDN} 'unsafe-inline'`,
-    `script-src ${PRISM_CDN} 'nonce-${n}'`,
-    `font-src ${PRISM_CDN}`,
-    `connect-src ${PRISM_CDN}`,
-  ].join('; ');
+  const csp = buildCsp(webview, n);
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -325,12 +331,4 @@ function renderUnifiedDiff(preview: string, lang: string): string {
     .join('');
 
   return `<table class="diff-table">${rows}</table>`;
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }
