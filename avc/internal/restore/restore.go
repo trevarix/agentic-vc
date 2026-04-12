@@ -8,6 +8,7 @@ import (
 
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/fileutil"
+	"github.com/SkillMythOrg/agentic-vc/avc/internal/statcache"
 )
 
 // Result is returned by Restore on success.
@@ -81,6 +82,9 @@ func Restore(projectRoot, snapshotID string) (*Result, error) {
 		}
 		restoredSize += f.FileSize
 	}
+
+	// All restored files have a new mtime — the stat cache is now stale.
+	statcache.Invalidate(projectRoot)
 
 	return &Result{
 		SnapshotID:    snapshotID,

@@ -187,6 +187,30 @@ func (s *Store) InsertFile(f *File) error {
 	return err
 }
 
+// InsertFilesBatch persists all file records in a single transaction,
+// reducing SQLite fsyncs from one-per-file to one for the entire batch.
+func (s *Store) InsertFilesBatch(files []*File) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	stmt, err := tx.Prepare(
+		`INSERT INTO files (id, snapshot_id, relative_path, file_hash, file_size) VALUES (?, ?, ?, ?, ?)`,
+	)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	defer stmt.Close()
+	for _, f := range files {
+		if _, err := stmt.Exec(f.ID, f.SnapshotID, f.RelativePath, f.FileHash, f.FileSize); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // ListSnapshots returns all snapshots for a project, newest first.
 func (s *Store) ListSnapshots() ([]*Snapshot, error) {
 	rows, err := s.db.Query(
