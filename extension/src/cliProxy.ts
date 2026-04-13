@@ -51,6 +51,8 @@ export interface Branch {
   created_at: number;
   active: boolean;
   workspace: string;
+}
+
 export interface LineAnnotation {
   line: number;
   snapshot_id: string;
@@ -211,6 +213,8 @@ export async function mergeBranch(
 
 export async function abortMerge(projectPath: string): Promise<void> {
   await runAvcCommand<{ aborted: boolean }>(['merge', '--abort'], projectPath);
+}
+
 export async function getDiffCurrent(
   projectPath: string,
   snapshotId: string

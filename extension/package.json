@@ -21,7 +21,9 @@
       "avc-sidebar": [
         {
           "id": "avcSnapshots",
-          "name": "Snapshots"
+          "name": "Snapshots",
+          "icon": "media/avc-icon.svg",
+          "type": "tree"
         }
       ]
     },
@@ -73,6 +75,8 @@
       {
         "command": "avc.abortMerge",
         "title": "AVC: Abort Merge"
+      },
+      {
         "command": "avc.filterSnapshots",
         "title": "AVC: Filter Snapshots",
         "icon": "$(search)"

@@ -289,7 +289,86 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
 
+    // ── Merge branch to main ───────────────────────────────────────────────────
     vscode.commands.registerCommand('avc.mergeBranch', async () => {
+      const projectPath = resolveProjectPath();
+      if (!projectPath) {
+        vscode.window.showErrorMessage('AVC: No project path configured.');
+        return;
+      }
+
+      try {
+        const branches = await listBranches(projectPath);
+        const mergeable = branches.filter((b) => b.name !== 'main');
+        if (mergeable.length === 0) {
+          vscode.window.showInformationMessage('AVC: No branches available to merge.');
+          return;
+        }
+
+        const picked = await vscode.window.showQuickPick(
+          mergeable.map((b) => ({ label: b.name, branchName: b.name })),
+          { placeHolder: 'Select a branch to merge into main' }
+        );
+        if (!picked) return;
+
+        const preview = await previewMerge(projectPath, picked.branchName);
+        const previewMsg = [
+          `Preview: merge "${picked.branchName}" → main`,
+          `  Clean:     ${preview.clean} file(s)`,
+          `  Conflicts: ${preview.conflicts} file(s)`,
+          `  Skipped:   ${preview.skipped} file(s)`,
+        ].join('\n');
+
+        const action = await vscode.window.showInformationMessage(
+          previewMsg,
+          { modal: true },
+          'Merge',
+          'Cancel'
+        );
+        if (action !== 'Merge') return;
+
+        const result = await mergeBranch(projectPath, picked.branchName);
+        await refreshAll();
+
+        if (result.conflicts > 0) {
+          vscode.window.showWarningMessage(
+            `AVC: Merge complete with ${result.conflicts} conflict(s). ` +
+            `Resolve the markers, then snapshot. Or run "AVC: Abort Merge" to undo.`
+          );
+        } else {
+          vscode.window.showInformationMessage(
+            `AVC: Merged "${picked.branchName}" into main — ${result.clean} file(s) applied cleanly.`
+          );
+        }
+      } catch (err) {
+        vscode.window.showErrorMessage(`AVC: Merge failed — ${(err as Error).message}`);
+      }
+    }),
+
+    // ── Abort merge ────────────────────────────────────────────────────────────
+    vscode.commands.registerCommand('avc.abortMerge', async () => {
+      const projectPath = resolveProjectPath();
+      if (!projectPath) {
+        vscode.window.showErrorMessage('AVC: No project path configured.');
+        return;
+      }
+
+      const confirmed = await vscode.window.showWarningMessage(
+        'Abort merge? Main will be restored from the pre-merge snapshot.',
+        { modal: true },
+        'Abort'
+      );
+      if (confirmed !== 'Abort') return;
+
+      try {
+        await abortMerge(projectPath);
+        await refreshAll();
+        vscode.window.showInformationMessage('AVC: Merge aborted. Main restored.');
+      } catch (err) {
+        vscode.window.showErrorMessage(`AVC: Abort failed — ${(err as Error).message}`);
+      }
+    }),
+
     // ── Filter snapshots ───────────────────────────────────────────────────────
     vscode.commands.registerCommand('avc.filterSnapshots', async () => {
       const input = await vscode.window.showInputBox({
@@ -338,56 +417,6 @@ export function activate(context: vscode.ExtensionContext): void {
       }
 
       try {
-        const branches = await listBranches(projectPath);
-        const mergeable = branches.filter((b) => b.name !== 'main');
-        if (mergeable.length === 0) {
-          vscode.window.showInformationMessage('AVC: No branches available to merge.');
-          return;
-        }
-
-        const picked = await vscode.window.showQuickPick(
-          mergeable.map((b) => ({ label: b.name, branchName: b.name })),
-          { placeHolder: 'Select a branch to merge into main' }
-        );
-        if (!picked) return;
-
-        // Show preview first.
-        const preview = await previewMerge(projectPath, picked.branchName);
-        const previewMsg = [
-          `Preview: merge "${picked.branchName}" → main`,
-          `  Clean:     ${preview.clean} file(s)`,
-          `  Conflicts: ${preview.conflicts} file(s)`,
-          `  Skipped:   ${preview.skipped} file(s)`,
-        ].join('\n');
-
-        const action = await vscode.window.showInformationMessage(
-          previewMsg,
-          { modal: true },
-          'Merge',
-          'Cancel'
-        );
-        if (action !== 'Merge') return;
-
-        const result = await mergeBranch(projectPath, picked.branchName);
-        await provider.load();
-        updateStatusBar();
-
-        if (result.conflicts > 0) {
-          vscode.window.showWarningMessage(
-            `AVC: Merge complete with ${result.conflicts} conflict(s). ` +
-            `Resolve the markers, then snapshot. Or run "AVC: Abort Merge" to undo.`
-          );
-        } else {
-          vscode.window.showInformationMessage(
-            `AVC: Merged "${picked.branchName}" into main — ${result.clean} file(s) applied cleanly.`
-          );
-        }
-      } catch (err) {
-        vscode.window.showErrorMessage(`AVC: Merge failed — ${(err as Error).message}`);
-      }
-    }),
-
-    vscode.commands.registerCommand('avc.abortMerge', async () => {
         const result = await getDiffCurrent(projectPath, item.snapshot.id);
         showDiffResult(result, item.snapshot.label, 'Working Tree');
       } catch (err) {
@@ -407,21 +436,6 @@ export function activate(context: vscode.ExtensionContext): void {
       }
 
       const confirmed = await vscode.window.showWarningMessage(
-        'Abort merge? Main will be restored from the pre-merge snapshot.',
-        { modal: true },
-        'Abort'
-      );
-      if (confirmed !== 'Abort') return;
-
-      try {
-        await abortMerge(projectPath);
-        await provider.load();
-        updateStatusBar();
-        vscode.window.showInformationMessage('AVC: Merge aborted. Main restored.');
-      } catch (err) {
-        vscode.window.showErrorMessage(`AVC: Abort failed — ${(err as Error).message}`);
-      }
-    })
         `Restore "${filePath}" from this snapshot? The current version will be overwritten.`,
         { modal: true },
         'Restore'
