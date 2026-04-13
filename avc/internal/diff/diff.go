@@ -121,16 +121,17 @@ func filesByPath(files []*db.File) map[string]*db.File {
 }
 
 func enrichWithLineCounts(projectRoot string, fd *FileDiff) {
-	oldData := readObjectSafe(projectRoot, fd.OldHash)
-	newData := readObjectSafe(projectRoot, fd.NewHash)
+	oldData := ReadObjectSafe(projectRoot, fd.OldHash)
+	newData := ReadObjectSafe(projectRoot, fd.NewHash)
 
-	added, removed, preview := computeUnifiedDiff(splitLines(oldData), splitLines(newData))
+	added, removed, preview := computeUnifiedDiff(SplitLines(oldData), SplitLines(newData))
 	fd.LinesAdded = added
 	fd.LinesRemoved = removed
 	fd.DiffPreview = preview
 }
 
-func readObjectSafe(projectRoot, hash string) []byte {
+// ReadObjectSafe reads a stored object by hash, returning nil on any error.
+func ReadObjectSafe(projectRoot, hash string) []byte {
 	if hash == "" {
 		return nil
 	}
@@ -139,7 +140,8 @@ func readObjectSafe(projectRoot, hash string) []byte {
 	return data
 }
 
-func splitLines(data []byte) []string {
+// SplitLines normalizes line endings and splits data into lines.
+func SplitLines(data []byte) []string {
 	if len(data) == 0 {
 		return nil
 	}
@@ -157,17 +159,22 @@ const (
 	diffContextLines = 3
 )
 
-type editOp int
+// EditOp classifies a single line in an edit sequence.
+type EditOp int
 
 const (
-	editKeep   editOp = iota
-	editAdd
-	editDelete
+	// EditKeep means the line is unchanged between old and new.
+	EditKeep EditOp = iota
+	// EditAdd means the line was added in the new version.
+	EditAdd
+	// EditDelete means the line was removed from the old version.
+	EditDelete
 )
 
-type editLine struct {
-	op   editOp
-	text string
+// EditLine is a single line in an edit sequence produced by ComputeEdits.
+type EditLine struct {
+	Op   EditOp
+	Text string
 }
 
 // computeUnifiedDiff returns accurate added/removed line counts and a proper
@@ -203,10 +210,10 @@ func lcsLength(a, b []string) int {
 	return prev[len(b)]
 }
 
-// computeEdits returns an in-order edit sequence from oldLines to newLines
+// ComputeEdits returns an in-order edit sequence from oldLines to newLines
 // using LCS backtracking (O(m*n) space). Returns nil when either file exceeds
 // maxDiffFileLines.
-func computeEdits(oldLines, newLines []string) []editLine {
+func ComputeEdits(oldLines, newLines []string) []EditLine {
 	m, n := len(oldLines), len(newLines)
 	if m > maxDiffFileLines || n > maxDiffFileLines {
 		return nil
@@ -228,19 +235,19 @@ func computeEdits(oldLines, newLines []string) []editLine {
 		}
 	}
 	// Backtrack to produce the edit sequence (built in reverse, then flipped).
-	edits := make([]editLine, 0, m+n)
+	edits := make([]EditLine, 0, m+n)
 	i, j := m, n
 	for i > 0 || j > 0 {
 		switch {
 		case i > 0 && j > 0 && oldLines[i-1] == newLines[j-1]:
-			edits = append(edits, editLine{editKeep, oldLines[i-1]})
+			edits = append(edits, EditLine{EditKeep, oldLines[i-1]})
 			i--
 			j--
 		case j > 0 && (i == 0 || dp[i][j-1] >= dp[i-1][j]):
-			edits = append(edits, editLine{editAdd, newLines[j-1]})
+			edits = append(edits, EditLine{EditAdd, newLines[j-1]})
 			j--
 		default:
-			edits = append(edits, editLine{editDelete, oldLines[i-1]})
+			edits = append(edits, EditLine{EditDelete, oldLines[i-1]})
 			i--
 		}
 	}
@@ -253,7 +260,7 @@ func computeEdits(oldLines, newLines []string) []editLine {
 // posEdit is an edit line annotated with its 1-based old and new line numbers.
 // oldLine is 0 for added lines; newLine is 0 for deleted lines.
 type posEdit struct {
-	op      editOp
+	op      EditOp
 	text    string
 	oldLine int
 	newLine int
@@ -263,7 +270,7 @@ type posEdit struct {
 // diffContextLines of context around each changed region.
 // Returns an empty string when files exceed maxDiffFileLines.
 func buildUnifiedDiff(oldLines, newLines []string) string {
-	edits := computeEdits(oldLines, newLines)
+	edits := ComputeEdits(oldLines, newLines)
 	if edits == nil {
 		return ""
 	}
@@ -272,16 +279,16 @@ func buildUnifiedDiff(oldLines, newLines []string) string {
 	positioned := make([]posEdit, len(edits))
 	ol, nl := 1, 1
 	for i, e := range edits {
-		switch e.op {
-		case editKeep:
-			positioned[i] = posEdit{editKeep, e.text, ol, nl}
+		switch e.Op {
+		case EditKeep:
+			positioned[i] = posEdit{EditKeep, e.Text, ol, nl}
 			ol++
 			nl++
-		case editAdd:
-			positioned[i] = posEdit{editAdd, e.text, 0, nl}
+		case EditAdd:
+			positioned[i] = posEdit{EditAdd, e.Text, 0, nl}
 			nl++
-		case editDelete:
-			positioned[i] = posEdit{editDelete, e.text, ol, 0}
+		case EditDelete:
+			positioned[i] = posEdit{EditDelete, e.Text, ol, 0}
 			ol++
 		}
 	}
@@ -289,7 +296,7 @@ func buildUnifiedDiff(oldLines, newLines []string) string {
 	// Mark which positions belong to a hunk (changed ± context).
 	inHunk := make([]bool, len(positioned))
 	for i, e := range positioned {
-		if e.op != editKeep {
+		if e.op != EditKeep {
 			start := i - diffContextLines
 			if start < 0 {
 				start = 0
@@ -322,7 +329,7 @@ func buildUnifiedDiff(oldLines, newLines []string) string {
 		oldCount, newCount := 0, 0
 		for _, e := range slice {
 			switch e.op {
-			case editKeep:
+			case EditKeep:
 				if firstOld == 0 {
 					firstOld = e.oldLine
 				}
@@ -331,12 +338,12 @@ func buildUnifiedDiff(oldLines, newLines []string) string {
 				}
 				oldCount++
 				newCount++
-			case editAdd:
+			case EditAdd:
 				if firstNew == 0 {
 					firstNew = e.newLine
 				}
 				newCount++
-			case editDelete:
+			case EditDelete:
 				if firstOld == 0 {
 					firstOld = e.oldLine
 				}
@@ -347,11 +354,11 @@ func buildUnifiedDiff(oldLines, newLines []string) string {
 		fmt.Fprintf(&sb, "@@ -%d,%d +%d,%d @@\n", firstOld, oldCount, firstNew, newCount)
 		for _, e := range slice {
 			switch e.op {
-			case editKeep:
+			case EditKeep:
 				fmt.Fprintf(&sb, " %s\n", e.text)
-			case editAdd:
+			case EditAdd:
 				fmt.Fprintf(&sb, "+%s\n", e.text)
-			case editDelete:
+			case EditDelete:
 				fmt.Fprintf(&sb, "-%s\n", e.text)
 			}
 		}

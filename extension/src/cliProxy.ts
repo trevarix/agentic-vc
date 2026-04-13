@@ -30,6 +30,14 @@ export interface RestoreResult {
   message: string;
 }
 
+export interface RestoreFileResult {
+  id: string;
+  file_path: string;
+  size: number;
+  success: boolean;
+  message: string;
+}
+
 export interface DiffResult {
   from_snapshot: string;
   to_snapshot: string;
@@ -43,6 +51,18 @@ export interface Branch {
   created_at: number;
   active: boolean;
   workspace: string;
+export interface LineAnnotation {
+  line: number;
+  snapshot_id: string;
+  label: string;
+  agent_name: string;
+  timestamp: number;
+}
+
+export interface AnnotateResult {
+  file_path: string;
+  total_lines: number;
+  lines: LineAnnotation[];
 }
 
 export interface FileDiff {
@@ -191,4 +211,24 @@ export async function mergeBranch(
 
 export async function abortMerge(projectPath: string): Promise<void> {
   await runAvcCommand<{ aborted: boolean }>(['merge', '--abort'], projectPath);
+export async function getDiffCurrent(
+  projectPath: string,
+  snapshotId: string
+): Promise<DiffResult> {
+  return runAvcCommand<DiffResult>(['diff-current', snapshotId], projectPath);
+}
+
+export async function restoreFile(
+  projectPath: string,
+  snapshotId: string,
+  filePath: string
+): Promise<RestoreFileResult> {
+  return runAvcCommand<RestoreFileResult>(['restore-file', snapshotId, filePath], projectPath);
+}
+
+export async function annotateFile(
+  projectPath: string,
+  filePath: string
+): Promise<AnnotateResult> {
+  return runAvcCommand<AnnotateResult>(['annotate', filePath], projectPath);
 }
