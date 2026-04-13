@@ -2,7 +2,7 @@
   "name": "avc",
   "displayName": "AVC — Agentic Version Control",
   "description": "Save, browse, and restore project snapshots without Git.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Other"],
   "activationEvents": ["onStartupFinished"],
@@ -45,8 +45,39 @@
         "title": "AVC: View Diff"
       },
       {
+        "command": "avc.viewInfo",
+        "title": "AVC: View Snapshot Details"
+      },
+      {
         "command": "avc.deleteSnapshot",
         "title": "AVC: Delete Snapshot"
+      },
+      {
+        "command": "avc.filterSnapshots",
+        "title": "AVC: Filter Snapshots",
+        "icon": "$(search)"
+      },
+      {
+        "command": "avc.compareTwoSnapshots",
+        "title": "AVC: Compare Two Snapshots",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "avc.diffWithCurrent",
+        "title": "AVC: Diff with Current Files"
+      },
+      {
+        "command": "avc.showTimeline",
+        "title": "AVC: Show Timeline",
+        "icon": "$(timeline)"
+      },
+      {
+        "command": "avc.restoreFile",
+        "title": "AVC: Restore Single File"
+      },
+      {
+        "command": "avc.toggleAnnotations",
+        "title": "AVC: Toggle Line Annotations"
       }
     ],
     "menus": {
@@ -60,6 +91,21 @@
           "command": "avc.refreshSnapshots",
           "when": "view == avcSnapshots",
           "group": "navigation"
+        },
+        {
+          "command": "avc.filterSnapshots",
+          "when": "view == avcSnapshots",
+          "group": "navigation"
+        },
+        {
+          "command": "avc.compareTwoSnapshots",
+          "when": "view == avcSnapshots",
+          "group": "navigation"
+        },
+        {
+          "command": "avc.showTimeline",
+          "when": "view == avcSnapshots",
+          "group": "navigation"
         }
       ],
       "view/item/context": [
@@ -67,6 +113,14 @@
           "command": "avc.restoreSnapshot",
           "when": "viewItem == snapshot",
           "group": "inline"
+        },
+        {
+          "command": "avc.viewDiff",
+          "when": "viewItem == snapshot"
+        },
+        {
+          "command": "avc.diffWithCurrent",
+          "when": "viewItem == snapshot"
         },
         {
           "command": "avc.deleteSnapshot",
@@ -91,6 +145,21 @@
           "type": "string",
           "default": "avc",
           "description": "Path to the avc CLI binary."
+        },
+        "avc.autoSnapshot.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically create a snapshot after saving files."
+        },
+        "avc.autoSnapshot.debounceSeconds": {
+          "type": "number",
+          "default": 30,
+          "description": "Seconds to wait after the last save before creating an auto-snapshot."
+        },
+        "avc.autoSnapshot.cooldownMinutes": {
+          "type": "number",
+          "default": 5,
+          "description": "Minimum minutes between auto-snapshots."
         }
       }
     }
