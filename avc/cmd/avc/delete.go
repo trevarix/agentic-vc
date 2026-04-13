@@ -16,10 +16,6 @@ var deleteCmd = &cobra.Command{
 	RunE:  runDelete,
 }
 
-func init() {
-	rootCmd.AddCommand(deleteCmd)
-}
-
 func runDelete(cmd *cobra.Command, args []string) error {
 	snapshotID := args[0]
 

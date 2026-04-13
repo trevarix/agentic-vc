@@ -6,13 +6,15 @@ import (
 	"os"
 	"time"
 
+	branchpkg "github.com/SkillMythOrg/agentic-vc/avc/internal/branch"
+	"github.com/SkillMythOrg/agentic-vc/avc/internal/config"
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
 	"github.com/spf13/cobra"
 )
 
 var listCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List all snapshots for this project",
+	Short: "List snapshots for the active branch",
 	RunE:  runList,
 }
 
@@ -28,7 +30,21 @@ func runList(cmd *cobra.Command, args []string) error {
 	}
 	defer store.Close()
 
-	snapshots, err := store.ListSnapshots()
+	cfg, _ := config.Load(projectPath)
+	activeName := cfg.Branch.Active
+	if activeName == "" {
+		activeName = "main"
+	}
+
+	// Attempt to filter by active branch; fall back to all snapshots if
+	// the branch record doesn't exist yet (e.g. very early init edge case).
+	var snapshots []*db.Snapshot
+	branchID, branchErr := branchpkg.GetActiveBranchID(projectPath)
+	if branchErr == nil {
+		snapshots, err = store.ListSnapshotsByBranch(branchID)
+	} else {
+		snapshots, err = store.ListSnapshots()
+	}
 	if err != nil {
 		return err
 	}
@@ -59,10 +75,12 @@ func runList(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(snapshots) == 0 {
-		fmt.Println("No snapshots yet. Run `avc snapshot <label>` to create one.")
+		fmt.Printf("No snapshots on branch %s yet. Run `avc snapshot <label>` to create one.\n",
+			bold(activeName))
 		return nil
 	}
 
+	fmt.Printf("Branch: %s\n\n", bold(green(activeName)))
 	fmt.Printf("%-20s  %-30s  %-20s  %s\n",
 		bold("ID"), bold("Label"), bold("Timestamp"), bold("Files"))
 	fmt.Println(dim("------------------------------------------------------------------------------------"))

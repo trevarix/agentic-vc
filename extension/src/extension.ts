@@ -10,6 +10,13 @@ import {
   createSnapshot,
   restoreSnapshot,
   deleteSnapshot,
+  listBranches,
+  createBranch,
+  switchBranch,
+  deleteBranch,
+  previewMerge,
+  mergeBranch,
+  abortMerge,
   getDiffCurrent,
   restoreFile,
   resolveProjectPath,
@@ -18,14 +25,23 @@ import {
 export function activate(context: vscode.ExtensionContext): void {
   const provider = new SnapshotProvider();
 
-  const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 10);
-  statusBar.command = 'avc.refreshSnapshots';
-  statusBar.show();
-  context.subscriptions.push(statusBar);
+  // Snapshot count status bar (left side).
+  const snapshotBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 10);
+  snapshotBar.command = 'avc.refreshSnapshots';
+  snapshotBar.show();
+  context.subscriptions.push(snapshotBar);
+
+  // Branch status bar (left side, slightly lower priority).
+  const branchBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 9);
+  branchBar.command = 'avc.switchBranch';
+  branchBar.tooltip = 'AVC: Switch branch';
+  branchBar.show();
+  context.subscriptions.push(branchBar);
 
   function updateStatusBar(): void {
     const count = provider.getChildren().length;
-    statusBar.text = `$(history) AVC: ${count} snapshot${count === 1 ? '' : 's'}`;
+    snapshotBar.text = `$(history) AVC: ${count} snapshot${count === 1 ? '' : 's'}`;
+    branchBar.text = `$(git-branch) ${provider.activeBranch}`;
   }
 
   context.subscriptions.push(
@@ -178,6 +194,102 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
 
+    vscode.commands.registerCommand('avc.createBranch', async () => {
+      const projectPath = resolveProjectPath();
+      if (!projectPath) {
+        vscode.window.showErrorMessage('AVC: No project path configured.');
+        return;
+      }
+
+      const name = await vscode.window.showInputBox({
+        prompt: 'Branch name',
+        placeHolder: 'e.g. feature/my-experiment',
+      });
+      if (!name) return;
+
+      try {
+        const b = await createBranch(projectPath, name);
+        // Branch create auto-switches — just reload the UI.
+        await provider.load();
+        updateStatusBar();
+        const msg = b.workspace
+          ? `AVC: Branch "${b.name}" created. Direct your agent to: ${b.workspace}`
+          : `AVC: Branch "${b.name}" created.`;
+        vscode.window.showInformationMessage(msg);
+      } catch (err) {
+        vscode.window.showErrorMessage(`AVC: Create branch failed — ${(err as Error).message}`);
+      }
+    }),
+
+    vscode.commands.registerCommand('avc.switchBranch', async () => {
+      const projectPath = resolveProjectPath();
+      if (!projectPath) {
+        vscode.window.showErrorMessage('AVC: No project path configured.');
+        return;
+      }
+
+      try {
+        const branches = await listBranches(projectPath);
+        if (branches.length === 0) {
+          vscode.window.showInformationMessage('AVC: No branches found.');
+          return;
+        }
+        const items = branches.map((b) => ({
+          label: b.active ? `$(check) ${b.name}` : b.name,
+          description: b.active ? 'active' : '',
+          branchName: b.name,
+        }));
+        const picked = await vscode.window.showQuickPick(items, {
+          placeHolder: 'Select a branch to switch to',
+        });
+        if (!picked || picked.description === 'active') return;
+
+        await switchBranch(projectPath, picked.branchName);
+        await provider.load();
+        updateStatusBar();
+        vscode.window.showInformationMessage(`AVC: Switched to branch "${picked.branchName}"`);
+      } catch (err) {
+        vscode.window.showErrorMessage(`AVC: Switch branch failed — ${(err as Error).message}`);
+      }
+    }),
+
+    vscode.commands.registerCommand('avc.deleteBranch', async () => {
+      const projectPath = resolveProjectPath();
+      if (!projectPath) {
+        vscode.window.showErrorMessage('AVC: No project path configured.');
+        return;
+      }
+
+      try {
+        const branches = await listBranches(projectPath);
+        const deletable = branches.filter((b) => b.name !== 'main' && !b.active);
+        if (deletable.length === 0) {
+          vscode.window.showInformationMessage('AVC: No deletable branches (cannot delete main or active branch).');
+          return;
+        }
+        const picked = await vscode.window.showQuickPick(
+          deletable.map((b) => ({ label: b.name, branchName: b.name })),
+          { placeHolder: 'Select a branch to delete' }
+        );
+        if (!picked) return;
+
+        const confirmed = await vscode.window.showWarningMessage(
+          `Delete branch "${picked.branchName}"? This cannot be undone.`,
+          { modal: true },
+          'Delete'
+        );
+        if (confirmed !== 'Delete') return;
+
+        await deleteBranch(projectPath, picked.branchName);
+        await provider.load();
+        updateStatusBar();
+        vscode.window.showInformationMessage(`AVC: Branch "${picked.branchName}" deleted.`);
+      } catch (err) {
+        vscode.window.showErrorMessage(`AVC: Delete branch failed — ${(err as Error).message}`);
+      }
+    }),
+
+    vscode.commands.registerCommand('avc.mergeBranch', async () => {
     // ── Filter snapshots ───────────────────────────────────────────────────────
     vscode.commands.registerCommand('avc.filterSnapshots', async () => {
       const input = await vscode.window.showInputBox({
@@ -226,6 +338,56 @@ export function activate(context: vscode.ExtensionContext): void {
       }
 
       try {
+        const branches = await listBranches(projectPath);
+        const mergeable = branches.filter((b) => b.name !== 'main');
+        if (mergeable.length === 0) {
+          vscode.window.showInformationMessage('AVC: No branches available to merge.');
+          return;
+        }
+
+        const picked = await vscode.window.showQuickPick(
+          mergeable.map((b) => ({ label: b.name, branchName: b.name })),
+          { placeHolder: 'Select a branch to merge into main' }
+        );
+        if (!picked) return;
+
+        // Show preview first.
+        const preview = await previewMerge(projectPath, picked.branchName);
+        const previewMsg = [
+          `Preview: merge "${picked.branchName}" → main`,
+          `  Clean:     ${preview.clean} file(s)`,
+          `  Conflicts: ${preview.conflicts} file(s)`,
+          `  Skipped:   ${preview.skipped} file(s)`,
+        ].join('\n');
+
+        const action = await vscode.window.showInformationMessage(
+          previewMsg,
+          { modal: true },
+          'Merge',
+          'Cancel'
+        );
+        if (action !== 'Merge') return;
+
+        const result = await mergeBranch(projectPath, picked.branchName);
+        await provider.load();
+        updateStatusBar();
+
+        if (result.conflicts > 0) {
+          vscode.window.showWarningMessage(
+            `AVC: Merge complete with ${result.conflicts} conflict(s). ` +
+            `Resolve the markers, then snapshot. Or run "AVC: Abort Merge" to undo.`
+          );
+        } else {
+          vscode.window.showInformationMessage(
+            `AVC: Merged "${picked.branchName}" into main — ${result.clean} file(s) applied cleanly.`
+          );
+        }
+      } catch (err) {
+        vscode.window.showErrorMessage(`AVC: Merge failed — ${(err as Error).message}`);
+      }
+    }),
+
+    vscode.commands.registerCommand('avc.abortMerge', async () => {
         const result = await getDiffCurrent(projectPath, item.snapshot.id);
         showDiffResult(result, item.snapshot.label, 'Working Tree');
       } catch (err) {
@@ -245,6 +407,21 @@ export function activate(context: vscode.ExtensionContext): void {
       }
 
       const confirmed = await vscode.window.showWarningMessage(
+        'Abort merge? Main will be restored from the pre-merge snapshot.',
+        { modal: true },
+        'Abort'
+      );
+      if (confirmed !== 'Abort') return;
+
+      try {
+        await abortMerge(projectPath);
+        await provider.load();
+        updateStatusBar();
+        vscode.window.showInformationMessage('AVC: Merge aborted. Main restored.');
+      } catch (err) {
+        vscode.window.showErrorMessage(`AVC: Abort failed — ${(err as Error).message}`);
+      }
+    })
         `Restore "${filePath}" from this snapshot? The current version will be overwritten.`,
         { modal: true },
         'Restore'

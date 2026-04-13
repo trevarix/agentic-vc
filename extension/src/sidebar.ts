@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { Snapshot, listSnapshots, resolveProjectPath } from './cliProxy';
+import { Snapshot, listSnapshots, listBranches, resolveProjectPath } from './cliProxy';
 import { formatBytes } from './webviewUtil';
 
 /** A single snapshot entry shown in the sidebar tree. */
@@ -35,8 +35,13 @@ export class SnapshotProvider implements vscode.TreeDataProvider<SnapshotItem> {
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
   private snapshots: Snapshot[] = [];
+  private _activeBranch = 'main';
   private loading = false;
   private filterText = '';
+
+  get activeBranch(): string {
+    return this._activeBranch;
+  }
 
   refresh(): void {
     this._onDidChangeTreeData.fire(undefined);
@@ -56,7 +61,13 @@ export class SnapshotProvider implements vscode.TreeDataProvider<SnapshotItem> {
         this.snapshots = [];
         return;
       }
-      this.snapshots = await listSnapshots(projectPath);
+      const [snapshots, branches] = await Promise.all([
+        listSnapshots(projectPath),
+        listBranches(projectPath).catch(() => []),
+      ]);
+      this.snapshots = snapshots;
+      const active = branches.find((b) => b.active);
+      if (active) this._activeBranch = active.name;
     } catch (err) {
       vscode.window.showErrorMessage(`AVC: Failed to load snapshots — ${(err as Error).message}`);
       this.snapshots = [];

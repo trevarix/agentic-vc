@@ -19,9 +19,16 @@ type Result struct {
 }
 
 // Restore rolls the project back to the state captured in snapshotID.
-// Files in the snapshot are written back. Files tracked in a more recent
-// snapshot but absent from the target snapshot are deleted from disk.
+// This is a convenience wrapper around RestoreToDir targeting the project root.
 func Restore(projectRoot, snapshotID string) (*Result, error) {
+	return RestoreToDir(projectRoot, snapshotID, projectRoot)
+}
+
+// RestoreToDir rolls a snapshot's file set back into targetDir.
+// projectRoot is where .avc/ lives (object store + DB lookups).
+// targetDir is where files are written — either the project root or a workspace.
+// The two may differ when restoring into a branch workspace.
+func RestoreToDir(projectRoot, snapshotID, targetDir string) (*Result, error) {
 	store, err := db.Open(projectRoot)
 	if err != nil {
 		return nil, err
@@ -37,54 +44,55 @@ func Restore(projectRoot, snapshotID string) (*Result, error) {
 		return nil, err
 	}
 
-	// Build a set of paths present in the target snapshot.
+	// Build a set of relative paths present in the target snapshot.
 	targetPaths := make(map[string]bool, len(targetFiles))
 	for _, f := range targetFiles {
 		targetPaths[f.RelativePath] = true
 	}
 
-	// Find all files ever tracked across all snapshots so we know what to
-	// consider for deletion (i.e. files added after the target snapshot).
-	allSnapshots, err := store.ListSnapshots()
-	if err != nil {
-		return nil, err
-	}
-	for _, snap := range allSnapshots {
-		if snap.ID == snapshotID {
-			continue
-		}
-		snapFiles, err := store.GetSnapshotFiles(snap.ID)
+	// Walk targetDir and remove any file not in the target snapshot.
+	// This cleans up files added after the snapshot was taken.
+	_ = filepath.WalkDir(targetDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			return nil, err
+			return nil
 		}
-		for _, f := range snapFiles {
-			if !targetPaths[f.RelativePath] {
-				absPath := filepath.Join(projectRoot, filepath.FromSlash(f.RelativePath))
-				if err := os.Remove(absPath); err != nil && !os.IsNotExist(err) {
-					return nil, fmt.Errorf("remove file %s: %w", f.RelativePath, err)
-				}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".avc", ".git", ".hg", ".svn", ".bzr":
+				return filepath.SkipDir
 			}
+			return nil
 		}
-	}
+		rel, err := filepath.Rel(targetDir, path)
+		if err != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		if !targetPaths[rel] {
+			_ = os.Remove(path)
+		}
+		return nil
+	})
 
 	// Write back every file from the target snapshot.
 	var restoredSize int64
 	for _, f := range targetFiles {
-		absPath := filepath.Join(projectRoot, filepath.FromSlash(f.RelativePath))
+		absPath := filepath.Join(targetDir, filepath.FromSlash(f.RelativePath))
 
 		data, err := readObject(projectRoot, f.FileHash)
 		if err != nil {
 			return nil, fmt.Errorf("read object for %s: %w", f.RelativePath, err)
 		}
-
 		if err := fileutil.WriteFile(absPath, data); err != nil {
 			return nil, fmt.Errorf("write file %s: %w", f.RelativePath, err)
 		}
 		restoredSize += f.FileSize
 	}
 
-	// All restored files have a new mtime — the stat cache is now stale.
-	statcache.Invalidate(projectRoot)
+	// Stat cache is only valid for the real project root — invalidate it there.
+	if targetDir == projectRoot {
+		statcache.Invalidate(projectRoot)
+	}
 
 	return &Result{
 		SnapshotID:    snapshotID,
@@ -94,10 +102,13 @@ func Restore(projectRoot, snapshotID string) (*Result, error) {
 }
 
 // objectPath returns the path inside .avc/objects/ where a file's content is stored.
-// Files are addressed by their SHA256 hash (content-addressed storage).
 func objectPath(projectRoot, hash string) string {
-	// Shard by first two hex chars to avoid too many files in one directory.
 	return filepath.Join(projectRoot, ".avc", "objects", hash[:2], hash[2:])
+}
+
+// ReadObject reads a stored file blob by its hash. Exported for use by merge.
+func ReadObject(projectRoot, hash string) ([]byte, error) {
+	return readObject(projectRoot, hash)
 }
 
 // readObject reads a stored file blob by its hash.

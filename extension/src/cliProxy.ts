@@ -44,6 +44,13 @@ export interface DiffResult {
   files: FileDiff[];
 }
 
+export interface Branch {
+  id: string;
+  name: string;
+  base_snapshot_id: string;
+  created_at: number;
+  active: boolean;
+  workspace: string;
 export interface LineAnnotation {
   line: number;
   snapshot_id: string;
@@ -145,6 +152,65 @@ export async function deleteSnapshot(
   await runAvcCommand<{ success: boolean }>(['delete', snapshotId], projectPath);
 }
 
+export async function listBranches(projectPath: string): Promise<Branch[]> {
+  return runAvcCommand<Branch[]>(['branch', 'list'], projectPath);
+}
+
+export async function createBranch(
+  projectPath: string,
+  name: string,
+  fromSnapshotId?: string
+): Promise<Branch> {
+  const args = ['branch', 'create', name];
+  if (fromSnapshotId) args.push('--from', fromSnapshotId);
+  return runAvcCommand<Branch>(args, projectPath);
+}
+
+export async function switchBranch(
+  projectPath: string,
+  name: string
+): Promise<{ name: string; success: boolean }> {
+  return runAvcCommand<{ name: string; success: boolean }>(['branch', 'switch', name], projectPath);
+}
+
+export async function deleteBranch(
+  projectPath: string,
+  name: string
+): Promise<void> {
+  await runAvcCommand<{ success: boolean }>(['branch', 'delete', name], projectPath);
+}
+
+export interface MergeFileResult {
+  path: string;
+  decision: 'clean' | 'conflict' | 'skip';
+}
+
+export interface MergeResult {
+  merge_id: string;
+  branch: string;
+  preview: boolean;
+  clean: number;
+  conflicts: number;
+  skipped: number;
+  files: MergeFileResult[];
+}
+
+export async function previewMerge(
+  projectPath: string,
+  branchName: string
+): Promise<MergeResult> {
+  return runAvcCommand<MergeResult>(['merge', branchName, '--preview'], projectPath);
+}
+
+export async function mergeBranch(
+  projectPath: string,
+  branchName: string
+): Promise<MergeResult> {
+  return runAvcCommand<MergeResult>(['merge', branchName], projectPath);
+}
+
+export async function abortMerge(projectPath: string): Promise<void> {
+  await runAvcCommand<{ aborted: boolean }>(['merge', '--abort'], projectPath);
 export async function getDiffCurrent(
   projectPath: string,
   snapshotId: string

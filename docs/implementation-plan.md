@@ -120,23 +120,24 @@ Progress key: ✅ done · 🔧 scaffolded (code exists but incomplete) · ⬜ no
 **Goal:** Agents work in isolated branches; main is untouched until the user approves.
 
 ### Data model
-- ⬜ `branches` table: `(id, name, project_id, base_snapshot_id, created_at)`
-- ⬜ `snapshots.branch_id` foreign key added via migration
-- ⬜ `main` branch record created automatically on `avc init`
-- ⬜ Active branch stored in `.avc/config.toml` under `[branch] active`
+- ✅ `branches` table: `(id, name, project_id, base_snapshot_id, created_at)`
+- ✅ `snapshots.branch_id` foreign key added via migration
+- ✅ `main` branch record created automatically on `avc init`
+- ✅ Active branch stored in `.avc/config.toml` under `[branch] active`
 
 ### CLI commands
-- ⬜ `avc branch create <name> [--from <snapshot_id>]`
-- ⬜ `avc branch list`
-- ⬜ `avc branch switch <name>`
-- ⬜ `avc branch delete <name>`
-- ⬜ `avc branch diff <name>` — cumulative diff from branch point to HEAD of branch
-- ⬜ `avc snapshot` respects active branch (snapshots land on the correct branch)
-- ⬜ `avc restore` scoped to the branch being restored — does not affect main
+- ✅ `avc branch create <name> [--from <snapshot_id>]`
+- ✅ `avc branch list`
+- ✅ `avc branch switch <name>`
+- ✅ `avc branch delete <name>`
+- ✅ `avc branch diff <name>` — cumulative diff from branch point to HEAD of branch
+- ✅ `avc snapshot` respects active branch (snapshots land on the correct branch)
+- ✅ `avc restore` scoped to the branch being restored — does not affect main
 
 ### Internal packages
-- ⬜ `avc/internal/branch/branch.go` — create, list, switch, delete, resolve branch point
-- ⬜ `avc/internal/diff/diff.go` updated — accept optional branch context for cumulative diffs
+- ✅ `avc/internal/branch/branch.go` — create, list, switch, delete, resolve branch point
+- ✅ `avc/internal/config/config.go` — `BranchConfig`, `SetActiveBranch`, `Save`
+- ✅ `avc/internal/db/db.go` — `EnsureMainBranch`, `ListSnapshotsByBranch`, `GetHeadSnapshot`, branch CRUD
 
 ### Implementation note — branch creation must not snapshot
 `avc branch create` records `base_snapshot_id` in the `branches` table and writes
@@ -148,34 +149,72 @@ trigger 1,000 `StoreObject` calls (all no-ops, but still unnecessary) for every
 branch creation regardless of project size.
 
 ### VSCode extension
-- ⬜ Branch selector in sidebar header (dropdown showing all branches)
-- ⬜ Snapshot list filtered to the active branch
-- ⬜ "New Agent Branch" quick action
+- ✅ Branch status bar item (shows active branch, click to switch)
+- ✅ Snapshot list filtered to the active branch (via `avc list --json`)
+- ✅ "Create Branch" button in sidebar view title
+- ✅ `avc.createBranch`, `avc.switchBranch`, `avc.deleteBranch` commands registered
+- ✅ Branch selector via QuickPick on switch command
 - ⬜ Branch name shown on each snapshot item when not on main
 
 ---
 
-## Phase 5 — Merging (Controlled Integration)
+## Phase 4.5 — Workspace Isolation
+
+**Goal:** Agent branches operate on a materialized copy of the project, not the real
+working directory. Main is provably untouched until merge.
+
+Full design: [docs/workspace-isolation.md](workspace-isolation.md)
+
+### Internal packages
+- ✅ `restore.RestoreToDir(projectRoot, snapshotID, targetDir)` — restore to any directory, not just project root
+- ✅ `snapshot.Create` accepts `sourceDir` param — walk workspace instead of project root
+- ✅ `branch.WorkspacePath(projectRoot, branchName)` — derives `.avc/workspaces/<name>/`
+- ✅ `branch.MaterializeWorkspace(projectRoot, branch)` — populates workspace from base snapshot
+- ✅ `branch.RemoveWorkspace(projectRoot, branchName)` — cleanup on delete
+- ✅ `statcache.Empty()` exported for workspace snapshot path (no cache contamination)
+
+### CLI changes
+- ✅ `avc branch create` — materializes workspace after creating branch record; prints workspace path
+- ✅ `avc branch delete` — removes workspace directory
+- ✅ `avc snapshot` on non-main branch — walks workspace dir as source
+- ✅ `avc restore` on non-main branch — writes to workspace dir as target
+
+### Tests
+- ✅ `avc/tests/workspace_test.go` — 6 tests: materialize, hardlink inode, snapshot targets workspace, restore targets workspace, delete removes workspace, main has no workspace
+
+### VSCode extension
+- ✅ `Branch.workspace` field added to `cliProxy.ts`
+- ✅ Workspace path shown in "Branch created" notification
+
+---
+
+## Phase 5 — Merging (Controlled Integration) ✅
 
 **Goal:** Approved agent branches flow to main cleanly; conflicts surface clearly.
 
 ### Merge logic
-- ⬜ `avc/internal/merge/merge.go` — three-way comparison: base snapshot, main HEAD, branch HEAD
-- ⬜ Clean merge: files only modified on branch → apply automatically
-- ⬜ Conflict detection: files modified on both branch and main since branch point
-- ⬜ Conflict markers written to working tree for conflicted files
-- ⬜ `merges` table: `(id, branch_id, base_snapshot_id, merged_at, status)`; per-file rows with outcome (`clean` / `conflict` / `skipped`)
-- ⬜ Auto-snapshot main before every merge (safety net — always reversible)
+- ✅ `avc/internal/merge/merge.go` — three-way comparison: base snapshot, main HEAD, branch HEAD
+- ✅ Clean merge: files only modified on branch → applied automatically
+- ✅ Conflict detection: files modified on both branch and main since branch point
+- ✅ Conflict markers written to working tree for conflicted files (`<<<<<<< main / ======= / >>>>>>> branch`)
+- ✅ `merges` + `merge_files` tables in `db.go`; per-file rows with decision (`clean` / `conflict` / `skipped`)
+- ✅ Auto-snapshot main before every merge (fully reversible via `--abort`)
 
 ### CLI commands
-- ⬜ `avc merge <branch_name>`
-- ⬜ `avc merge <branch_name> --preview` — dry-run, lists clean/conflict files, no changes written
-- ⬜ `avc merge --abort` — reverts in-progress merge to pre-merge snapshot
+- ✅ `avc merge <branch_name>`
+- ✅ `avc merge <branch_name> --preview` — dry-run, lists clean/conflict files, no changes written
+- ✅ `avc merge --abort` — reverts in-progress merge to pre-merge snapshot
+
+### MCP tools
+- ✅ `avc_merge_preview` — preview merge decisions without writing files
+- ✅ `avc_merge` — perform three-way merge; returns per-file decisions
+- ✅ `avc_merge_abort` — restore main from pre-merge auto-snapshot
 
 ### VSCode extension
-- ⬜ "Merge to Main" button on agent branches in sidebar
-- ⬜ Conflict summary panel: lists conflicted files with "Keep Mine / Keep Agent's / View Diff" per file
-- ⬜ Post-merge snapshot visible in sidebar immediately
+- ✅ "Merge Branch to Main" button in sidebar toolbar (`$(git-merge)` icon)
+- ✅ Preview modal before committing — shows clean/conflict/skipped counts
+- ✅ Post-merge warning if conflicts present; "Abort Merge" command available
+- ✅ `avc.mergeBranch` and `avc.abortMerge` registered commands
 
 ---
 
@@ -185,42 +224,47 @@ branch creation regardless of project size.
 
 ### MCP Server
 
-- ⬜ `avc/cmd/avc/mcp.go` — `avc mcp serve` subcommand; starts a stdio MCP server
-- ⬜ `avc/internal/mcp/server.go` — JSON-RPC 2.0 readline loop over stdio; dispatches `initialize`, `tools/list`, `tools/call`
-- ⬜ `avc/internal/mcp/tools.go` — tool registry and input schema definitions
-- ⬜ `avc/internal/mcp/handlers.go` — one function per tool; calls existing `internal/` packages directly (no CLI re-invocation)
-- ⬜ Server is project-scoped — resolves `.avc/` from `cwd` at startup, same as all other commands
-- ⬜ Each tool call returns the same JSON the CLI already produces — no new data layer
-- ⬜ Tool results wrapped in MCP `content` envelope: `{"content": [{"type": "text", "text": "<json>"}]}`
-- ⬜ Output is pretty-printed JSON for readability in agent context windows; `--compact` flag available for token-sensitive environments
+- ✅ `avc/cmd/avc/mcp.go` — `avc mcp serve` subcommand; starts a stdio MCP server
+- ✅ `avc/internal/mcp/server.go` — JSON-RPC 2.0 readline loop over stdio; dispatches `initialize`, `tools/list`, `tools/call`, `ping`
+- ✅ `avc/internal/mcp/tools.go` — tool registry and input schema definitions
+- ✅ `avc/internal/mcp/handlers.go` — one function per tool; calls existing `internal/` packages directly (no CLI re-invocation)
+- ✅ Server is project-scoped — resolves `.avc/` from `cwd` at startup, same as all other commands
+- ✅ Each tool call returns the same JSON the CLI already produces — no new data layer
+- ✅ Tool results wrapped in MCP `content` envelope: `{"content": [{"type": "text", "text": "<json>"}]}`
+- ✅ Output is pretty-printed JSON for readability in agent context windows; `--compact` flag available for token-sensitive environments
 
 ### MCP Tools
 
 | Tool | Input | Maps to |
 |------|-------|---------|
-| `avc_snapshot` | `label`, `agent_name?`, `notes?` | `snapshot.Create` |
-| `avc_list` | *(none)* | `db.ListSnapshots` |
+| `avc_snapshot` | `label`, `agent_name?`, `notes?` | `snapshot.Create` (workspace-aware) |
+| `avc_list` | *(none)* | `db.ListSnapshotsByBranch` |
 | `avc_diff` | `from_id`, `to_id` | `diff.Compare` |
-| `avc_restore` | `id` | `restore.Restore` |
+| `avc_restore` | `id` | `restore.RestoreToDir` (workspace-aware) |
 | `avc_info` | `id` | `db.GetSnapshot` + `db.GetSnapshotFiles` |
 | `avc_delete` | `id` | `db.DeleteSnapshot` |
+| `avc_branch_create` | `name`, `from_snapshot_id?` | `branch.Create` + auto-switch |
+| `avc_branch_list` | *(none)* | `branch.List` |
+| `avc_branch_switch` | `name` | `branch.Switch` |
+| `avc_branch_diff` | `name` | `diff.Compare` (base → HEAD) |
 
 ### Agent SKILLs (`avc init --skills <framework>`)
 
-Each `--skills` flag writes two things: the MCP server config for that framework, and a behavior instruction file that tells the agent when and how to use AVC.
+Each `--skills` value writes two things: the MCP server config for that framework, and a behavior instruction file that tells the agent when and how to use AVC.
+Accepts a comma-separated list: `avc init --skills claude-code,cursor,windsurf`
 
 | Flag | MCP config written | Instruction file written |
 |------|-------------------|--------------------------|
-| `--skills claude-code` | `.claude/settings.json` | `.claude/commands/avc-*.md` skill files |
-| `--skills cursor` | `.cursor/mcp.json` | `.cursorrules` AVC block appended |
-| `--skills windsurf` | `.codeium/windsurf/mcp_config.json` | `.windsurfrules` AVC block appended |
-| `--skills cline` | `.roo/mcp.json` | `.clinerules` AVC block appended |
-| `--skills generic` | *(none)* | `AGENT_INSTRUCTIONS.md` drop-in prompt block |
+| `claude-code` | `.claude/settings.json` | `.claude/skills/avc-*/SKILL.md` (4 skill files) |
+| `cursor` | `.cursor/mcp.json` | `.cursor/rules/avc.mdc` |
+| `windsurf` | `.codeium/windsurf/mcp_config.json` | `.windsurfrules` AVC block appended |
+| `generic` | *(none)* | `AGENT_INSTRUCTIONS.md` drop-in prompt block |
 
-- ⬜ All instruction files include: when to snapshot (before risky edits), when to restore (on task failure), how to read diff output
-- ⬜ JSON config files (`.claude/settings.json`, `.cursor/mcp.json`, etc.) — **merge operation**: read existing file, insert `avc` entry under `mcpServers` key, write back; create file if absent; no-op if `avc` entry already present
-- ⬜ Rules files (`.cursorrules`, `.clinerules`, `.windsurfrules`) — **append operation**: add AVC block after existing content, guarded by a `# AVC` marker to prevent duplicate appends on re-run
-- ⬜ Multiple flags supported: `avc init --skills claude-code --skills cursor`
+- ✅ All instruction files include: when to snapshot, when to restore, branch workflow, merge approval rules
+- ✅ JSON config files — **merge operation**: reads existing file, inserts `avc` entry under `mcpServers`, writes back; creates file if absent; no-op if `avc` entry already present
+- ✅ Rules files — **append operation**: adds AVC block after existing content, guarded by `# AVC` marker to prevent duplicate appends on re-run
+- ✅ Comma-separated list: `avc init --skills claude-code,cursor`
+- ✅ `avc/internal/skills/skills.go` — all framework logic isolated in one package
 
 ### Documentation
 
@@ -264,8 +308,10 @@ Each `--skills` flag writes two things: the MCP server config for that framework
 
 ---
 
-## Immediate next actions (Phase 4)
+## Immediate next actions (Phase 7)
 
-1. Add `branches` table and migration to `avc/internal/db/db.go`
-2. Implement `avc/internal/branch/branch.go` — create, list, switch, delete
-3. Add `avc branch` CLI subcommands in `avc/cmd/avc/`
+1. Integration tests: `init → branch → snapshot → merge → verify main` round-trip
+2. Integration test: `merge --abort` restores pre-merge state
+3. Update `docs/cli-reference.md` with Phase 4–6 commands (branch, merge, mcp, init --skills)
+4. Update `docs/architecture.md` with branches/merges schema section
+5. Cross-platform binary builds + VSCode extension packaging

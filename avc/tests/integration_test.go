@@ -19,7 +19,7 @@ func TestIntegration_FullSnapshotRestoreCycle(t *testing.T) {
 	writeFile(t, projectRoot, "src/app.go", "package app\n\nconst Version = \"1.0\"\n")
 	writeFile(t, projectRoot, "README.md", "# My App\n")
 
-	snap1, err := snapshot.Create(projectRoot, "v1.0 release", "claude", "stable release")
+	snap1, err := snapshot.Create(projectRoot, "v1.0 release", "claude", "stable release", "", "")
 	if err != nil {
 		t.Fatalf("create v1 snapshot: %v", err)
 	}
@@ -28,7 +28,7 @@ func TestIntegration_FullSnapshotRestoreCycle(t *testing.T) {
 	writeFile(t, projectRoot, "src/app.go", "package app\n\nconst Version = \"2.0\"\n\nfunc NewFeature() {}\n")
 	writeFile(t, projectRoot, "src/feature.go", "package app\n\nfunc Feature() {}\n")
 
-	snap2, err := snapshot.Create(projectRoot, "v2.0 wip", "claude", "agent added feature")
+	snap2, err := snapshot.Create(projectRoot, "v2.0 wip", "claude", "agent added feature", "", "")
 	if err != nil {
 		t.Fatalf("create v2 snapshot: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestIntegration_MultipleSnapshots(t *testing.T) {
 
 	for i, label := range []string{"first", "second", "third"} {
 		writeFile(t, projectRoot, "file.go", "version "+string(rune('1'+i)))
-		if _, err := snapshot.Create(projectRoot, label, "", ""); err != nil {
+		if _, err := snapshot.Create(projectRoot, label, "", "", "", ""); err != nil {
 			t.Fatalf("snapshot %q: %v", label, err)
 		}
 	}

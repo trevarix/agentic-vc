@@ -1,11 +1,15 @@
 # AVC — Agentic Version Control
 
-A local version control system built for the agent era. AVC gives agents and users four primitives to work safely: **snapshot**, **diff**, **restore**, and (coming) **branch** and **merge** — without the complexity of Git.
+A local version control system built for the agent era. AVC gives agents and users four primitives to work safely — **snapshot**, **diff**, **branch**, and **merge** — without the complexity of Git.
 
-- **Snapshot** — save the current state of your project with a label and optional notes
-- **Diff** — see exactly what changed between any two snapshots, line by line
-- **Restore** — roll back to any previous snapshot instantly
-- **Branch / Merge** — agent workspaces and controlled integration (Phase 4–5)
+| Primitive | What it does |
+|-----------|-------------|
+| **Snapshot** | Save the current project state with a label and optional notes |
+| **Diff** | See exactly what changed between any two snapshots, line by line |
+| **Branch** | Create isolated agent workspaces — agents work in a copy, not the real project |
+| **Merge** | Three-way merge branch changes back to main; auto-snapshots before writing |
+
+AVC also runs as an **MCP server** so any agent framework (Claude Code, Cursor, Windsurf) can call it directly as a tool.
 
 ---
 
@@ -14,142 +18,186 @@ A local version control system built for the agent era. AVC gives agents and use
 | Tool | Version |
 |------|---------|
 | Go | 1.22+ |
-| Node.js | 18+ |
-| npm | 9+ |
-| VSCode | 1.85+ |
+| Node.js | 18+ (extension only) |
+| npm | 9+ (extension only) |
+| VSCode | 1.85+ (extension only) |
 
 ---
 
-## Running the CLI locally
+## Quick start
 
-### 1. Clone and install dependencies
+### 1. Install
 
 ```bash
 git clone <repo-url>
-cd agentic-vc/avc_core
-go mod tidy
-```
-
-### 2. Install the binary
-
-```bash
+cd agentic-vc/avc
 go install .
 ```
 
-This builds `avc` and puts it in `$GOPATH/bin` (usually `~/go/bin`). Make sure that directory is on your `PATH`.
-
-Verify it works:
+This builds `avc` and places it in `$GOPATH/bin` (usually `~/go/bin`). Make sure that directory is on your `PATH`.
 
 ```bash
 avc --help
 ```
 
-### 3. Initialize a project
+### 2. Initialize a project
 
 ```bash
 cd /path/to/your/project
 avc init
 ```
 
-This creates `.avc/` with a SQLite database and a default `.avcignore`.
+Creates `.avc/` with a SQLite database, a default `.avcignore`, and a `config.toml`.
 
-### 4. Common commands
+To wire up your agent framework at the same time:
 
 ```bash
-# Save a snapshot
+avc init --skills claude-code
+avc init --skills claude-code,cursor,windsurf
+```
+
+This writes the MCP server config and agent instruction files for each framework. See [Agent integration](#agent-integration) below.
+
+### 3. Core commands
+
+```bash
+# Snapshots
 avc snapshot "Before refactor"
 avc snapshot "Agent run #3" --agent "claude" --notes "Fixed the auth bug"
-
-# List snapshots
 avc list
+avc info <snapshot-id>
+avc diff <from-id> <to-id>
+avc restore <snapshot-id>
+avc log
+avc delete <snapshot-id>
 
-# See what changed between two snapshots
-avc diff snap-abc123 snap-def456
+# Branches (agent workspaces)
+avc branch create feature/my-task
+avc branch list
+avc branch switch main
+avc branch diff feature/my-task
+avc branch delete feature/my-task
 
-# Restore to a previous snapshot
-avc restore snap-abc123
-
-# Show snapshot details and file list
-avc info snap-abc123
-
-# Delete a snapshot
-avc delete snap-abc123
+# Merge
+avc merge feature/my-task --preview   # dry-run: shows clean/conflict/skipped counts
+avc merge feature/my-task             # apply: auto-snapshots main first
+avc merge --abort                     # undo: restores main from pre-merge snapshot
 ```
 
 All commands support `--json` for machine-readable output:
 
 ```bash
 avc list --json
-avc snapshot "WIP" --json
+avc merge feature/my-task --preview --json
 ```
 
 ---
 
-## Running the VSCode extension locally
+## Agent integration
 
-### 1. Install extension dependencies
+AVC runs as an MCP (Model Context Protocol) server over stdio. Start it with:
+
+```bash
+avc mcp serve
+```
+
+### Automatic setup with `--skills`
+
+`avc init --skills <framework>` writes the MCP config and agent instruction files for your framework:
+
+| Framework | MCP config written | Instructions written |
+|-----------|--------------------|----------------------|
+| `claude-code` | `.claude/settings.json` | `.claude/skills/avc-*/SKILL.md` |
+| `cursor` | `.cursor/mcp.json` | `.cursor/rules/avc.mdc` |
+| `windsurf` | `.codeium/windsurf/mcp_config.json` | `.windsurfrules` |
+| `generic` | — | `AGENT_INSTRUCTIONS.md` |
+
+Running `--skills` multiple times is safe — existing files are never overwritten, JSON configs are merged (not replaced), and rules files are append-only with a deduplication marker. If a target directory is gitignored, AVC warns you so you know the files won't be committed.
+
+### MCP tools
+
+| Tool | Description |
+|------|-------------|
+| `avc_snapshot` | Save a snapshot (workspace-aware on agent branches) |
+| `avc_list` | List snapshots on the active branch |
+| `avc_diff` | Diff two snapshots |
+| `avc_restore` | Restore to a snapshot (workspace-aware) |
+| `avc_info` | Snapshot details and file list |
+| `avc_delete` | Delete a snapshot |
+| `avc_branch_create` | Create a branch + auto-switch |
+| `avc_branch_list` | List branches |
+| `avc_branch_switch` | Switch active branch |
+| `avc_branch_diff` | Cumulative diff from branch base to HEAD |
+| `avc_merge_preview` | Preview a merge without writing |
+| `avc_merge` | Perform three-way merge |
+| `avc_merge_abort` | Abort merge and restore main |
+
+---
+
+## How branching works
+
+When an agent creates a branch, AVC materializes a full copy of the project files into `.avc/workspaces/<branch-name>/`. The agent works exclusively inside that directory — the real project root is untouched until the user approves a merge.
+
+```
+avc branch create feature/add-auth   →  workspace at .avc/workspaces/feature/add-auth/
+  agent edits files in workspace
+  agent snapshots regularly
+avc branch diff feature/add-auth     →  shows everything changed vs base snapshot
+avc merge feature/add-auth --preview →  shows clean / conflict / skipped per file
+avc merge feature/add-auth           →  applies clean files; writes conflict markers
+avc merge --abort                    →  restores main from pre-merge auto-snapshot
+```
+
+---
+
+## VSCode extension
+
+### Setup
 
 ```bash
 cd extension
 npm install
+code .
 ```
 
-### 2. Open the extension folder in VSCode
+Press **F5** to launch the Extension Development Host. Open an `avc init`-ed folder — the AVC sidebar appears in the activity bar.
 
-```bash
-code extension/
-```
-
-### 3. Launch the Extension Development Host
-
-Press **F5** inside VSCode. This compiles the TypeScript and opens a second VSCode window with the AVC extension loaded.
-
-> If prompted to select a debug configuration, choose **Run Extension**.
-
-### 4. Open an AVC-initialized project
-
-In the Extension Development Host window, open a folder that has been initialized with `avc init`. The AVC sidebar will appear in the activity bar (camera icon).
-
-### 5. Configure the CLI path (if needed)
-
-If `avc` is not on the system `PATH` in the dev host, set it explicitly in VSCode settings:
+If `avc` is not on `PATH` in the dev host, set it explicitly:
 
 ```json
 "avc.cliPath": "/Users/you/go/bin/avc"
 ```
 
+### Features
+
+- Snapshot list in sidebar (newest first, per active branch)
+- Save / restore / delete snapshots from the UI
+- Branch status bar item — click to switch branches
+- Create branch, switch branch, delete branch commands
+- Merge branch to main with preview modal and abort support
+- Diff viewer for comparing snapshots
+
 ---
 
-## Development workflow
+## Development
 
-### CLI changes
-
-After editing Go source files, reinstall the binary:
+### CLI
 
 ```bash
-cd avc_core
-go install .
+cd avc
+go mod tidy
+go build .          # build binary in place
+go install .        # install to $GOPATH/bin
+go test ./...       # run all tests
 ```
 
-### Extension changes
-
-The extension compiles on `F5`. For live recompilation while editing:
+### Extension
 
 ```bash
 cd extension
-npm run watch
-```
-
-Then reload the Extension Development Host window (`Ctrl+Shift+P` → **Developer: Reload Window**).
-
-### Run tests
-
-```bash
-# Go tests
-cd avc_core && go test ./...
-
-# TypeScript compile check
-cd extension && npm run compile
+npm install
+npm run compile     # one-shot build
+npm run watch       # rebuild on save
 ```
 
 ---
@@ -157,30 +205,33 @@ cd extension && npm run compile
 ## Project layout
 
 ```
-avc/                # Go CLI and core engine
-  main.go                # entry point
-  cmd/avc/               # one file per CLI subcommand
+avc/
+  main.go
+  cmd/avc/               # one file per CLI subcommand (thin — parse flags, call internal/)
   internal/
-    db/                  # SQLite schema and CRUD
+    db/                  # SQLite schema, migrations, all CRUD
     fileutil/            # SHA256 hashing, directory walk, .avcignore
     snapshot/            # snapshot creation
-    restore/             # object store read-back and file write
-    diff/                # two-snapshot comparison
+    restore/             # object store read-back, file write
+    diff/                # two-snapshot comparison, unified diff
+    branch/              # branch CRUD, workspace materialization
+    merge/               # three-way merge engine
+    mcp/                 # MCP JSON-RPC server, tool registry, handlers
+    skills/              # writes MCP configs and agent instruction files
     config/              # .avc/config.toml read/write
+    statcache/           # mtime+size cache to skip unchanged files
   tests/                 # integration and cross-package tests
-extension/               # VSCode extension (TypeScript)
-  src/                   # extension, sidebar, diff viewer, CLI proxy
+extension/src/           # TypeScript — extension, sidebar, diff viewer, CLI proxy
 docs/                    # architecture, CLI reference, contributing guide
-examples/                # example agent workflow scripts
 ```
 
 ---
 
 ## Windows note
 
-AVC binaries built with `go install` are placed in `%USERPROFILE%\go\bin\`. If Windows Smart App Control blocks the binary, either:
+Binaries built with `go install` are placed in `%USERPROFILE%\go\bin\`. If Windows Smart App Control blocks the binary:
 
-- Turn off Smart App Control in **Windows Security → App & browser control → Smart App Control settings** (recommended for developer machines)
+- Disable Smart App Control in **Windows Security → App & browser control → Smart App Control settings** (recommended for developer machines)
 - Or use `go run . <command>` during development instead of the installed binary
 
 ---
@@ -190,3 +241,4 @@ AVC binaries built with `go install` are placed in `%USERPROFILE%\go\bin\`. If W
 - [Architecture](docs/architecture.md)
 - [CLI Reference](docs/cli-reference.md)
 - [Contributing](docs/contributing.md)
+- [Project Description](docs/project-description.md)
