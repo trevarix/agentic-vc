@@ -236,3 +236,36 @@ export async function annotateFile(
 ): Promise<AnnotateResult> {
   return runAvcCommand<AnnotateResult>(['annotate', filePath], projectPath);
 }
+
+export interface FileHistoryEntry {
+  snapshot_id: string;
+  label: string;
+  timestamp: number;
+  agent_name: string;
+  hash: string;
+  size: number;
+}
+
+export async function getFileHistory(
+  projectPath: string,
+  filePath: string
+): Promise<FileHistoryEntry[]> {
+  return runAvcCommand<FileHistoryEntry[]>(['file-history', filePath], projectPath);
+}
+
+interface CatResponse {
+  snapshot_id: string;
+  file_path: string;
+  size: number;
+  content_base64: string;
+}
+
+/** Returns the file content as a string (UTF-8 decoded from base64). */
+export async function catFileFromSnapshot(
+  projectPath: string,
+  snapshotId: string,
+  filePath: string
+): Promise<string> {
+  const result = await runAvcCommand<CatResponse>(['cat', snapshotId, filePath], projectPath);
+  return Buffer.from(result.content_base64, 'base64').toString('utf8');
+}
