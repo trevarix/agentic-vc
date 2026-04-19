@@ -5,7 +5,10 @@
   "version": "0.2.0",
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Other"],
-  "activationEvents": ["onStartupFinished"],
+  "activationEvents": [
+    "onStartupFinished",
+    "onView:avcSnapshots"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "viewsContainers": {
@@ -201,7 +204,8 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "package": "vsce package"
+    "vscode:prepublish": "npm run compile",
+    "package": "npm run compile && vsce package"
   },
   "devDependencies": {
     "@types/vscode": "^1.85.0",
