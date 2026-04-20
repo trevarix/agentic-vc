@@ -32,7 +32,7 @@ export class SnapshotItem extends vscode.TreeItem {
 /** A date-bucket header that groups snapshots in the sidebar tree. */
 export class GroupItem extends vscode.TreeItem {
   constructor(public readonly groupLabel: string, public readonly snapshots: Snapshot[]) {
-    super(groupLabel, vscode.TreeItemCollapsibleState.Expanded);
+    super(groupLabel, vscode.TreeItemCollapsibleState.Collapsed);
     this.contextValue = 'snapshotGroup';
     this.iconPath = new vscode.ThemeIcon('calendar');
     this.description = `${snapshots.length}`;
