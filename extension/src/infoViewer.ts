@@ -78,7 +78,7 @@ function renderTree(node: TreeNode, snapshotId: string, depth: number): string {
 
     if (isFolder) {
       const fileCount = countFiles(child);
-      html += `<div class="tree-folder">
+      html += `<div class="tree-folder collapsed">
         <div class="tree-row folder-row" style="padding-left:${indent}px">
           <span class="tree-chevron">▼</span>
           <span class="folder-icon">📁</span>
