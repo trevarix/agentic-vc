@@ -5,7 +5,10 @@
   "version": "0.2.0",
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Other"],
-  "activationEvents": ["onStartupFinished"],
+  "activationEvents": [
+    "onStartupFinished",
+    "onView:avcSnapshots"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "viewsContainers": {
@@ -21,7 +24,9 @@
       "avc-sidebar": [
         {
           "id": "avcSnapshots",
-          "name": "Snapshots"
+          "name": "Snapshots",
+          "icon": "media/avc-icon.svg",
+          "type": "tree"
         }
       ]
     },
@@ -73,6 +78,8 @@
       {
         "command": "avc.abortMerge",
         "title": "AVC: Abort Merge"
+      },
+      {
         "command": "avc.filterSnapshots",
         "title": "AVC: Filter Snapshots",
         "icon": "$(search)"
@@ -98,6 +105,22 @@
       {
         "command": "avc.toggleAnnotations",
         "title": "AVC: Toggle Line Annotations"
+      },
+      {
+        "command": "avc.showFileHistory",
+        "title": "AVC: Show File History"
+      },
+      {
+        "command": "avc.openFileFromSnapshot",
+        "title": "AVC: Open File from Snapshot"
+      },
+      {
+        "command": "avc.diffFileWithCurrent",
+        "title": "AVC: Diff File with Current"
+      },
+      {
+        "command": "avc.diffWithLatest",
+        "title": "AVC: Diff Working Tree with Latest Snapshot"
       }
     ],
     "menus": {
@@ -156,6 +179,27 @@
           "command": "avc.deleteSnapshot",
           "when": "viewItem == snapshot"
         }
+      ],
+      "explorer/context": [
+        {
+          "command": "avc.showFileHistory",
+          "when": "resourceScheme == file && !explorerResourceIsFolder",
+          "group": "9_avc"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "avc.showFileHistory",
+          "when": "resourceScheme == file",
+          "group": "9_avc"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "avc.showFileHistory",
+          "when": "resourceScheme == file",
+          "group": "9_avc"
+        }
       ]
     },
     "configuration": {
@@ -197,7 +241,8 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "package": "vsce package"
+    "vscode:prepublish": "npm run compile",
+    "package": "npm run compile && vsce package"
   },
   "devDependencies": {
     "@types/vscode": "^1.85.0",
