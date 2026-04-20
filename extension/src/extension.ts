@@ -482,6 +482,11 @@ export function activate(context: vscode.ExtensionContext): void {
 
     // ── Open workspace in new window ───────────────────────────────────────────
     vscode.commands.registerCommand('avc.openWorkspace', async () => {
+      const projectPath = resolveProjectPath();
+      if (!projectPath) {
+        vscode.window.showErrorMessage('AVC: No project path configured.');
+        return;
+      }
       try {
         const branches = await listBranches(projectPath);
         const withWorkspace = branches.filter((b) => b.workspace);
@@ -513,7 +518,9 @@ export function activate(context: vscode.ExtensionContext): void {
         await vscode.commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: true });
       } catch (err) {
         vscode.window.showErrorMessage(`AVC: Open workspace failed — ${(err as Error).message}`);
-    
+      }
+    }),
+
     // ── Show file history (right-click in explorer or active editor) ───────────
     vscode.commands.registerCommand('avc.showFileHistory', async (uri?: vscode.Uri) => {
       const projectPath = resolveProjectPath();
