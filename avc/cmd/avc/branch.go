@@ -125,6 +125,7 @@ func runBranchList(cmd *cobra.Command, args []string) error {
 			BaseSnapshotID string `json:"base_snapshot_id"`
 			CreatedAt      int64  `json:"created_at"`
 			Active         bool   `json:"active"`
+			Workspace      string `json:"workspace"`
 		}
 		out := make([]branchJSON, len(branches))
 		for i, b := range branches {
@@ -134,6 +135,7 @@ func runBranchList(cmd *cobra.Command, args []string) error {
 				BaseSnapshotID: b.BaseSnapshotID,
 				CreatedAt:      b.CreatedAt,
 				Active:         b.Name == activeName,
+				Workspace:      branch.WorkspacePath(projectPath, b.Name),
 			}
 		}
 		return json.NewEncoder(os.Stdout).Encode(out)

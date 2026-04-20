@@ -102,6 +102,11 @@
       {
         "command": "avc.toggleAnnotations",
         "title": "AVC: Toggle Line Annotations"
+      },
+      {
+        "command": "avc.openWorkspace",
+        "title": "AVC: Open Workspace in New Window",
+        "icon": "$(link-external)"
       }
     ],
     "menus": {
@@ -138,6 +143,11 @@
         },
         {
           "command": "avc.showTimeline",
+          "when": "view == avcSnapshots",
+          "group": "navigation"
+        },
+        {
+          "command": "avc.openWorkspace",
           "when": "view == avcSnapshots",
           "group": "navigation"
         }
