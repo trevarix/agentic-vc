@@ -480,6 +480,40 @@ export function activate(context: vscode.ExtensionContext): void {
     // ── Toggle gutter annotations ──────────────────────────────────────────────
     vscode.commands.registerCommand('avc.toggleAnnotations', () => gutterProvider.toggle()),
 
+    // ── Open workspace in new window ───────────────────────────────────────────
+    vscode.commands.registerCommand('avc.openWorkspace', async () => {
+      try {
+        const branches = await listBranches(projectPath);
+        const withWorkspace = branches.filter((b) => b.workspace);
+
+        if (withWorkspace.length === 0) {
+          vscode.window.showInformationMessage(
+            'AVC: No agent branches with workspaces. Create a branch first.'
+          );
+          return;
+        }
+
+        // If there is exactly one non-main branch, open it directly.
+        // Otherwise let the user pick.
+        let target = withWorkspace.find((b) => b.active) ?? null;
+        if (!target || withWorkspace.length > 1) {
+          const picked = await vscode.window.showQuickPick(
+            withWorkspace.map((b) => ({
+              label: b.active ? `$(check) ${b.name}` : b.name,
+              description: b.active ? 'active' : '',
+              workspace: b.workspace,
+            })),
+            { placeHolder: 'Select a branch workspace to open' }
+          );
+          if (!picked) return;
+          target = { workspace: picked.workspace } as typeof branches[0];
+        }
+
+        const uri = vscode.Uri.file(target.workspace);
+        await vscode.commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: true });
+      } catch (err) {
+        vscode.window.showErrorMessage(`AVC: Open workspace failed — ${(err as Error).message}`);
+    
     // ── Show file history (right-click in explorer or active editor) ───────────
     vscode.commands.registerCommand('avc.showFileHistory', async (uri?: vscode.Uri) => {
       const projectPath = resolveProjectPath();
@@ -487,6 +521,7 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.window.showErrorMessage('AVC: No project path configured.');
         return;
       }
+      
       const target = uri ?? vscode.window.activeTextEditor?.document.uri;
       if (!target) {
         vscode.window.showInformationMessage('AVC: No file selected.');
