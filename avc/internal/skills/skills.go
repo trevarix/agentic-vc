@@ -448,6 +448,46 @@ Merge your agent branch back into main after the user approves your work.
 
 If anything goes wrong, **avc_merge_abort** restores main from the pre-merge snapshot.
 `,
+
+	"avc-run": `---
+name: avc-run
+description: Run a command in the agent branch workspace with AVC sandbox
+---
+
+Execute a build or test command inside the agent workspace using **avc_run_in_workspace**.
+
+## When to use
+
+- To run tests after making changes in the workspace
+- To install project dependencies (pip install, npm install)
+- To build the project and verify there are no compile errors
+
+## Approval requirement
+
+Before calling **avc_run_in_workspace**, you MUST:
+1. Show the user the exact command you intend to run.
+2. Explain what the command does and why.
+3. Wait for explicit user approval ("yes", "go ahead", "run it").
+
+If the user declines, do not call the tool.
+
+## How to use
+
+` + "```" + `json
+{
+  "branch": "<branch-name>",
+  "command": "npm test",
+  "timeout_seconds": 120
+}
+` + "```" + `
+
+## Sandbox constraints
+
+- System package managers (brew, apt, choco, sudo) are blocked.
+- For Python: use ` + "`pip install`" + ` — a venv is created inside the workspace automatically. Do not use --user or --system flags.
+- For Node: use ` + "`npm install`" + ` — packages install into workspace node_modules. Do not use -g or --global flags.
+- If the command times out, increase timeout_seconds or check .avc/config.toml.
+`,
 }
 
 // ─── Content: Cursor rules ────────────────────────────────────────────────────
@@ -463,6 +503,20 @@ AVC is configured as an MCP server in .cursor/mcp.json.
 - If a task fails or produces broken code, call **avc_restore** to roll back cleanly.
 - Before merging, always call **avc_merge_preview** first and present the result to the user.
 - Never call **avc_merge** without explicit user approval.
+
+## Running commands in the workspace
+
+Before calling **avc_run_in_workspace**, you MUST:
+1. Show the user the exact command you intend to run.
+2. Explain what the command does and why.
+3. Wait for explicit user approval ("yes", "go ahead", "run it").
+
+If the user declines, do not call the tool.
+
+Commands run in a sandboxed environment:
+- System package managers (brew, apt, choco, sudo) are blocked on all platforms.
+- For Python: use ` + "`pip install`" + ` — a venv is created inside the workspace automatically. Do not use --user or --system flags.
+- For Node: use ` + "`npm install`" + ` — packages install into workspace node_modules. Do not use -g or --global flags.
 `
 
 // ─── Content: Windsurf rules ──────────────────────────────────────────────────
@@ -479,9 +533,40 @@ AVC is configured as an MCP server in .codeium/windsurf/mcp_config.json.
 - If a task fails or produces broken code, call **avc_restore** to roll back cleanly.
 - Before merging, always call **avc_merge_preview** first and present the result to the user.
 - Never call **avc_merge** without explicit user approval.
+
+## Running commands in the workspace
+
+Before calling **avc_run_in_workspace**, you MUST:
+1. Show the user the exact command you intend to run.
+2. Explain what the command does and why.
+3. Wait for explicit user approval ("yes", "go ahead", "run it").
+
+If the user declines, do not call the tool.
+
+Commands run in a sandboxed environment:
+- System package managers (brew, apt, choco, sudo) are blocked on all platforms.
+- For Python: use ` + "`pip install`" + ` — a venv is created inside the workspace automatically. Do not use --user or --system flags.
+- For Node: use ` + "`npm install`" + ` — packages install into workspace node_modules. Do not use -g or --global flags.
 `
 
 // ─── Content: Generic agent instructions ─────────────────────────────────────
+
+const workspaceCommandBlock = `
+
+## Running commands in the workspace
+
+Before calling ` + "`avc_run_in_workspace`" + `, you MUST:
+1. Show the user the exact command you intend to run.
+2. Explain what the command does and why.
+3. Wait for explicit user approval ("yes", "go ahead", "run it").
+
+If the user declines, do not call the tool.
+
+Commands run in a sandboxed environment:
+- System package managers (brew, apt, choco, sudo) are blocked on all platforms.
+- For Python: use ` + "`pip install`" + ` — a venv is created inside the workspace automatically. Do not use --user or --system flags.
+- For Node: use ` + "`npm install`" + ` — packages install into workspace node_modules. Do not use -g or --global flags.
+`
 
 const genericInstructions = `# AVC Agent Instructions
 
@@ -515,4 +600,4 @@ Start the server with: ` + "`avc mcp serve`" + `
 3. **Restore on failure.** If a task produces broken code, call ` + "`avc_restore`" + ` instead of attempting repeated fixes on broken state.
 4. **Preview before merge.** Always call ` + "`avc_merge_preview`" + ` and show the user the result before merging.
 5. **Never merge without approval.** The user must explicitly approve before you call ` + "`avc_merge`" + `.
-`
+` + workspaceCommandBlock

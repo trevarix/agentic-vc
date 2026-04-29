@@ -165,5 +165,25 @@ func AllTools() []Tool {
 			Description: "Abort the last in-progress or conflicted merge. Restores main from the pre-merge auto-snapshot.",
 			InputSchema: InputSchema{Type: "object"},
 		},
+		{
+			Name: "avc_run_in_workspace",
+			Description: "Execute a shell command inside an agent branch workspace. " +
+				"The command runs with environment scrubbing (no host credentials), " +
+				"an execution timeout, and process tree kill on timeout. " +
+				"Python pip installs are redirected into a workspace-local venv automatically. " +
+				"Node packages install into the workspace node_modules. " +
+				"System package managers (brew, apt, choco, sudo) are blocked. " +
+				"\n\nIMPORTANT: Always present the full command to the user and obtain " +
+				"explicit approval before calling this tool. Never call it autonomously.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"branch":          {Type: "string", Description: "Branch name (must not be 'main')"},
+					"command":         {Type: "string", Description: "Shell command to run in the workspace"},
+					"timeout_seconds": {Type: "integer", Description: "Timeout in seconds (default 180, max 600). Overrides config."},
+				},
+				Required: []string{"branch", "command"},
+			},
+		},
 	}
 }

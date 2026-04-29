@@ -9,6 +9,7 @@ import (
 	mergepkg "github.com/SkillMythOrg/agentic-vc/avc/internal/merge"
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/restore"
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/snapshot"
+	workspacepkg "github.com/SkillMythOrg/agentic-vc/avc/internal/workspace"
 )
 
 // dispatchTool executes the named tool with the given arguments and wraps the
@@ -44,6 +45,8 @@ func dispatchTool(projectRoot string, compact bool, name string, args map[string
 		result, err = toolMerge(projectRoot, args)
 	case "avc_merge_abort":
 		result, err = toolMergeAbort(projectRoot)
+	case "avc_run_in_workspace":
+		result, err = toolRunInWorkspace(projectRoot, args)
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
@@ -444,10 +447,66 @@ func toolMergeAbort(projectRoot string) (any, error) {
 	return map[string]any{"aborted": true, "success": true}, nil
 }
 
+// ─── Workspace run tool ───────────────────────────────────────────────────────
+
+func toolRunInWorkspace(projectRoot string, args map[string]any) (any, error) {
+	branch := strArg(args, "branch")
+	if branch == "" {
+		return nil, fmt.Errorf("branch is required")
+	}
+	command := strArg(args, "command")
+	if command == "" {
+		return nil, fmt.Errorf("command is required")
+	}
+
+	result, err := workspacepkg.Run(workspacepkg.RunRequest{
+		ProjectRoot:    projectRoot,
+		BranchName:     branch,
+		Command:        command,
+		TimeoutSeconds: intArg(args, "timeout_seconds"),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]any{
+		"exit_code":      result.ExitCode,
+		"stdout":         result.Stdout,
+		"stderr":         result.Stderr,
+		"workspace_path": result.WorkspacePath,
+		"env_info": map[string]any{
+			"type":        result.EnvInfo.Type,
+			"path":        result.EnvInfo.Path,
+			"module_name": result.EnvInfo.ModuleName,
+		},
+		"sandbox_info": map[string]any{
+			"platform": result.SandboxInfo.Platform,
+			"layers": map[string]any{
+				"env_scrubbing":     result.SandboxInfo.EnvScrubbing,
+				"execution_limits":  result.SandboxInfo.ExecutionLimits,
+				"process_tree_kill": result.SandboxInfo.ProcessTreeKill,
+			},
+		},
+	}, nil
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 // strArg extracts a string value from an args map, returning "" if absent or wrong type.
 func strArg(args map[string]any, key string) string {
 	v, _ := args[key].(string)
 	return v
+}
+
+// intArg extracts an integer value from an args map, returning 0 if absent or wrong type.
+func intArg(args map[string]any, key string) int {
+	switch v := args[key].(type) {
+	case int:
+		return v
+	case float64:
+		return int(v)
+	case int64:
+		return int(v)
+	}
+	return 0
 }
