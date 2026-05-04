@@ -82,6 +82,14 @@ func writeClaudeCode(projectRoot string, r *WriteResult) error {
 	}
 	r.Actions = append(r.Actions, fileAction(".claude/settings.json", action))
 
+	// CLAUDE.md — always-loaded context (append, idempotent)
+	claudeMDPath := filepath.Join(projectRoot, "CLAUDE.md")
+	action, err = appendRulesBlock(claudeMDPath, claudeMDBlock)
+	if err != nil {
+		return err
+	}
+	r.Actions = append(r.Actions, fileAction("CLAUDE.md", action))
+
 	// Skill files — .claude/skills/avc-<name>/SKILL.md
 	for name, content := range claudeSkillFiles {
 		rel := ".claude/skills/" + name + "/SKILL.md"
@@ -155,6 +163,38 @@ func fileAction(rel, action string) FileAction {
 	return fa
 }
 
+// ─── Content: CLAUDE.md block ────────────────────────────────────────────────
+
+const claudeMDMarker = "<!-- AVC — Agentic Version Control -->"
+
+const claudeMDBlock = `
+<!-- AVC — Agentic Version Control -->
+## AVC — Agentic Version Control
+
+This project uses AVC for agent-safe snapshots, branching, and merging.
+The MCP server starts automatically — tools are available as ` + "`avc_*`" + `.
+
+### When to use
+
+| Situation | Tool |
+|-----------|------|
+| Before any significant change | ` + "`avc_snapshot`" + ` |
+| Starting a non-trivial task | ` + "`avc_branch_create`" + ` → work only in the returned workspace path |
+| Task fails or breaks code | ` + "`avc_restore`" + ` |
+| Review changes before merging | ` + "`avc_branch_diff`" + ` |
+| Apply branch changes to main | ` + "`avc_merge_preview`" + ` → ` + "`avc_merge`" + ` |
+| Run tests or builds in workspace | ` + "`avc_run_in_workspace`" + ` |
+
+### Rules
+
+1. **Snapshot before risk** — call ` + "`avc_snapshot`" + ` before any refactor, migration, or multi-file change.
+2. **Branch for non-trivial tasks** — use ` + "`avc_branch_create`" + ` and work exclusively inside the workspace path it returns. Do not edit files in the real project root while on an agent branch.
+3. **Restore on failure** — if a task produces broken code, call ` + "`avc_restore`" + ` rather than attempting repeated fixes on broken state.
+4. **Preview before merge** — always call ` + "`avc_merge_preview`" + ` and show the result to the user before merging.
+5. **Never merge without approval** — the user must explicitly approve before you call ` + "`avc_merge`" + `.
+6. **Approval before running commands** — show the user the exact command and wait for their go-ahead before calling ` + "`avc_run_in_workspace`" + `.
+`
+
 // ─── MCP config helpers ───────────────────────────────────────────────────────
 
 var mcpServerEntry = map[string]any{
@@ -214,12 +254,15 @@ const avcRulesMarker = "# AVC — Agentic Version Control"
 
 // appendRulesBlock appends the AVC block to a rules file.
 // Returns "created", "updated", or "skipped:marker present".
+// Checks for both the markdown marker and the HTML comment marker so it works
+// correctly for both .windsurfrules and CLAUDE.md.
 func appendRulesBlock(path, block string) (string, error) {
 	existing, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return "", err
 	}
-	if strings.Contains(string(existing), avcRulesMarker) {
+	content := string(existing)
+	if strings.Contains(content, avcRulesMarker) || strings.Contains(content, claudeMDMarker) {
 		return "skipped:marker present", nil
 	}
 
