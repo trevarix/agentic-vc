@@ -225,13 +225,20 @@ func runBranchDiff(cmd *cobra.Command, args []string) error {
 	if branchID == "" {
 		return fmt.Errorf("branch '%s' not found", name)
 	}
-	if baseSnapshotID == "" {
-		return fmt.Errorf("branch '%s' has no base snapshot (main has no cumulative diff)", name)
-	}
 
 	store, err := db.Open(projectPath)
 	if err != nil {
 		return err
+	}
+	// When no base snapshot exists (branch created before any main snapshot),
+	// fall back to the oldest snapshot on the branch as the diff base.
+	if baseSnapshotID == "" {
+		oldest, err := store.GetOldestSnapshot(branchID)
+		if err != nil {
+			store.Close()
+			return fmt.Errorf("branch '%s' has no snapshots yet", name)
+		}
+		baseSnapshotID = oldest.ID
 	}
 	head, err := store.GetHeadSnapshot(branchID)
 	store.Close()

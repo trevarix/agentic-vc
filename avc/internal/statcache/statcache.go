@@ -10,6 +10,13 @@ import (
 
 const cacheFile = ".avc/stat-cache.json"
 
+// WorkspaceCachePath returns the path of the stat cache for a specific branch
+// workspace. Stored separately from the main project cache so each workspace
+// gets its own warm cache without cross-contaminating the project root cache.
+func WorkspaceCachePath(projectRoot, branchName string) string {
+	return filepath.Join(projectRoot, ".avc", "workspace-caches", branchName+".json")
+}
+
 // Entry records the observed mtime, size, and hash of one tracked file.
 type Entry struct {
 	MtimeNs int64  `json:"mtime_ns"`
@@ -26,7 +33,13 @@ type Cache struct {
 // Load reads the stat cache from disk. If the file is absent or unreadable an
 // empty cache is returned — a miss on every file, which is always safe.
 func Load(projectRoot string) (*Cache, error) {
-	data, err := os.ReadFile(filepath.Join(projectRoot, cacheFile))
+	return LoadFromPath(filepath.Join(projectRoot, cacheFile))
+}
+
+// LoadFromPath reads a stat cache from an explicit file path.
+// Returns an empty cache (safe miss-on-all) if the file is absent or corrupt.
+func LoadFromPath(path string) (*Cache, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return empty(), nil
 	}
@@ -43,15 +56,24 @@ func Load(projectRoot string) (*Cache, error) {
 // Save writes the cache to disk atomically (write to a temp file, then rename).
 // Errors are non-fatal — a missing or stale cache causes misses, not corruption.
 func (c *Cache) Save(projectRoot string) error {
+	return c.SaveToPath(filepath.Join(projectRoot, cacheFile))
+}
+
+// SaveToPath writes the cache to an explicit file path atomically.
+// Parent directories are created if absent. Errors are non-fatal.
+func (c *Cache) SaveToPath(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
 	data, err := json.Marshal(c)
 	if err != nil {
 		return err
 	}
-	tmp := filepath.Join(projectRoot, cacheFile+".tmp")
+	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, filepath.Join(projectRoot, cacheFile))
+	return os.Rename(tmp, path)
 }
 
 // Lookup returns the cached hash for rel if mtime_ns and size both match info.

@@ -459,6 +459,21 @@ func (s *Store) GetHeadSnapshot(branchID string) (*Snapshot, error) {
 	return snap, nil
 }
 
+// GetOldestSnapshot returns the earliest snapshot on a branch (the "before" snapshot).
+// Used as the merge base when a branch was created without a main base snapshot.
+func (s *Store) GetOldestSnapshot(branchID string) (*Snapshot, error) {
+	row := s.db.QueryRow(
+		`SELECT `+snapshotSelectCols+
+			` FROM snapshots WHERE branch_id = ? ORDER BY timestamp ASC LIMIT 1`,
+		branchID,
+	)
+	snap, err := scanSnapshot(row)
+	if err != nil {
+		return nil, fmt.Errorf("no snapshots on this branch")
+	}
+	return snap, nil
+}
+
 // DeleteSnapshot removes a snapshot and its associated file records.
 func (s *Store) DeleteSnapshot(id string) error {
 	tx, err := s.db.Begin()

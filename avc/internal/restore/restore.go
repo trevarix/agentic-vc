@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/fileutil"
@@ -75,6 +76,15 @@ func RestoreToDir(projectRoot, snapshotID, targetDir string) (*Result, error) {
 	})
 
 	// Write back every file from the target snapshot.
+	// For workspace restores, build a warm stat cache from the freshly written
+	// files so that the first avc_snapshot on the branch is a stat-only pass
+	// (no disk reads, no re-hashing of untouched files).
+	isWorkspace := targetDir != projectRoot
+	var wsCache *statcache.Cache
+	if isWorkspace {
+		wsCache = statcache.Empty()
+	}
+
 	var restoredSize int64
 	for _, f := range targetFiles {
 		absPath := filepath.Join(targetDir, filepath.FromSlash(f.RelativePath))
@@ -87,10 +97,23 @@ func RestoreToDir(projectRoot, snapshotID, targetDir string) (*Result, error) {
 			return nil, fmt.Errorf("write file %s: %w", f.RelativePath, err)
 		}
 		restoredSize += f.FileSize
+
+		if isWorkspace {
+			if info, err := os.Stat(absPath); err == nil {
+				wsCache.Set(f.RelativePath, info, f.FileHash)
+			}
+		}
 	}
 
-	// Stat cache is only valid for the real project root — invalidate it there.
-	if targetDir == projectRoot {
+	if isWorkspace {
+		// Derive branch name from workspace path so we can key the cache file.
+		workspacesBase := filepath.Join(projectRoot, ".avc", "workspaces")
+		if rel, err := filepath.Rel(workspacesBase, targetDir); err == nil && !strings.HasPrefix(rel, "..") {
+			cachePath := statcache.WorkspaceCachePath(projectRoot, rel)
+			_ = wsCache.SaveToPath(cachePath)
+		}
+	} else {
+		// Stat cache is only valid for the real project root — invalidate it after restore.
 		statcache.Invalidate(projectRoot)
 	}
 
