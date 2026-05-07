@@ -273,9 +273,48 @@ Accepts a comma-separated list: `avc init --skills claude-code,cursor,windsurf`
 
 ---
 
-## Phase 7 — Polish, Testing & Release
+## Phase 7 — Workspace Command Runner
 
-**Goal:** Production-ready on all four primitives.
+**Goal:** Close the agent feedback loop — agents can run builds and tests in their workspace and act on the output directly, without a human relay.
+
+Full design: [docs/workspace-command-runner.md](workspace-command-runner.md)
+
+### MCP tool
+- ⬜ `avc_run_in_workspace(branch, command, timeout_seconds?)` — executes a sandboxed command in the branch workspace; returns stdout, stderr, exit code, sandbox_info
+- ⬜ Tool description enforces user-approval requirement at the agent instruction level
+- ⬜ System-level installs (`sudo`, `apt`, `brew`, `choco`, `pip install --user`, `npm install -g`) blocked with clear error
+
+### Sandbox layers (all mandatory)
+- ⬜ **Layer 1 — Env scrubbing:** `HOME` redirected to workspace temp dir; `PATH` restricted to approved runtime allowlist; sensitive env vars (`AWS_*`, `GITHUB_*`, `SSH_*`, etc.) stripped
+- ⬜ **Layer 2 — Execution limits:** timeout (default 180s, max 600s) and output cap (default 512 KB, max 2 MB) — config-driven via `[run]` block in `.avc/config.toml`; no platform split needed
+- ⬜ **Layer 3 — Process tree kill:** Unix process group (`Setpgid` + `SIGKILL -pgid`); Windows Job Object (`TerminateJobObject`) — ensures all children die on timeout, not just the direct child
+
+### Virtual environment isolation
+- ⬜ Python: `pip install` redirected into workspace-scoped `.venv/`; `python`/`pytest`/`uv run` activated against it; `GOMODCACHE` scoped to workspace for Go
+- ⬜ Node: `npm install` / `yarn` / `pnpm` run in workspace dir; `node_modules/` stays inside workspace
+- ⬜ Go: `GOMODCACHE` set to workspace-local cache dir
+
+### Internal package
+- ⬜ `avc/internal/workspace/runner.go` — `Run(RunRequest) (*RunResult, error)`, orchestrates all layers
+- ⬜ `avc/internal/workspace/classify.go` — command prefix + flag scan → class (blocked / pip / python / node / go / generic)
+- ⬜ `avc/internal/workspace/env.go` — `buildEnv`: PATH allowlist, HOME redirect, sensitive var stripping
+- ⬜ `avc/internal/workspace/processtree_unix.go` + `processtree_windows.go` — process group / Job Object kill
+- ⬜ `avc/internal/workspace/venv.go` — `ensurePythonVenv`, `pipArgs`, `pythonArgs`
+
+### CLI
+- ⬜ `avc run --branch <name> <command>` — thin CLI wrapper for manual testing
+
+### SKILL.md updates
+- ⬜ All framework skill files updated with user-approval rule, sandbox constraints, and per-ecosystem install instructions
+
+### Tests
+- ⬜ `avc/tests/runner_test.go` — echo, exit codes, timeout, process tree kill, env scrubbing, PATH restriction, pip venv creation, idempotency, blocked commands, blocked global flags, main-branch rejection, output truncation, resource limit cap, namespace isolation (Linux only)
+
+---
+
+## Phase 8 — Polish, Testing & Release
+
+**Goal:** Production-ready on all primitives.
 
 ### Testing
 - ⬜ All Phase 1 unit tests passing
@@ -298,7 +337,7 @@ Accepts a comma-separated list: `avc init --skills claude-code,cursor,windsurf`
 - ✅ `docs/contributing.md`
 - ✅ `docs/project-description.md`
 - ✅ `README.md` — quick-start guide (install, init, first snapshot, restore; CLI and extension dev setup; Windows Smart App Control note)
-- ⬜ `docs/cli-reference.md` updated with Phase 4–5 commands (branch, merge)
+- ⬜ `docs/cli-reference.md` updated with Phase 4–7 commands (branch, merge, mcp, init --skills, run)
 - ⬜ `docs/architecture.md` updated with branches/merges schema section
 
 ### Release
@@ -310,8 +349,9 @@ Accepts a comma-separated list: `avc init --skills claude-code,cursor,windsurf`
 
 ## Immediate next actions (Phase 7)
 
-1. Integration tests: `init → branch → snapshot → merge → verify main` round-trip
-2. Integration test: `merge --abort` restores pre-merge state
-3. Update `docs/cli-reference.md` with Phase 4–6 commands (branch, merge, mcp, init --skills)
-4. Update `docs/architecture.md` with branches/merges schema section
-5. Cross-platform binary builds + VSCode extension packaging
+1. Implement `avc/internal/workspace/runner.go` + `classify.go`
+2. Add `avc_run_in_workspace` MCP tool and handler
+3. Add `avc run` CLI command
+4. Update SKILL.md templates with user-approval rule
+5. Integration tests: `init → branch → snapshot → merge → verify main` round-trip
+6. Update `docs/cli-reference.md` with Phase 4–7 commands

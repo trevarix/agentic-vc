@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"fmt"
+	"strings"
 
 	branchpkg "github.com/SkillMythOrg/agentic-vc/avc/internal/branch"
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
@@ -9,11 +10,19 @@ import (
 	mergepkg "github.com/SkillMythOrg/agentic-vc/avc/internal/merge"
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/restore"
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/snapshot"
+	workspacepkg "github.com/SkillMythOrg/agentic-vc/avc/internal/workspace"
 )
 
 // dispatchTool executes the named tool with the given arguments and wraps the
 // result in the MCP content envelope.
 func dispatchTool(projectRoot string, compact bool, name string, args map[string]any) (map[string]any, error) {
+	if projectRoot == "" {
+		return nil, fmt.Errorf(
+			"no AVC project found. Run `avc init` in your project directory first, " +
+				"then restart Claude Code so the MCP server picks up the project path.",
+		)
+	}
+
 	var result any
 	var err error
 
@@ -44,6 +53,8 @@ func dispatchTool(projectRoot string, compact bool, name string, args map[string
 		result, err = toolMerge(projectRoot, args)
 	case "avc_merge_abort":
 		result, err = toolMergeAbort(projectRoot)
+	case "avc_run_in_workspace":
+		result, err = toolRunInWorkspace(projectRoot, args)
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
@@ -62,6 +73,11 @@ func toolSnapshot(projectRoot string, args map[string]any) (any, error) {
 		return nil, fmt.Errorf("label is required")
 	}
 
+	agentName := strArg(args, "agent_name")
+	if agentName == "" {
+		agentName = "agent"
+	}
+
 	branchID, err := branchpkg.GetActiveBranchID(projectRoot)
 	if err != nil {
 		return nil, fmt.Errorf("could not determine active branch: %w", err)
@@ -72,7 +88,7 @@ func toolSnapshot(projectRoot string, args map[string]any) (any, error) {
 	snap, err := snapshot.Create(
 		projectRoot,
 		label,
-		strArg(args, "agent_name"),
+		agentName,
 		strArg(args, "notes"),
 		branchID,
 		sourceDir,
@@ -81,15 +97,15 @@ func toolSnapshot(projectRoot string, args map[string]any) (any, error) {
 		return nil, err
 	}
 	return map[string]any{
-		"id":            snap.ID,
-		"label":         snap.Label,
-		"timestamp":     snap.Timestamp,
-		"agent_name":    snap.AgentName,
-		"files_changed": snap.FileCount,
-		"total_size":    snap.TotalSize,
-		"notes":         snap.Notes,
-		"branch_id":     snap.BranchID,
-		"success":       true,
+		"id":         snap.ID,
+		"label":      snap.Label,
+		"timestamp":  snap.Timestamp,
+		"agent_name": snap.AgentName,
+		"file_count": snap.FileCount,
+		"total_size": snap.TotalSize,
+		"notes":      snap.Notes,
+		"branch_id":  snap.BranchID,
+		"success":    true,
 	}, nil
 }
 
@@ -263,9 +279,34 @@ func toolBranchCreate(projectRoot string, args map[string]any) (any, error) {
 		return nil, fmt.Errorf("name is required")
 	}
 
-	b, err := branchpkg.Create(projectRoot, name, strArg(args, "from_snapshot_id"))
+	fromSnapshotID := strArg(args, "from_snapshot_id")
+	b, err := branchpkg.Create(projectRoot, name, fromSnapshotID)
 	if err != nil {
-		return nil, err
+		// On a freshly-initialised project main has no snapshots yet. Take one
+		// automatically and retry rather than surfacing a confusing error.
+		if strings.Contains(err.Error(), "no snapshots to branch from") {
+			// Resolve the main branch ID so the snapshot is scoped correctly.
+			// GetHeadSnapshot filters by branch_id, so an unscoped snapshot
+			// (branchID="") would be invisible to the next Create attempt.
+			var mainID string
+			store, dbErr := db.Open(projectRoot)
+			if dbErr == nil {
+				proj, projErr := store.GetProject(projectRoot)
+				if projErr == nil {
+					if mb, mbErr := store.GetBranchByName(proj.ID, "main"); mbErr == nil {
+						mainID = mb.ID
+					}
+				}
+				store.Close()
+			}
+			if _, snapErr := snapshot.Create(projectRoot, "auto: initial project state", "agent", "baseline snapshot before first branch", mainID, ""); snapErr != nil {
+				return nil, fmt.Errorf("project has no snapshots and auto-snapshot failed: %w", snapErr)
+			}
+			b, err = branchpkg.Create(projectRoot, name, fromSnapshotID)
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Auto-switch — creating a branch means you're about to work on it.
@@ -273,13 +314,23 @@ func toolBranchCreate(projectRoot string, args map[string]any) (any, error) {
 		return nil, fmt.Errorf("branch created but auto-switch failed: %w", err)
 	}
 
+	workspacePath := branchpkg.WorkspacePath(projectRoot, b.Name)
 	return map[string]any{
 		"id":               b.ID,
 		"name":             b.Name,
 		"base_snapshot_id": b.BaseSnapshotID,
-		"workspace":        branchpkg.WorkspacePath(projectRoot, b.Name),
+		"workspace":        workspacePath,
 		"active":           true,
 		"success":          true,
+		"instruction": fmt.Sprintf(
+			"Branch '%s' is now active. Your workspace is at: %s\n"+
+				"Follow these steps exactly:\n"+
+				"1. Call avc_snapshot to capture the initial workspace state.\n"+
+				"2. Always Read files from the workspace path before editing — never assume workspace content matches what you previously read from the project root.\n"+
+				"3. Make your changes inside the workspace path only. NEVER read or write files under the original project root (%s).\n"+
+				"4. When the task is complete, call avc_branch_diff and show the full output to the user before offering to merge.",
+			b.Name, workspacePath, projectRoot,
+		),
 	}, nil
 }
 
@@ -362,33 +413,42 @@ func toolBranchDiff(projectRoot string, args map[string]any) (any, error) {
 		return nil, err
 	}
 
-	type fileDiffJSON struct {
-		Path         string `json:"path"`
-		Type         string `json:"type"`
-		OldHash      string `json:"old_hash,omitempty"`
-		NewHash      string `json:"new_hash,omitempty"`
-		LinesAdded   int    `json:"lines_added"`
-		LinesRemoved int    `json:"lines_removed"`
-		DiffPreview  string `json:"diff_preview,omitempty"`
+	return formatBranchDiff(name, baseSnapshotID, head.ID, result), nil
+}
+
+// formatBranchDiff renders a branch diff as human-readable markdown text.
+func formatBranchDiff(branch, fromSnap, toSnap string, result *diffpkg.Result) string {
+	var b strings.Builder
+
+	// Header
+	totalAdded, totalRemoved := 0, 0
+	for _, f := range result.Files {
+		totalAdded += f.LinesAdded
+		totalRemoved += f.LinesRemoved
 	}
-	files := make([]fileDiffJSON, len(result.Files))
-	for i, f := range result.Files {
-		files[i] = fileDiffJSON{
-			Path:         f.Path,
-			Type:         string(f.Type),
-			OldHash:      f.OldHash,
-			NewHash:      f.NewHash,
-			LinesAdded:   f.LinesAdded,
-			LinesRemoved: f.LinesRemoved,
-			DiffPreview:  f.DiffPreview,
+	fileWord := "file"
+	if len(result.Files) != 1 {
+		fileWord = "files"
+	}
+	fmt.Fprintf(&b, "Branch: %s\n", branch)
+	fmt.Fprintf(&b, "Snapshots: %s → %s\n", fromSnap, toSnap)
+	fmt.Fprintf(&b, "%d %s changed  (+%d lines, -%d lines)\n",
+		len(result.Files), fileWord, totalAdded, totalRemoved)
+
+	// Per-file sections
+	for _, f := range result.Files {
+		b.WriteString("\n")
+		fmt.Fprintf(&b, "── %s  [%s]  +%d -%d ──\n",
+			f.Path, string(f.Type), f.LinesAdded, f.LinesRemoved)
+		if f.DiffPreview != "" {
+			b.WriteString(f.DiffPreview)
+			if f.DiffPreview[len(f.DiffPreview)-1] != '\n' {
+				b.WriteString("\n")
+			}
 		}
 	}
-	return map[string]any{
-		"branch":        name,
-		"from_snapshot": baseSnapshotID,
-		"to_snapshot":   head.ID,
-		"files":         files,
-	}, nil
+
+	return b.String()
 }
 
 // ─── Merge tools ──────────────────────────────────────────────────────────────
@@ -398,9 +458,17 @@ func mergeResultToMap(result *mergepkg.Result, preview bool) map[string]any {
 		Path     string `json:"path"`
 		Decision string `json:"decision"`
 	}
-	files := make([]fileJSON, len(result.Files))
-	for i, f := range result.Files {
-		files[i] = fileJSON{f.Path, f.Decision}
+	// Only include files that require attention (clean or conflict).
+	// Skipped files (unchanged since branch base) are omitted — listing all
+	// 200+ unchanged files adds noise without useful information.
+	var files []fileJSON
+	for _, f := range result.Files {
+		if f.Decision != "skip" {
+			files = append(files, fileJSON{f.Path, f.Decision})
+		}
+	}
+	if files == nil {
+		files = []fileJSON{}
 	}
 	return map[string]any{
 		"merge_id":  result.MergeID,
@@ -430,6 +498,22 @@ func toolMerge(projectRoot string, args map[string]any) (any, error) {
 	if branch == "" {
 		return nil, fmt.Errorf("branch is required")
 	}
+
+	// Check for conflicts before writing anything. If conflicts exist, return
+	// them and let the agent/user decide how to resolve before retrying.
+	plan, err := mergepkg.Preview(projectRoot, branch)
+	if err != nil {
+		return nil, err
+	}
+	if plan.Conflicts > 0 {
+		m := mergeResultToMap(plan, true)
+		m["error"] = fmt.Sprintf(
+			"%d conflict(s) detected — merge aborted. Resolve the conflicts listed in 'files' then retry, or call avc_merge_abort to abandon.",
+			plan.Conflicts,
+		)
+		return m, nil
+	}
+
 	result, err := mergepkg.Merge(projectRoot, branch)
 	if err != nil {
 		return nil, err
@@ -444,10 +528,66 @@ func toolMergeAbort(projectRoot string) (any, error) {
 	return map[string]any{"aborted": true, "success": true}, nil
 }
 
+// ─── Workspace run tool ───────────────────────────────────────────────────────
+
+func toolRunInWorkspace(projectRoot string, args map[string]any) (any, error) {
+	branch := strArg(args, "branch")
+	if branch == "" {
+		return nil, fmt.Errorf("branch is required")
+	}
+	command := strArg(args, "command")
+	if command == "" {
+		return nil, fmt.Errorf("command is required")
+	}
+
+	result, err := workspacepkg.Run(workspacepkg.RunRequest{
+		ProjectRoot:    projectRoot,
+		BranchName:     branch,
+		Command:        command,
+		TimeoutSeconds: intArg(args, "timeout_seconds"),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]any{
+		"exit_code":      result.ExitCode,
+		"stdout":         result.Stdout,
+		"stderr":         result.Stderr,
+		"workspace_path": result.WorkspacePath,
+		"env_info": map[string]any{
+			"type":        result.EnvInfo.Type,
+			"path":        result.EnvInfo.Path,
+			"module_name": result.EnvInfo.ModuleName,
+		},
+		"sandbox_info": map[string]any{
+			"platform": result.SandboxInfo.Platform,
+			"layers": map[string]any{
+				"env_scrubbing":     result.SandboxInfo.EnvScrubbing,
+				"execution_limits":  result.SandboxInfo.ExecutionLimits,
+				"process_tree_kill": result.SandboxInfo.ProcessTreeKill,
+			},
+		},
+	}, nil
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 // strArg extracts a string value from an args map, returning "" if absent or wrong type.
 func strArg(args map[string]any, key string) string {
 	v, _ := args[key].(string)
 	return v
+}
+
+// intArg extracts an integer value from an args map, returning 0 if absent or wrong type.
+func intArg(args map[string]any, key string) int {
+	switch v := args[key].(type) {
+	case int:
+		return v
+	case float64:
+		return int(v)
+	case int64:
+		return int(v)
+	}
+	return 0
 }

@@ -88,7 +88,7 @@ examples/                # example agent workflow scripts
 
 ## Current implementation status
 
-All core phases are complete. The next work is Phase 7 — polish, integration tests, and release.
+Phases 1–6 are complete. Phase 7 (workspace command runner) is next, followed by Phase 8 (polish and release).
 
 | Phase | Status | Scope |
 |-------|--------|-------|
@@ -98,7 +98,8 @@ All core phases are complete. The next work is Phase 7 — polish, integration t
 | 4 | ✅ | `avc branch` — branches table, agent workspaces, workspace isolation |
 | 5 | ✅ | `avc merge` — three-way merge, conflict markers, auto-snapshot, abort |
 | 6 | ✅ | MCP server (`avc mcp serve`), `avc init --skills <framework>` |
-| 7 | ⬜ | Integration tests, docs, cross-platform binaries, VSCode Marketplace release |
+| 7 | ⬜ | `avc run` + `avc_run_in_workspace` MCP tool — agent-driven test execution with venv isolation |
+| 8 | ⬜ | Integration tests, docs, cross-platform binaries, VSCode Marketplace release |
 
 ---
 
