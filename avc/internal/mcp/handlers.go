@@ -394,13 +394,20 @@ func toolBranchDiff(projectRoot string, args map[string]any) (any, error) {
 	if branchID == "" {
 		return nil, fmt.Errorf("branch '%s' not found", name)
 	}
-	if baseSnapshotID == "" {
-		return nil, fmt.Errorf("branch '%s' has no base snapshot (main has no cumulative diff)", name)
-	}
 
 	store, err := db.Open(projectRoot)
 	if err != nil {
 		return nil, err
+	}
+	// When no base snapshot exists (branch created before any main snapshot),
+	// fall back to the oldest snapshot on the branch as the diff base.
+	if baseSnapshotID == "" {
+		oldest, err := store.GetOldestSnapshot(branchID)
+		if err != nil {
+			store.Close()
+			return nil, fmt.Errorf("branch '%s' has no snapshots yet", name)
+		}
+		baseSnapshotID = oldest.ID
 	}
 	head, headErr := store.GetHeadSnapshot(branchID)
 	store.Close()

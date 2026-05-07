@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
@@ -32,9 +33,6 @@ type Result struct {
 // real project root.
 //
 // branchID associates the snapshot with a branch; pass "" for unscoped snapshots.
-//
-// The stat cache optimisation is active only when sourceDir == projectRoot
-// (workspace snapshots are infrequent enough that cache overhead is not worth it).
 func Create(projectRoot, label, agentName, notes, branchID, sourceDir string) (*Result, error) {
 	if sourceDir == "" {
 		sourceDir = projectRoot
@@ -61,11 +59,28 @@ func Create(projectRoot, label, agentName, notes, branchID, sourceDir string) (*
 		return nil, fmt.Errorf("project not initialized (run `avc init`): %w", err)
 	}
 
-	// Stat cache is only useful when snapshotting the real project root.
-	useCache := sourceDir == projectRoot
-	cache, _ := statcache.Load(projectRoot)
+	// Determine which stat cache to use.
+	// For the project root, use the standard cache path.
+	// For workspace directories, use a per-branch cache populated during workspace
+	// materialization — this makes the first snapshot on a branch a stat-only pass.
+	useCache := true
+	var cachePath string
+	workspacesBase := filepath.Join(projectRoot, ".avc", "workspaces")
+	if sourceDir == projectRoot {
+		cachePath = "" // signal to use statcache.Load / cache.Save below
+	} else if rel, err := filepath.Rel(workspacesBase, sourceDir); err == nil && !strings.HasPrefix(rel, "..") {
+		cachePath = statcache.WorkspaceCachePath(projectRoot, rel)
+	} else {
+		useCache = false
+	}
+
+	var cache *statcache.Cache
 	if !useCache {
 		cache = statcache.Empty()
+	} else if cachePath == "" {
+		cache, _ = statcache.Load(projectRoot)
+	} else {
+		cache, _ = statcache.LoadFromPath(cachePath)
 	}
 
 	snapID := newSnapID()
@@ -133,10 +148,14 @@ func Create(projectRoot, label, agentName, notes, branchID, sourceDir string) (*
 		return nil, fmt.Errorf("insert files: %w", err)
 	}
 
-	// Persist updated cache — best-effort; only meaningful for project root snapshots.
+	// Persist updated cache — best-effort.
 	if useCache {
 		cache.SnapshotID = snapID
-		_ = cache.Save(projectRoot)
+		if cachePath == "" {
+			_ = cache.Save(projectRoot)
+		} else {
+			_ = cache.SaveToPath(cachePath)
+		}
 	}
 
 	return &Result{
