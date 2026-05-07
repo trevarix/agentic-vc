@@ -29,9 +29,39 @@ export class SnapshotItem extends vscode.TreeItem {
   }
 }
 
+/** A date-bucket header that groups snapshots in the sidebar tree. */
+export class GroupItem extends vscode.TreeItem {
+  constructor(public readonly groupLabel: string, public readonly snapshots: Snapshot[]) {
+    super(groupLabel, vscode.TreeItemCollapsibleState.Collapsed);
+    this.contextValue = 'snapshotGroup';
+    this.iconPath = new vscode.ThemeIcon('calendar');
+    this.description = `${snapshots.length}`;
+  }
+}
+
+type SidebarItem = GroupItem | SnapshotItem;
+
+/** Bucket name for a snapshot's timestamp. */
+function bucketFor(timestamp: number, now: Date): string {
+  const date = new Date(timestamp * 1000);
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfYesterday = startOfToday - 24 * 60 * 60 * 1000;
+  const startOfWeek = startOfToday - 7 * 24 * 60 * 60 * 1000;
+  const startOfMonth = startOfToday - 30 * 24 * 60 * 60 * 1000;
+
+  const ts = date.getTime();
+  if (ts >= startOfToday) return 'Today';
+  if (ts >= startOfYesterday) return 'Yesterday';
+  if (ts >= startOfWeek) return 'This Week';
+  if (ts >= startOfMonth) return 'This Month';
+  return 'Older';
+}
+
+const BUCKET_ORDER = ['Today', 'Yesterday', 'This Week', 'This Month', 'Older'];
+
 /** Provides snapshot data to the VSCode tree view. */
-export class SnapshotProvider implements vscode.TreeDataProvider<SnapshotItem> {
-  private _onDidChangeTreeData = new vscode.EventEmitter<SnapshotItem | undefined>();
+export class SnapshotProvider implements vscode.TreeDataProvider<SidebarItem> {
+  private _onDidChangeTreeData = new vscode.EventEmitter<SidebarItem | undefined>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
   private snapshots: Snapshot[] = [];
@@ -50,6 +80,33 @@ export class SnapshotProvider implements vscode.TreeDataProvider<SnapshotItem> {
   setFilter(text: string): void {
     this.filterText = text.toLowerCase();
     this.refresh();
+  }
+
+  /** Apply the current text filter to the snapshot list. */
+  private filteredSnapshots(): Snapshot[] {
+    if (!this.filterText) return this.snapshots;
+    return this.snapshots.filter((s) => {
+      const searchable = [
+        s.label, s.agent_name, s.notes, s.id,
+        new Date(s.timestamp * 1000).toLocaleString(),
+      ].join(' ').toLowerCase();
+      return searchable.includes(this.filterText);
+    });
+  }
+
+  /** Total visible snapshot count after filters (used by status bar). */
+  getVisibleSnapshotCount(): number {
+    return this.filteredSnapshots().length;
+  }
+
+  /** Latest snapshot (newest first) — used by working-tree diff shortcut. */
+  getLatestSnapshot(): Snapshot | undefined {
+    return this.snapshots[0];
+  }
+
+  /** Flat list of all visible snapshot items (after filters), regardless of grouping. */
+  getAllVisibleSnapshotItems(): SnapshotItem[] {
+    return this.filteredSnapshots().map((s) => new SnapshotItem(s));
   }
 
   async load(): Promise<void> {
@@ -77,21 +134,26 @@ export class SnapshotProvider implements vscode.TreeDataProvider<SnapshotItem> {
     }
   }
 
-  getTreeItem(element: SnapshotItem): vscode.TreeItem {
+  getTreeItem(element: SidebarItem): vscode.TreeItem {
     return element;
   }
 
-  getChildren(): SnapshotItem[] {
-    const items = this.snapshots.map((s) => new SnapshotItem(s));
-    if (!this.filterText) return items;
-    return items.filter((item) => {
-      const s = item.snapshot;
-      const searchable = [
-        s.label, s.agent_name, s.notes, s.id,
-        new Date(s.timestamp * 1000).toLocaleString(),
-      ].join(' ').toLowerCase();
-      return searchable.includes(this.filterText);
-    });
+  getChildren(element?: SidebarItem): SidebarItem[] {
+    // Children of a group: its snapshots.
+    if (element instanceof GroupItem) {
+      return element.snapshots.map((s) => new SnapshotItem(s));
+    }
+    // Root level: build date-bucket groups.
+    const filtered = this.filteredSnapshots();
+    const now = new Date();
+    const buckets = new Map<string, Snapshot[]>();
+    for (const s of filtered) {
+      const bucket = bucketFor(s.timestamp, now);
+      if (!buckets.has(bucket)) buckets.set(bucket, []);
+      buckets.get(bucket)!.push(s);
+    }
+    return BUCKET_ORDER
+      .filter((name) => buckets.has(name))
+      .map((name) => new GroupItem(name, buckets.get(name)!));
   }
 }
-

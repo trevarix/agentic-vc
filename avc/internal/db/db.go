@@ -6,9 +6,21 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
+
+// normPath returns a consistently-cased, clean path for use as a DB key.
+// On Windows, the volume name (drive letter) is uppercased so C:\ and c:\
+// are treated identically when the VSCode extension and CLI compare paths.
+func normPath(p string) string {
+	p = filepath.Clean(p)
+	if vol := filepath.VolumeName(p); vol != "" {
+		p = strings.ToUpper(vol) + p[len(vol):]
+	}
+	return p
+}
 
 const dbFile = ".avc/avc.db"
 
@@ -127,10 +139,11 @@ func InitProject(projectRoot string) (*Project, error) {
 	}
 	defer store.Close()
 
+	normed := normPath(projectRoot)
 	project := &Project{
 		ID:        newID("proj"),
-		Path:      projectRoot,
-		Name:      filepath.Base(projectRoot),
+		Path:      normed,
+		Name:      filepath.Base(normed),
 		CreatedAt: nowUnix(),
 	}
 
@@ -142,7 +155,7 @@ func InitProject(projectRoot string) (*Project, error) {
 		return nil, fmt.Errorf("insert project: %w", err)
 	}
 
-	return store.GetProject(projectRoot)
+	return store.GetProject(normed)
 }
 
 // migrate creates all tables if absent and applies incremental schema changes
@@ -239,7 +252,7 @@ func (s *Store) migrate() error {
 // GetProject returns the project record for the given root path.
 func (s *Store) GetProject(projectRoot string) (*Project, error) {
 	row := s.db.QueryRow(
-		`SELECT id, path, name, created_at FROM projects WHERE path = ?`, projectRoot,
+		`SELECT id, path, name, created_at FROM projects WHERE path = ?`, normPath(projectRoot),
 	)
 	p := &Project{}
 	if err := row.Scan(&p.ID, &p.Path, &p.Name, &p.CreatedAt); err != nil {

@@ -34,4 +34,5 @@ func init() {
 	rootCmd.AddCommand(branchCmd)
 	rootCmd.AddCommand(mcpCmd)
 	rootCmd.AddCommand(mergeCmd)
+	rootCmd.AddCommand(runCmd)
 }

@@ -11,3 +11,6 @@ extension/out/
 .svelte-kit/
 *.tsbuildinfo
 .vscode/
+!extension/.vscode/
+!extension/.vscode/launch.json
+!extension/.vscode/tasks.json

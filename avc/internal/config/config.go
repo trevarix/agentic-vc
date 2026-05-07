@@ -16,6 +16,14 @@ type Config struct {
 	Project ProjectConfig `toml:"project"`
 	Ignore  IgnoreConfig  `toml:"ignore"`
 	Branch  BranchConfig  `toml:"branch"`
+	Run     RunConfig     `toml:"run"`
+}
+
+// RunConfig holds workspace command runner settings.
+type RunConfig struct {
+	DefaultTimeoutSeconds int `toml:"default_timeout_seconds"`
+	MaxTimeoutSeconds     int `toml:"max_timeout_seconds"`
+	MaxOutputKB           int `toml:"max_output_kb"`
 }
 
 // ProjectConfig holds project-level settings.
@@ -178,6 +186,15 @@ const defaultTOML = `# AVC configuration file
 
 [branch]
 active = "main"
+
+[run]
+# Maximum time a workspace command can run before being killed.
+default_timeout_seconds = 180
+max_timeout_seconds     = 600
+
+# Maximum output captured per stream (stdout/stderr) before truncation.
+# Increase for projects with verbose test suites.
+max_output_kb = 512
 `
 
 const defaultAVCIgnore = `# AVC ignore rules — patterns listed here are excluded from all snapshots.

@@ -7,20 +7,23 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
 // Supported framework identifiers.
 const (
-	FrameworkClaudeCode = "claude-code"
-	FrameworkCursor     = "cursor"
-	FrameworkWindsurf   = "windsurf"
-	FrameworkGeneric    = "generic"
+	FrameworkClaudeCode    = "claude-code"
+	FrameworkClaudeDesktop = "claude-desktop"
+	FrameworkCursor        = "cursor"
+	FrameworkWindsurf      = "windsurf"
+	FrameworkGeneric       = "generic"
 )
 
 // SupportedFrameworks lists all valid --skills values.
 var SupportedFrameworks = []string{
 	FrameworkClaudeCode,
+	FrameworkClaudeDesktop,
 	FrameworkCursor,
 	FrameworkWindsurf,
 	FrameworkGeneric,
@@ -52,6 +55,10 @@ func Write(projectRoot, framework string) (*WriteResult, error) {
 		if err := writeClaudeCode(projectRoot, r); err != nil {
 			return nil, err
 		}
+	case FrameworkClaudeDesktop:
+		if err := writeClaudeDesktop(projectRoot, r); err != nil {
+			return nil, err
+		}
 	case FrameworkCursor:
 		if err := writeCursor(projectRoot, r); err != nil {
 			return nil, err
@@ -74,13 +81,60 @@ func Write(projectRoot, framework string) (*WriteResult, error) {
 // ─── Framework writers ────────────────────────────────────────────────────────
 
 func writeClaudeCode(projectRoot string, r *WriteResult) error {
-	// MCP config — .claude/settings.json
-	settingsPath := filepath.Join(projectRoot, ".claude", "settings.json")
-	action, err := mergeMCPConfig(settingsPath, "avc")
+	// MCP config — ~/.claude/settings.json (global, loaded by all Claude Code interfaces)
+	globalSettings, err := claudeGlobalSettingsPath()
 	if err != nil {
 		return err
 	}
-	r.Actions = append(r.Actions, fileAction(".claude/settings.json", action))
+	action, err := mergeMCPConfig(globalSettings, "avc", r)
+	if err != nil {
+		return err
+	}
+	r.Actions = append(r.Actions, fileAction(globalSettings, action))
+
+	// CLAUDE.md — always-loaded context (append, idempotent)
+	claudeMDPath := filepath.Join(projectRoot, "CLAUDE.md")
+	action, err = appendRulesBlock(claudeMDPath, claudeMDBlock)
+	if err != nil {
+		return err
+	}
+	r.Actions = append(r.Actions, fileAction("CLAUDE.md", action))
+
+	// Skill files — .claude/skills/avc-<name>/SKILL.md
+	for name, content := range claudeSkillFiles {
+		rel := ".claude/skills/" + name + "/SKILL.md"
+		path := filepath.Join(projectRoot, filepath.FromSlash(rel))
+		action, err := writeFileIfAbsent(path, content)
+		if err != nil {
+			return err
+		}
+		r.Actions = append(r.Actions, fileAction(rel, action))
+	}
+	return nil
+}
+
+func writeClaudeDesktop(projectRoot string, r *WriteResult) error {
+	// MCP config — OS-specific Claude Desktop config file.
+	// Use "avc:<project-name>" as the server key so multiple projects can
+	// coexist in the config without overwriting each other.
+	desktopConfig, err := claudeDesktopConfigPath()
+	if err != nil {
+		return err
+	}
+	serverKey := "avc:" + filepath.Base(projectRoot)
+	action, err := mergeMCPConfigWithEnv(desktopConfig, serverKey, projectRoot, r)
+	if err != nil {
+		return err
+	}
+	r.Actions = append(r.Actions, fileAction(desktopConfig, action))
+
+	// CLAUDE.md — always-loaded context (append, idempotent)
+	claudeMDPath := filepath.Join(projectRoot, "CLAUDE.md")
+	action, err = appendRulesBlock(claudeMDPath, claudeMDBlock)
+	if err != nil {
+		return err
+	}
+	r.Actions = append(r.Actions, fileAction("CLAUDE.md", action))
 
 	// Skill files — .claude/skills/avc-<name>/SKILL.md
 	for name, content := range claudeSkillFiles {
@@ -96,15 +150,18 @@ func writeClaudeCode(projectRoot string, r *WriteResult) error {
 }
 
 func writeCursor(projectRoot string, r *WriteResult) error {
-	// MCP config — .cursor/mcp.json
-	mcpPath := filepath.Join(projectRoot, ".cursor", "mcp.json")
-	action, err := mergeMCPConfig(mcpPath, "avc")
+	// MCP config — ~/.cursor/mcp.json (global, loaded by all Cursor interfaces)
+	globalMCP, err := cursorGlobalMCPPath()
 	if err != nil {
 		return err
 	}
-	r.Actions = append(r.Actions, fileAction(".cursor/mcp.json", action))
+	action, err := mergeMCPConfig(globalMCP, "avc", r)
+	if err != nil {
+		return err
+	}
+	r.Actions = append(r.Actions, fileAction(globalMCP, action))
 
-	// Rules file — .cursor/rules/avc.mdc
+	// Rules file — .cursor/rules/avc.mdc (project-level, checked into repo)
 	rulesPath := filepath.Join(projectRoot, ".cursor", "rules", "avc.mdc")
 	action, err = writeFileIfAbsent(rulesPath, cursorRulesContent)
 	if err != nil {
@@ -115,15 +172,18 @@ func writeCursor(projectRoot string, r *WriteResult) error {
 }
 
 func writeWindsurf(projectRoot string, r *WriteResult) error {
-	// MCP config — .codeium/windsurf/mcp_config.json
-	mcpPath := filepath.Join(projectRoot, ".codeium", "windsurf", "mcp_config.json")
-	action, err := mergeMCPConfig(mcpPath, "avc")
+	// MCP config — ~/.codeium/windsurf/mcp_config.json (global, loaded by all Windsurf interfaces)
+	globalMCP, err := windsurfGlobalMCPPath()
 	if err != nil {
 		return err
 	}
-	r.Actions = append(r.Actions, fileAction(".codeium/windsurf/mcp_config.json", action))
+	action, err := mergeMCPConfig(globalMCP, "avc", r)
+	if err != nil {
+		return err
+	}
+	r.Actions = append(r.Actions, fileAction(globalMCP, action))
 
-	// Rules file — .windsurfrules (append, idempotent)
+	// Rules file — .windsurfrules (append, idempotent, project-level)
 	rulesPath := filepath.Join(projectRoot, ".windsurfrules")
 	action, err = appendRulesBlock(rulesPath, windsurfRulesBlock)
 	if err != nil {
@@ -155,18 +215,158 @@ func fileAction(rel, action string) FileAction {
 	return fa
 }
 
+// ─── Content: CLAUDE.md block ────────────────────────────────────────────────
+
+const claudeMDMarker = "<!-- AVC — Agentic Version Control -->"
+
+const claudeMDBlock = `
+<!-- AVC — Agentic Version Control -->
+## AVC — Agentic Version Control
+
+AVC is active on this project. You MUST use it. The MCP server starts automatically and exposes ` + "`avc_*`" + ` tools.
+
+### Mandatory actions
+
+**ALWAYS call ` + "`avc_snapshot`" + ` before making any code change. No exceptions.**
+Do not assess whether the change is "small enough" or "easily reversible" — that judgement is not yours to make. The cost of an unnecessary snapshot is negligible. The cost of skipping one when it was needed is not.
+
+Label format — always use the ` + "`auto:`" + ` prefix so agent snapshots are distinguishable in ` + "`avc list`" + `:
+- ` + "`auto: before <2–5 word description>`" + `
+
+**ALWAYS call ` + "`avc_branch_create`" + ` before starting any task. No exceptions.**
+Do not assess whether the task is "simple enough" to skip a branch — that judgement is not yours to make. After creating a branch, set your working directory to the ` + "`workspace`" + ` path in the response. NEVER edit files in the real project root while on a branch.
+
+**ALWAYS call ` + "`avc_restore`" + ` when:**
+- Tests fail after your changes
+- The build breaks
+- The user says "undo", "revert", "roll back", or "start over"
+- Do NOT attempt repeated fixes on broken state — restore first, then retry.
+
+**NEVER call ` + "`avc_merge`" + `** without the user saying yes explicitly.
+` + "`avc_merge`" + ` checks for conflicts automatically before writing anything — no separate preview step needed. If conflicts are found, it returns them without modifying main.
+
+**NEVER call ` + "`avc_run_in_workspace`" + `** without first:
+1. Showing the user the exact command you intend to run
+2. Explaining what it does
+3. Receiving explicit approval
+
+### Quick reference
+
+| Trigger | Tool |
+|---------|------|
+| About to make changes | ` + "`avc_snapshot`" + ` |
+| Multi-step or multi-file task | ` + "`avc_branch_create`" + ` |
+| Something broke | ` + "`avc_restore`" + ` |
+| Ready to review branch work | ` + "`avc_branch_diff`" + ` |
+| Ready to merge (with approval) | ` + "`avc_merge`" + ` |
+| Need to run tests or build | ` + "`avc_run_in_workspace`" + ` (approval required) |
+`
+
+// ─── Claude Code global settings path ────────────────────────────────────────
+
+// claudeGlobalSettingsPath returns the path to ~/.claude.json.
+// This is the global Claude Code config file read by all interfaces (VSCode
+// extension, desktop app, CLI) regardless of the current project or CWD.
+func claudeGlobalSettingsPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home directory: %w", err)
+	}
+	return filepath.Join(home, ".claude.json"), nil
+}
+
+// claudeDesktopConfigPath returns the OS-specific path to the Claude Desktop
+// MCP config file.
+//
+//	macOS:   ~/Library/Application Support/Claude/claude_desktop_config.json
+//	Windows: %APPDATA%\Claude\claude_desktop_config.json
+//	Linux:   ~/.config/Claude/claude_desktop_config.json
+func claudeDesktopConfigPath() (string, error) {
+	switch runtime.GOOS {
+	case "darwin":
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve home directory: %w", err)
+		}
+		return filepath.Join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json"), nil
+	case "windows":
+		appdata := os.Getenv("APPDATA")
+		if appdata == "" {
+			return "", fmt.Errorf("APPDATA environment variable not set")
+		}
+		return filepath.Join(appdata, "Claude", "claude_desktop_config.json"), nil
+	default:
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve home directory: %w", err)
+		}
+		return filepath.Join(home, ".config", "Claude", "claude_desktop_config.json"), nil
+	}
+}
+
+// cursorGlobalMCPPath returns the path to ~/.cursor/mcp.json.
+// This file is loaded by all Cursor interfaces regardless of project CWD.
+func cursorGlobalMCPPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home directory: %w", err)
+	}
+	return filepath.Join(home, ".cursor", "mcp.json"), nil
+}
+
+// windsurfGlobalMCPPath returns the path to ~/.codeium/windsurf/mcp_config.json.
+// This file is loaded by all Windsurf interfaces regardless of project CWD.
+func windsurfGlobalMCPPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home directory: %w", err)
+	}
+	return filepath.Join(home, ".codeium", "windsurf", "mcp_config.json"), nil
+}
+
 // ─── MCP config helpers ───────────────────────────────────────────────────────
 
-var mcpServerEntry = map[string]any{
-	"command": "avc",
-	"args":    []string{"mcp", "serve"},
+// resolveBinaryPath returns the absolute path to the running avc binary.
+// EvalSymlinks is applied so Homebrew and similar symlink installations resolve
+// to the real binary path that the OS can execute without a shell PATH lookup.
+// Returns ("avc", true) if the path cannot be resolved or looks like a temp
+// directory (i.e. the binary was run via `go run` and won't be stable).
+func resolveBinaryPath() (path string, isTmp bool) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "avc", false
+	}
+	resolved, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		resolved = exe
+	}
+	// Warn callers when the binary lives in a temp directory — this happens
+	// when the user runs `go run .` instead of a real installed binary.
+	tmp := os.TempDir()
+	if strings.HasPrefix(resolved, tmp) {
+		return resolved, true
+	}
+	return resolved, false
 }
 
 // mergeMCPConfig merges the AVC server entry into the JSON file at path.
+// Uses the absolute path of the running binary so the agent framework can
+// start the server without relying on the user's shell PATH.
 // Returns "created", "updated", or "skipped:already configured".
-func mergeMCPConfig(path, serverKey string) (string, error) {
+func mergeMCPConfig(path, serverKey string, r *WriteResult) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return "", err
+	}
+
+	binaryPath, isTmp := resolveBinaryPath()
+	if isTmp {
+		r.Warnings = append(r.Warnings,
+			"avc binary appears to be a temporary build (go run) — the MCP server path in the config may not be stable. Install avc to a permanent location and re-run `avc init --skills`.")
+	}
+
+	entry := map[string]any{
+		"command": binaryPath,
+		"args":    []string{"mcp", "serve"},
 	}
 
 	var root map[string]any
@@ -189,11 +389,104 @@ func mergeMCPConfig(path, serverKey string) (string, error) {
 		root["mcpServers"] = servers
 	}
 
-	if _, exists := servers[serverKey]; exists {
-		return "skipped:already configured", nil
+	if existing, exists := servers[serverKey]; exists {
+		// If the command path already matches the current binary, nothing to do.
+		if existingMap, ok := existing.(map[string]any); ok {
+			if existingMap["command"] == binaryPath {
+				return "skipped:already configured", nil
+			}
+		}
+		// Path differs (bare "avc", old install location, etc.) — update it.
+		servers[serverKey] = entry
+		out, err := json.MarshalIndent(root, "", "  ")
+		if err != nil {
+			return "", err
+		}
+		if err := os.WriteFile(path, append(out, '\n'), 0644); err != nil {
+			return "", err
+		}
+		return "updated", nil
 	}
 
-	servers[serverKey] = mcpServerEntry
+	servers[serverKey] = entry
+	out, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, append(out, '\n'), 0644); err != nil {
+		return "", err
+	}
+
+	if existed {
+		return "updated", nil
+	}
+	return "created", nil
+}
+
+// mergeMCPConfigWithEnv is like mergeMCPConfig but also writes an env block
+// with AVC_PROJECT set to projectRoot. Used for Claude Desktop, which spawns
+// the MCP server without a meaningful CWD, so the project root must be passed
+// explicitly via environment variable.
+func mergeMCPConfigWithEnv(path, serverKey, projectRoot string, r *WriteResult) (string, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return "", err
+	}
+
+	binaryPath, isTmp := resolveBinaryPath()
+	if isTmp {
+		r.Warnings = append(r.Warnings,
+			"avc binary appears to be a temporary build (go run) — the MCP server path in the config may not be stable. Install avc to a permanent location and re-run `avc init --skills`.")
+	}
+
+	entry := map[string]any{
+		"command": binaryPath,
+		"args":    []string{"mcp", "serve"},
+		"env":     map[string]any{"AVC_PROJECT": projectRoot},
+	}
+
+	var root map[string]any
+	existed := false
+	data, err := os.ReadFile(path)
+	if err == nil {
+		existed = true
+		if jsonErr := json.Unmarshal(data, &root); jsonErr != nil {
+			return "", fmt.Errorf("parse %s: %w", path, jsonErr)
+		}
+	} else if os.IsNotExist(err) {
+		root = map[string]any{}
+	} else {
+		return "", err
+	}
+
+	servers, ok := root["mcpServers"].(map[string]any)
+	if !ok {
+		servers = map[string]any{}
+		root["mcpServers"] = servers
+	}
+
+	if existing, exists := servers[serverKey]; exists {
+		if existingMap, ok := existing.(map[string]any); ok {
+			if existingMap["command"] == binaryPath {
+				// Check if the project root also matches before skipping.
+				if envMap, ok := existingMap["env"].(map[string]any); ok {
+					if envMap["AVC_PROJECT"] == projectRoot {
+						return "skipped:already configured", nil
+					}
+				}
+			}
+		}
+		servers[serverKey] = entry
+		out, err := json.MarshalIndent(root, "", "  ")
+		if err != nil {
+			return "", err
+		}
+		if err := os.WriteFile(path, append(out, '\n'), 0644); err != nil {
+			return "", err
+		}
+		return "updated", nil
+	}
+
+	servers[serverKey] = entry
 	out, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
 		return "", err
@@ -214,12 +507,15 @@ const avcRulesMarker = "# AVC — Agentic Version Control"
 
 // appendRulesBlock appends the AVC block to a rules file.
 // Returns "created", "updated", or "skipped:marker present".
+// Checks for both the markdown marker and the HTML comment marker so it works
+// correctly for both .windsurfrules and CLAUDE.md.
 func appendRulesBlock(path, block string) (string, error) {
 	existing, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return "", err
 	}
-	if strings.Contains(string(existing), avcRulesMarker) {
+	content := string(existing)
+	if strings.Contains(content, avcRulesMarker) || strings.Contains(content, claudeMDMarker) {
 		return "skipped:marker present", nil
 	}
 
@@ -263,12 +559,14 @@ func writeFileIfAbsent(path, content string) (string, error) {
 
 // ─── Gitignore detection ──────────────────────────────────────────────────────
 
-// frameworkDirs maps each framework to the top-level directories it writes into.
+// frameworkDirs maps each framework to project-level directories it writes into.
+// Global config paths (home directory) are excluded — they exist outside the project.
 var frameworkDirs = map[string][]string{
-	FrameworkClaudeCode: {".claude"},
-	FrameworkCursor:     {".cursor"},
-	FrameworkWindsurf:   {".codeium"},
-	FrameworkGeneric:    {}, // writes to project root — no subdirectory to check
+	FrameworkClaudeCode:    {".claude"},
+	FrameworkClaudeDesktop: {".claude"},
+	FrameworkCursor:        {".cursor"}, // rules file goes here; MCP config is global
+	FrameworkWindsurf:      {},          // .windsurfrules is at project root; MCP config is global
+	FrameworkGeneric:       {},          // writes to project root — no subdirectory to check
 }
 
 // checkGitignoreWarnings reads .gitignore and adds a warning to r for any
@@ -330,123 +628,166 @@ func isIgnored(dirName string, patterns []string) bool {
 var claudeSkillFiles = map[string]string{
 	"avc-snapshot": `---
 name: avc-snapshot
-description: Save a snapshot of the current project state with AVC
+description: Save an AVC snapshot before making changes — call this proactively, not on request
 ---
 
-Save a snapshot of the current project state using the **avc_snapshot** MCP tool.
+Call **avc_snapshot** before making any code change. No exceptions.
 
-## When to use
+Do not assess whether the change is "small enough" or "easily reversible" — that judgement is not yours to make. The cost of an unnecessary snapshot is negligible. The cost of skipping one when it was needed is not.
 
-- Before making any significant code change
-- After completing a task or subtask successfully
-- Before running a risky operation (refactor, dependency upgrade, schema migration)
-- Whenever the user asks you to "save" or "checkpoint" your work
-
-## How to use
-
-Call **avc_snapshot** with a descriptive label:
+## How to call
 
 ` + "```" + `json
 {
-  "label": "<short past-tense description of current state>",
+  "label": "auto: before <what you are about to do>",
   "agent_name": "claude",
-  "notes": "<optional: what you are about to do or what just changed>"
+  "notes": "<brief description of the change planned>"
 }
 ` + "```" + `
 
-## Tips
+## Label format — always use the ` + "`auto:`" + ` prefix
 
-- Labels should describe current state, not intentions: "auth middleware added" not "adding auth"
-- Always snapshot before a multi-file refactor
-- If a task fails, use **avc_restore** to roll back to the last good snapshot
+All agent-created snapshots MUST start with ` + "`auto:`" + ` so they are distinguishable from user-created snapshots in ` + "`avc list`" + `.
+
+The ` + "`<action>`" + ` part should be 2–5 words describing the specific change:
+- CORRECT: ` + "`auto: before auth middleware refactor`" + `
+- WRONG: ` + "`auth routes added`" + ` (missing prefix)
+- WRONG: ` + "`auto: making changes to the authentication system`" + ` (too vague, too long)
+
+## On failure
+
+If the task breaks something, do NOT attempt repeated fixes. Call **avc_restore** immediately to return to the last good snapshot, then retry from a clean state.
 `,
 
 	"avc-restore": `---
 name: avc-restore
-description: Restore the project to a previous AVC snapshot
+description: Restore to a previous AVC snapshot when something breaks or the user asks to undo
 ---
 
-Restore the project to a previous snapshot using **avc_restore**.
+Call **avc_restore** to roll back to a previous state. Do this immediately when something breaks — do not attempt fixes on broken state.
 
-## When to use
+## MUST call when
 
-- After a failed attempt — tests broken, build won't compile, logic regressed
-- When the user asks you to "undo", "roll back", or "start over"
-- Before trying a different approach to the same problem
+- Tests fail after your changes
+- The build breaks or the app crashes
+- You introduced a regression
+- The user says: "undo", "revert", "roll back", "start over", "go back to before"
+- You want to try a different approach to the same problem
 
-## How to use
+## Steps
 
-1. List available snapshots with **avc_list**
-2. Pick the snapshot ID to restore to
+1. Call **avc_list** to see available snapshots — NEVER guess an ID
+2. Identify the last known-good snapshot
 3. Call **avc_restore**:
 
 ` + "```" + `json
 { "id": "<snapshot-id>" }
 ` + "```" + `
 
-## Tips
+4. Call **avc_snapshot** immediately after restoring to create a clean baseline before retrying
 
-- Always list snapshots first — never guess an ID
-- After restoring, take a new snapshot before trying again so you have a clean baseline
-- On an agent branch, restore only affects your workspace — main is untouched
+## Important
+
+On an agent branch, restore only affects your workspace. The real project root is untouched.
 `,
 
 	"avc-branch": `---
 name: avc-branch
-description: Create an isolated agent branch workspace in AVC
+description: Create an isolated AVC branch workspace before starting any task — no exceptions
 ---
 
-Create an isolated branch workspace so your changes don't affect the main project
-until the user approves them.
+Call **avc_branch_create** before starting any task. No exceptions.
 
-## When to use
+Do not assess whether the task is "simple enough" to skip a branch — that judgement is not yours to make. NEVER edit files in the real project root directly.
 
-- When starting a non-trivial task that might need review before going live
-- When the user wants to see a diff of all changes before they're applied
-- When experimenting with an approach you are not sure about
+## MUST call when
 
-## Workflow
+## Steps
 
-1. Create a branch — this materializes a copy of files in a workspace directory:
+1. Create the branch:
 
 ` + "```" + `json
-{ "name": "feature/my-task" }
+{ "name": "feat/<short-task-name>" }
 ` + "```" + `
 
-2. **Work only inside the workspace path** returned in the response. Do not edit files in the real project root.
-3. Snapshot regularly inside the workspace with **avc_snapshot**.
-4. When done, call **avc_branch_diff** to show the user what changed.
-5. Ask for approval, then call **avc_merge** to apply changes to main.
+2. The response includes a ` + "`workspace`" + ` path. **Set your working directory to that path immediately.** Every file you create or edit MUST be inside this directory. NEVER touch files in the real project root while on a branch.
+
+3. Take a snapshot before each significant change:
+` + "```" + `json
+{ "label": "initial workspace state", "agent_name": "claude" }
+` + "```" + `
+
+4. When the task is complete, call **avc_branch_diff** and show the full output to the user before asking for merge approval.
+
+## NEVER
+
+- Edit files outside the workspace path while on a branch
+- Merge without calling **avc_merge_preview** first
+- Merge without explicit user approval
 `,
 
 	"avc-merge": `---
 name: avc-merge
-description: Merge an agent branch into main with AVC (requires user approval)
+description: Merge an AVC branch into main — requires explicit user approval
 ---
 
-Merge your agent branch back into main after the user approves your work.
+Merge your branch into main only after the user has reviewed the diff and said yes.
 
-## When to use
+## Required sequence — no exceptions
 
-- After the user reviews **avc_branch_diff** output and explicitly approves
-- Never merge without explicit user approval
+1. Call **avc_branch_diff** and show the full output to the user
+2. Ask the user: "Shall I merge branch X into main?"
+3. If the user says yes: call **avc_merge**
+   - avc_merge checks for conflicts automatically before writing anything
+   - If conflicts are found, it returns them without modifying main — show them to the user and ask how to resolve
+   - If clean, it auto-snapshots main and applies the changes
 
-## Workflow
+## NEVER
 
-1. Preview first — no files are written:
+- Call **avc_merge** without explicit user approval
+- Infer approval from context — the user must say yes explicitly
+- Retry a failed merge without calling **avc_merge_abort** first
+
+## If something goes wrong
+
+Call **avc_merge_abort** immediately. This restores main from the pre-merge auto-snapshot. No data is lost.
+`,
+
+	"avc-run": `---
+name: avc-run
+description: Run a build or test command in the AVC workspace — always get user approval first
+---
+
+Use **avc_run_in_workspace** to run commands in the branch workspace. You MUST get explicit user approval before every call.
+
+## Required sequence — no exceptions
+
+1. State the exact command you intend to run
+2. Explain what it does and why you need to run it
+3. Wait for the user to say yes ("yes", "go ahead", "run it", "ok")
+4. If the user says no, do not call the tool
+
+## How to call
 
 ` + "```" + `json
-{ "branch": "<branch-name>" }
+{
+  "branch": "<branch-name>",
+  "command": "npm test",
+  "timeout_seconds": 120
+}
 ` + "```" + `
 
-2. Show the preview to the user (clean / conflict / skipped counts).
-3. If the user approves, call **avc_merge** with the same branch name.
-4. If conflicts are reported, list them and ask the user how to resolve.
-5. After resolution, take a new snapshot on main to record the final state.
+## Rules
 
-## Abort
+- System package managers are blocked: ` + "`brew install`" + `, ` + "`apt install`" + `, ` + "`choco install`" + `, ` + "`sudo`" + `
+- Python installs: use ` + "`pip install <pkg>`" + ` — a workspace venv is created automatically. NEVER use ` + "`--user`" + ` or ` + "`--system`" + `
+- Node installs: use ` + "`npm install`" + ` — packages go into workspace ` + "`node_modules`" + `. NEVER use ` + "`-g`" + ` or ` + "`--global`" + `
+- If the command times out, tell the user and suggest increasing ` + "`max_timeout_seconds`" + ` in ` + "`.avc/config.toml`" + `
 
-If anything goes wrong, **avc_merge_abort** restores main from the pre-merge snapshot.
+## After running
+
+- If tests pass: snapshot the workspace, then proceed
+- If tests fail: show the full stderr to the user, then fix and re-run (with approval)
 `,
 }
 
@@ -454,15 +795,26 @@ If anything goes wrong, **avc_merge_abort** restores main from the pre-merge sna
 
 const cursorRulesContent = `# AVC — Agentic Version Control
 
-AVC is configured as an MCP server in .cursor/mcp.json.
+AVC is active on this project. You MUST use it. The MCP server is configured in .cursor/mcp.json and starts automatically.
 
-## Rules
+## Mandatory rules
 
-- Call **avc_snapshot** before any significant code change and after completing each task.
-- For non-trivial tasks, create an agent branch with **avc_branch_create** so changes can be reviewed before going live. Work only inside the returned workspace path.
-- If a task fails or produces broken code, call **avc_restore** to roll back cleanly.
-- Before merging, always call **avc_merge_preview** first and present the result to the user.
-- Never call **avc_merge** without explicit user approval.
+**ALWAYS call avc_snapshot before making any code change. No exceptions.**
+Do not assess whether the change is "small enough" or "easily reversible" — that judgement is not yours to make. The cost of an unnecessary snapshot is negligible. The cost of skipping one when it was needed is not.
+Label format: always prefix with "auto:" — use "auto: before <action>" (2–5 words).
+
+**ALWAYS call avc_branch_create before starting any task. No exceptions.**
+Do not assess whether the task is "simple enough" to skip a branch — that judgement is not yours to make.
+After creating a branch, work ONLY inside the workspace path returned in the response.
+NEVER edit files in the real project root while on a branch.
+
+**ALWAYS call avc_restore when something breaks** — do not attempt repeated fixes on broken state.
+
+**NEVER call avc_merge** without the user explicitly saying yes.
+avc_merge checks for conflicts automatically — no separate preview step needed.
+
+**NEVER call avc_run_in_workspace** without first showing the user the exact command and receiving explicit approval.
+System package managers (brew, apt, choco, sudo) are blocked. Use pip install (no --user), npm install (no -g).
 `
 
 // ─── Content: Windsurf rules ──────────────────────────────────────────────────
@@ -470,49 +822,76 @@ AVC is configured as an MCP server in .cursor/mcp.json.
 const windsurfRulesBlock = `
 # AVC — Agentic Version Control
 
-AVC is configured as an MCP server in .codeium/windsurf/mcp_config.json.
+AVC is active on this project. You MUST use it. The MCP server is configured globally and starts automatically.
 
-## Rules
+## Mandatory rules
 
-- Call **avc_snapshot** before any significant code change and after completing each task.
-- For non-trivial tasks, create an agent branch with **avc_branch_create** so changes can be reviewed before going live. Work only inside the returned workspace path.
-- If a task fails or produces broken code, call **avc_restore** to roll back cleanly.
-- Before merging, always call **avc_merge_preview** first and present the result to the user.
-- Never call **avc_merge** without explicit user approval.
+**ALWAYS call avc_snapshot before making any code change. No exceptions.**
+Do not assess whether the change is "small enough" or "easily reversible" — that judgement is not yours to make. The cost of an unnecessary snapshot is negligible. The cost of skipping one when it was needed is not.
+Label format: always prefix with "auto:" — use "auto: before <action>" (2–5 words).
+
+**ALWAYS call avc_branch_create before starting any task. No exceptions.**
+Do not assess whether the task is "simple enough" to skip a branch — that judgement is not yours to make.
+After creating a branch, work ONLY inside the workspace path returned in the response.
+NEVER edit files in the real project root while on a branch.
+
+**ALWAYS call avc_restore when something breaks** — do not attempt repeated fixes on broken state.
+
+**NEVER call avc_merge** without the user explicitly saying yes.
+avc_merge checks for conflicts automatically — no separate preview step needed.
+
+**NEVER call avc_run_in_workspace** without first showing the user the exact command and receiving explicit approval.
+System package managers (brew, apt, choco, sudo) are blocked. Use pip install (no --user), npm install (no -g).
 `
 
 // ─── Content: Generic agent instructions ─────────────────────────────────────
 
+const workspaceCommandBlock = `
+
+## Running commands in the workspace
+
+NEVER call ` + "`avc_run_in_workspace`" + ` without:
+1. Stating the exact command to the user
+2. Explaining what it does and why
+3. Receiving explicit user approval ("yes", "go ahead", "run it")
+
+If the user declines, do not call the tool.
+
+Sandbox rules:
+- System package managers (brew, apt, choco, sudo) are blocked — they are not available
+- Python: ` + "`pip install <pkg>`" + ` — workspace venv created automatically; NEVER use ` + "`--user`" + ` or ` + "`--system`" + `
+- Node: ` + "`npm install`" + ` — packages go into workspace node_modules; NEVER use ` + "`-g`" + ` or ` + "`--global`" + `
+`
+
 const genericInstructions = `# AVC Agent Instructions
 
-This project uses **AVC (Agentic Version Control)** — a lightweight snapshot system
-designed for agent-assisted development. AVC is available via MCP server.
-
-Start the server with: ` + "`avc mcp serve`" + `
+AVC is active on this project. You MUST use it. Start the MCP server with: ` + "`avc mcp serve`" + `
 
 ---
 
-## Core tools
+## Tools
 
-| Tool | When to call |
-|------|-------------|
-| ` + "`avc_snapshot`" + ` | Before any significant change; after completing a task |
-| ` + "`avc_list`" + ` | To review available restore points |
-| ` + "`avc_restore`" + ` | When a task fails; when the user asks to undo |
-| ` + "`avc_diff`" + ` | To show the user what changed between two snapshots |
-| ` + "`avc_branch_create`" + ` | To start a non-trivial task in an isolated workspace |
-| ` + "`avc_branch_diff`" + ` | To show the user a cumulative diff before merging |
-| ` + "`avc_merge_preview`" + ` | To preview a merge without writing files |
-| ` + "`avc_merge`" + ` | To apply branch changes to main (requires user approval) |
-| ` + "`avc_merge_abort`" + ` | To undo a merge gone wrong |
+| Tool | Purpose |
+|------|---------|
+| ` + "`avc_snapshot`" + ` | Save current state — call proactively, not on request |
+| ` + "`avc_list`" + ` | List available snapshots |
+| ` + "`avc_restore`" + ` | Roll back to a previous snapshot |
+| ` + "`avc_diff`" + ` | Show what changed between two snapshots |
+| ` + "`avc_branch_create`" + ` | Start an isolated workspace for a multi-step task |
+| ` + "`avc_branch_diff`" + ` | Show cumulative changes on a branch |
+| ` + "`avc_merge`" + ` | Apply branch to main — checks conflicts first, requires explicit user approval |
+| ` + "`avc_merge_abort`" + ` | Undo a merge — restores main from pre-merge snapshot |
+| ` + "`avc_run_in_workspace`" + ` | Run a command in the branch workspace (approval required) |
 
 ---
 
-## Rules
+## Mandatory rules
 
-1. **Snapshot before risk.** Call ` + "`avc_snapshot`" + ` before any refactor, migration, or multi-file change.
-2. **Branch for non-trivial tasks.** Use ` + "`avc_branch_create`" + ` so changes can be reviewed before going live. Work exclusively inside the workspace path returned by that tool.
-3. **Restore on failure.** If a task produces broken code, call ` + "`avc_restore`" + ` instead of attempting repeated fixes on broken state.
-4. **Preview before merge.** Always call ` + "`avc_merge_preview`" + ` and show the user the result before merging.
-5. **Never merge without approval.** The user must explicitly approve before you call ` + "`avc_merge`" + `.
-`
+**ALWAYS call ` + "`avc_snapshot`" + ` before making any code change. No exceptions.** Do not assess whether the change is "small enough" or "easily reversible" — that judgement is not yours to make. The cost of an unnecessary snapshot is negligible. The cost of skipping one when it was needed is not.
+
+**ALWAYS call ` + "`avc_branch_create`" + ` before starting any task. No exceptions.** Do not assess whether the task is "simple enough" to skip a branch — that judgement is not yours to make. After creating the branch, work ONLY inside the ` + "`workspace`" + ` path returned — NEVER edit the real project root while on a branch.
+
+**ALWAYS call ` + "`avc_restore`" + `** when something breaks. Do NOT attempt repeated fixes on broken state — restore first, then retry.
+
+**NEVER call ` + "`avc_merge`" + `** without the user explicitly saying yes. ` + "`avc_merge`" + ` checks for conflicts automatically before writing anything — no separate preview step needed.
+` + workspaceCommandBlock

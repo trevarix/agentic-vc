@@ -1,6 +1,105 @@
 import * as vscode from 'vscode';
-import { getSnapshotInfo, resolveProjectPath } from './cliProxy';
+import { SnapshotFile, getSnapshotInfo, resolveProjectPath } from './cliProxy';
 import { makeNonce, escapeHtml, formatBytes, formatTimestamp, buildCsp, BASE_STYLES } from './webviewUtil';
+
+/** Tree node used to build the folder hierarchy. */
+interface TreeNode {
+  name: string;
+  path: string;
+  children: Map<string, TreeNode>;
+  file?: SnapshotFile;
+}
+
+/** Build a folder tree from flat file paths (slash-separated). */
+function buildTree(files: SnapshotFile[]): TreeNode {
+  const root: TreeNode = { name: '', path: '', children: new Map() };
+  for (const f of files) {
+    const parts = f.path.split('/').filter(Boolean);
+    let current = root;
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      if (!current.children.has(part)) {
+        current.children.set(part, {
+          name: part,
+          path: parts.slice(0, i + 1).join('/'),
+          children: new Map(),
+        });
+      }
+      current = current.children.get(part)!;
+    }
+    current.file = f;
+  }
+  return root;
+}
+
+/** Count total files under a node. */
+function countFiles(node: TreeNode): number {
+  let count = node.file ? 1 : 0;
+  for (const child of node.children.values()) {
+    count += countFiles(child);
+  }
+  return count;
+}
+
+/** Pick a Unicode glyph based on file extension. */
+function fileIcon(name: string): string {
+  const ext = name.split('.').pop()?.toLowerCase() ?? '';
+  const map: Record<string, string> = {
+    html: '🌐', htm: '🌐',
+    css: '🎨', scss: '🎨', sass: '🎨',
+    js: '📜', jsx: '📜', ts: '📜', tsx: '📜',
+    json: '📋',
+    md: '📝',
+    py: '🐍',
+    go: '🐹',
+    png: '🖼️', jpg: '🖼️', jpeg: '🖼️', gif: '🖼️', svg: '🖼️', webp: '🖼️',
+    pdf: '📕',
+    zip: '📦', tar: '📦', gz: '📦',
+    sh: '⚙️', bash: '⚙️',
+    yaml: '⚙️', yml: '⚙️', toml: '⚙️',
+  };
+  return map[ext] ?? '📄';
+}
+
+/** Recursively render a tree node and its children as HTML. */
+function renderTree(node: TreeNode, snapshotId: string, depth: number): string {
+  const sorted = [...node.children.values()].sort((a, b) => {
+    const aIsDir = !a.file;
+    const bIsDir = !b.file;
+    if (aIsDir && !bIsDir) return -1;
+    if (!aIsDir && bIsDir) return 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  let html = '';
+  for (const child of sorted) {
+    const isFolder = !child.file;
+    const indent = depth * 16 + 4;
+
+    if (isFolder) {
+      const fileCount = countFiles(child);
+      html += `<div class="tree-folder collapsed">
+        <div class="tree-row folder-row" style="padding-left:${indent}px">
+          <span class="tree-chevron">▼</span>
+          <span class="folder-icon">📁</span>
+          <span class="tree-name">${escapeHtml(child.name)}</span>
+          <span class="tree-meta">${fileCount} file${fileCount === 1 ? '' : 's'}</span>
+        </div>
+        <div class="tree-children">${renderTree(child, snapshotId, depth + 1)}</div>
+      </div>`;
+    } else if (child.file) {
+      const f = child.file;
+      html += `<div class="tree-row file-row" style="padding-left:${indent + 14}px">
+        <span class="file-icon">${fileIcon(child.name)}</span>
+        <span class="tree-name">${escapeHtml(child.name)}</span>
+        <span class="tree-size">${formatBytes(f.size)}</span>
+        <span class="tree-hash">${escapeHtml(f.hash.slice(0, 8))}</span>
+        <button class="restore-btn" data-path="${escapeHtml(f.path)}">Restore</button>
+      </div>`;
+    }
+  }
+  return html;
+}
 
 /** Opens a webview panel showing detailed info for a snapshot. */
 export async function showInfo(snapshotId: string, label: string): Promise<void> {
@@ -25,16 +124,8 @@ export async function showInfo(snapshotId: string, label: string): Promise<void>
     const n = makeNonce();
     const csp = buildCsp(panel.webview, n);
 
-    const filesHtml = detail.files
-      .map(
-        (f) => `<tr>
-          <td class="file-path-cell">${escapeHtml(f.path)}</td>
-          <td class="size-cell">${formatBytes(f.size)}</td>
-          <td class="hash-cell">${escapeHtml(f.hash.slice(0, 8))}</td>
-          <td><button class="restore-btn" data-path="${escapeHtml(f.path)}">Restore</button></td>
-        </tr>`
-      )
-      .join('');
+    const tree = buildTree(detail.files);
+    const treeHtml = renderTree(tree, detail.id, 0);
 
     panel.webview.html = `<!DOCTYPE html>
 <html lang="en">
@@ -69,29 +160,77 @@ export async function showInfo(snapshotId: string, label: string): Promise<void>
       white-space: pre-wrap;
     }
 
-    .file-table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 12px;
+    /* File tree */
+    .file-tree {
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: 4px;
       margin-top: 8px;
+      overflow: hidden;
+      font-size: 12px;
     }
-    .file-table th {
-      text-align: left;
-      padding: 4px 8px;
-      border-bottom: 2px solid var(--vscode-panel-border);
-      color: var(--vscode-descriptionForeground);
-      font-size: 11px;
-      text-transform: uppercase;
-    }
-    .file-table td {
+    .tree-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
       padding: 3px 8px;
+      min-height: 24px;
       border-bottom: 1px solid var(--vscode-panel-border);
     }
-    .file-table tr:hover { background: var(--vscode-list-hoverBackground); }
-    .file-path-cell { word-break: break-all; }
-    .size-cell { white-space: nowrap; text-align: right; color: var(--vscode-descriptionForeground); }
-    .hash-cell { font-family: monospace; color: var(--vscode-descriptionForeground); }
+    .tree-row:last-child { border-bottom: none; }
+    .tree-row:hover { background: var(--vscode-list-hoverBackground); }
+
+    .folder-row {
+      cursor: pointer;
+      user-select: none;
+    }
+    .folder-row .tree-name { font-weight: bold; }
+
+    .tree-chevron {
+      width: 12px;
+      flex-shrink: 0;
+      text-align: center;
+      font-size: 9px;
+      color: var(--vscode-descriptionForeground);
+      transition: transform 0.1s ease-in-out;
+      display: inline-block;
+    }
+    .folder-icon, .file-icon {
+      width: 16px;
+      flex-shrink: 0;
+      text-align: center;
+    }
+    .tree-name {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .tree-size {
+      flex-shrink: 0;
+      width: 70px;
+      text-align: right;
+      color: var(--vscode-descriptionForeground);
+      font-size: 11px;
+    }
+    .tree-hash {
+      flex-shrink: 0;
+      width: 70px;
+      font-family: monospace;
+      color: var(--vscode-descriptionForeground);
+      font-size: 11px;
+    }
+    .tree-meta {
+      color: var(--vscode-descriptionForeground);
+      font-size: 11px;
+      margin-left: auto;
+    }
+
+    /* Collapsed state — children hidden, chevron rotated */
+    .tree-folder.collapsed > .tree-children { display: none; }
+    .tree-folder.collapsed .tree-chevron { transform: rotate(-90deg); }
+
     .restore-btn {
+      flex-shrink: 0;
       background: var(--vscode-button-secondaryBackground);
       color: var(--vscode-button-secondaryForeground);
       border: 1px solid var(--vscode-panel-border);
@@ -126,19 +265,21 @@ export async function showInfo(snapshotId: string, label: string): Promise<void>
   ${detail.notes ? `<div class="notes-block">${escapeHtml(detail.notes)}</div>` : ''}
 
   <h3>Files (${detail.files.length})</h3>
-  <table class="file-table">
-    <thead>
-      <tr><th>Path</th><th>Size</th><th>Hash</th><th></th></tr>
-    </thead>
-    <tbody>
-      ${filesHtml}
-    </tbody>
-  </table>
+  <div class="file-tree">${treeHtml}</div>
 
   <script nonce="${n}">
-    const vscode = acquireVsCodeApi();
+    var vscode = acquireVsCodeApi();
+
+    // Attach click handlers to all folder rows for collapse/expand.
+    document.querySelectorAll('.folder-row').forEach(function (row) {
+      row.addEventListener('click', function () {
+        row.parentElement.classList.toggle('collapsed');
+      });
+    });
+
     document.querySelectorAll('.restore-btn').forEach(function (btn) {
-      btn.addEventListener('click', function () {
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
         vscode.postMessage({
           command: 'restoreFile',
           snapshotId: '${escapeHtml(detail.id)}',
@@ -150,7 +291,6 @@ export async function showInfo(snapshotId: string, label: string): Promise<void>
 </body>
 </html>`;
 
-    // Handle messages from webview.
     panel.webview.onDidReceiveMessage(
       (message) => {
         if (message.command === 'restoreFile') {

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { SnapshotProvider, SnapshotItem } from './sidebar';
 import { showDiff, showDiffResult } from './diffViewer';
 import { showInfo } from './infoViewer';
@@ -6,6 +7,8 @@ import { showTimeline } from './timelineViewer';
 import { AutoSnapshotManager } from './autoSnapshot';
 import { AvcScmProvider } from './scmProvider';
 import { GutterAnnotationProvider } from './gutterAnnotations';
+import { SnapshotContentProvider, SNAPSHOT_SCHEME, snapshotUri } from './snapshotContentProvider';
+import { showFileHistory } from './fileHistoryViewer';
 import {
   createSnapshot,
   restoreSnapshot,
@@ -38,8 +41,14 @@ export function activate(context: vscode.ExtensionContext): void {
   branchBar.show();
   context.subscriptions.push(branchBar);
 
+  // Working-tree change indicator (left side, lowest priority of the three).
+  const changeBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 8);
+  changeBar.command = 'avc.diffWithLatest';
+  changeBar.tooltip = 'AVC: Changes since last snapshot — click to view diff';
+  context.subscriptions.push(changeBar);
+
   function updateStatusBar(): void {
-    const count = provider.getChildren().length;
+    const count = provider.getVisibleSnapshotCount();
     snapshotBar.text = `$(history) AVC: ${count} snapshot${count === 1 ? '' : 's'}`;
     branchBar.text = `$(git-branch) ${provider.activeBranch}`;
   }
@@ -61,6 +70,24 @@ export function activate(context: vscode.ExtensionContext): void {
   // ─── Gutter annotations ────────────────────────────────────────────────────
   const gutterProvider = new GutterAnnotationProvider();
   context.subscriptions.push(gutterProvider);
+
+  // ─── Snapshot file content provider (for native diff editor) ──────────────
+  const contentProvider = new SnapshotContentProvider();
+  context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider(SNAPSHOT_SCHEME, contentProvider)
+  );
+
+  // Update change-stats status bar from SCM provider events.
+  context.subscriptions.push(
+    scmProvider.onDidUpdate((stats) => {
+      if (stats.total === 0) {
+        changeBar.hide();
+        return;
+      }
+      changeBar.text = `$(diff) +${stats.added} ~${stats.modified} -${stats.deleted}`;
+      changeBar.show();
+    })
+  );
 
   /** Refresh sidebar + SCM together. */
   async function refreshAll(): Promise<void> {
@@ -152,7 +179,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
     // ── View diff (adjacent snapshots) ─────────────────────────────────────────
     vscode.commands.registerCommand('avc.viewDiff', async (item: SnapshotItem) => {
-      const snapshots = provider.getChildren();
+      const snapshots = provider.getAllVisibleSnapshotItems();
       const idx = snapshots.findIndex((s) => s.snapshot.id === item.snapshot.id);
       const prev = snapshots[idx + 1];
 
@@ -381,7 +408,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
     // ── Compare two snapshots ──────────────────────────────────────────────────
     vscode.commands.registerCommand('avc.compareTwoSnapshots', async () => {
-      const snapshots = provider.getChildren();
+      const snapshots = provider.getAllVisibleSnapshotItems();
       if (snapshots.length < 2) {
         vscode.window.showInformationMessage('AVC: Need at least 2 snapshots to compare.');
         return;
@@ -452,6 +479,113 @@ export function activate(context: vscode.ExtensionContext): void {
 
     // ── Toggle gutter annotations ──────────────────────────────────────────────
     vscode.commands.registerCommand('avc.toggleAnnotations', () => gutterProvider.toggle()),
+
+    // ── Open workspace in new window ───────────────────────────────────────────
+    vscode.commands.registerCommand('avc.openWorkspace', async () => {
+      const projectPath = resolveProjectPath();
+      if (!projectPath) {
+        vscode.window.showErrorMessage('AVC: No project path configured.');
+        return;
+      }
+      try {
+        const branches = await listBranches(projectPath);
+        const withWorkspace = branches.filter((b) => b.workspace);
+
+        if (withWorkspace.length === 0) {
+          vscode.window.showInformationMessage(
+            'AVC: No agent branches with workspaces. Create a branch first.'
+          );
+          return;
+        }
+
+        // If there is exactly one non-main branch, open it directly.
+        // Otherwise let the user pick.
+        let target = withWorkspace.find((b) => b.active) ?? null;
+        if (!target || withWorkspace.length > 1) {
+          const picked = await vscode.window.showQuickPick(
+            withWorkspace.map((b) => ({
+              label: b.active ? `$(check) ${b.name}` : b.name,
+              description: b.active ? 'active' : '',
+              workspace: b.workspace,
+            })),
+            { placeHolder: 'Select a branch workspace to open' }
+          );
+          if (!picked) return;
+          target = { workspace: picked.workspace } as typeof branches[0];
+        }
+
+        const uri = vscode.Uri.file(target.workspace);
+        await vscode.commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: true });
+      } catch (err) {
+        vscode.window.showErrorMessage(`AVC: Open workspace failed — ${(err as Error).message}`);
+      }
+    }),
+
+    // ── Show file history (right-click in explorer or active editor) ───────────
+    vscode.commands.registerCommand('avc.showFileHistory', async (uri?: vscode.Uri) => {
+      const projectPath = resolveProjectPath();
+      if (!projectPath) {
+        vscode.window.showErrorMessage('AVC: No project path configured.');
+        return;
+      }
+      
+      const target = uri ?? vscode.window.activeTextEditor?.document.uri;
+      if (!target) {
+        vscode.window.showInformationMessage('AVC: No file selected.');
+        return;
+      }
+      const relativePath = path.relative(projectPath, target.fsPath).split(path.sep).join('/');
+      if (relativePath.startsWith('..')) {
+        vscode.window.showInformationMessage('AVC: File is outside the project.');
+        return;
+      }
+      await showFileHistory(relativePath);
+    }),
+
+    // ── Open a file from a snapshot in a read-only editor tab ─────────────────
+    vscode.commands.registerCommand('avc.openFileFromSnapshot', async (
+      snapshotId: string,
+      filePath: string,
+      label?: string
+    ) => {
+      const uri = snapshotUri(snapshotId, filePath, label);
+      const doc = await vscode.workspace.openTextDocument(uri);
+      await vscode.window.showTextDocument(doc, { preview: false });
+    }),
+
+    // ── Diff a single file from a snapshot against the current working tree ───
+    vscode.commands.registerCommand('avc.diffFileWithCurrent', async (
+      snapshotId: string,
+      filePath: string,
+      label?: string
+    ) => {
+      const projectPath = resolveProjectPath();
+      if (!projectPath) return;
+      const left = snapshotUri(snapshotId, filePath, label);
+      const right = vscode.Uri.file(path.join(projectPath, filePath));
+      const title = `${filePath} (${label ?? snapshotId.slice(0, 8)} ↔ Working Tree)`;
+      await vscode.commands.executeCommand('vscode.diff', left, right, title);
+    }),
+
+    // ── Quick diff: latest snapshot vs working tree ───────────────────────────
+    vscode.commands.registerCommand('avc.diffWithLatest', async () => {
+      const projectPath = resolveProjectPath();
+      if (!projectPath) {
+        vscode.window.showErrorMessage('AVC: No project path configured.');
+        return;
+      }
+      const latest = provider.getLatestSnapshot();
+      if (!latest) {
+        vscode.window.showInformationMessage('AVC: No snapshots yet.');
+        return;
+      }
+      try {
+        const result = await getDiffCurrent(projectPath, latest.id);
+        showDiffResult(result, latest.label, 'Working Tree');
+      } catch (err) {
+        vscode.window.showErrorMessage(`AVC: Diff failed — ${(err as Error).message}`);
+      }
+    }),
   );
 }
 

@@ -2,6 +2,8 @@
 package merge
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -379,7 +381,9 @@ func summarise(mergeID string, agentBranch, _ *db.Branch, files []FileResult) *R
 	return r
 }
 
-// newID generates a short prefixed unique identifier.
+// newID generates a short prefixed unique identifier using crypto/rand.
 func newID(prefix string) string {
-	return prefix + "-" + fmt.Sprintf("%d", time.Now().UnixNano())
+	b := make([]byte, 6)
+	rand.Read(b)
+	return prefix + "-" + hex.EncodeToString(b)
 }
