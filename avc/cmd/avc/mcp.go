@@ -1,6 +1,8 @@
 package avc
 
 import (
+	"os"
+
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/mcp"
 	"github.com/spf13/cobra"
 )
@@ -32,9 +34,17 @@ func init() {
 }
 
 func runMCPServe(cmd *cobra.Command, args []string) error {
-	projectPath, err := requireInitializedProject()
-	if err != nil {
-		return err
+	// AVC_PROJECT allows Claude Desktop (and other launchers that don't set a
+	// meaningful CWD) to specify the project root explicitly via the env block
+	// in their MCP config.
+	projectPath := os.Getenv("AVC_PROJECT")
+	if projectPath == "" {
+		// Best-effort CWD walk — if no project is found, start in projectless
+		// mode so the server stays alive. Tool calls will return a clear error
+		// directing the user to run `avc init`. This prevents the server from
+		// exiting when launched globally (e.g. from ~/.claude/settings.json)
+		// where CWD may not be an AVC project.
+		projectPath, _ = requireInitializedProject()
 	}
 	return mcp.Serve(projectPath, mcpCompact)
 }
