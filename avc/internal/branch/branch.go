@@ -11,7 +11,9 @@ import (
 
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/config"
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
+	"github.com/SkillMythOrg/agentic-vc/avc/internal/fileutil"
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/restore"
+	"github.com/SkillMythOrg/agentic-vc/avc/internal/statcache"
 )
 
 const workspacesDir = "workspaces"
@@ -25,13 +27,12 @@ func WorkspacePath(projectRoot, branchName string) string {
 	return filepath.Join(projectRoot, ".avc", workspacesDir, branchName)
 }
 
-// MaterializeWorkspace populates the workspace directory from the branch's base
-// snapshot. Files are written from the object store into the workspace directory.
-// If the workspace already exists it is overwritten (idempotent).
+// MaterializeWorkspace populates the workspace directory for a branch.
+// If the branch has a base snapshot, files are restored from the object store.
+// If there is no base snapshot (first branch on a new project), files are copied
+// directly from the project root and a warm stat cache is written so that the
+// first avc_snapshot on the branch is a stat-only pass.
 func MaterializeWorkspace(projectRoot string, b *db.Branch) error {
-	if b.BaseSnapshotID == "" {
-		return nil // nothing to materialize
-	}
 	ws := WorkspacePath(projectRoot, b.Name)
 	if ws == "" {
 		return nil // main has no workspace
@@ -39,14 +40,52 @@ func MaterializeWorkspace(projectRoot string, b *db.Branch) error {
 	if err := os.MkdirAll(ws, 0755); err != nil {
 		return fmt.Errorf("create workspace dir: %w", err)
 	}
-	if _, err := restore.RestoreToDir(projectRoot, b.BaseSnapshotID, ws); err != nil {
-		return fmt.Errorf("materialize workspace: %w", err)
+	if b.BaseSnapshotID != "" {
+		if _, err := restore.RestoreToDir(projectRoot, b.BaseSnapshotID, ws); err != nil {
+			return fmt.Errorf("materialize workspace: %w", err)
+		}
+		return nil
 	}
+	// No base snapshot — copy project root files directly into the workspace.
+	return copyToWorkspace(projectRoot, ws, b.Name)
+}
+
+// copyToWorkspace copies all tracked files from projectRoot into ws and writes
+// a warm stat cache so the first snapshot on the branch skips re-hashing.
+func copyToWorkspace(projectRoot, ws, branchName string) error {
+	ignore, err := fileutil.LoadIgnoreRules(projectRoot)
+	if err != nil {
+		return fmt.Errorf("load ignore rules: %w", err)
+	}
+	paths, err := fileutil.WalkProject(projectRoot, ignore)
+	if err != nil {
+		return fmt.Errorf("walk project: %w", err)
+	}
+
+	cache := statcache.Empty()
+	for _, absPath := range paths {
+		rel, _ := filepath.Rel(projectRoot, absPath)
+		rel = filepath.ToSlash(rel)
+
+		data, hash, err := fileutil.ReadAndHash(absPath)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", rel, err)
+		}
+		dest := filepath.Join(ws, filepath.FromSlash(rel))
+		if err := fileutil.WriteFile(dest, data); err != nil {
+			return fmt.Errorf("write %s: %w", rel, err)
+		}
+		if info, err := os.Stat(dest); err == nil {
+			cache.Set(rel, info, hash)
+		}
+	}
+
+	_ = cache.SaveToPath(statcache.WorkspaceCachePath(projectRoot, branchName))
 	return nil
 }
 
-// RemoveWorkspace deletes the workspace directory for a branch. No-op if the
-// workspace does not exist.
+// RemoveWorkspace deletes the workspace directory and its stat cache for a branch.
+// No-op if the workspace does not exist.
 func RemoveWorkspace(projectRoot, branchName string) error {
 	ws := WorkspacePath(projectRoot, branchName)
 	if ws == "" {
@@ -55,6 +94,8 @@ func RemoveWorkspace(projectRoot, branchName string) error {
 	if err := os.RemoveAll(ws); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove workspace: %w", err)
 	}
+	cachePath := statcache.WorkspaceCachePath(projectRoot, branchName)
+	_ = os.Remove(cachePath)
 	return nil
 }
 
@@ -87,11 +128,11 @@ func Create(projectRoot, name, baseSnapshotID string) (*db.Branch, error) {
 		if err != nil {
 			return nil, fmt.Errorf("main branch not found: %w", err)
 		}
-		head, err := store.GetHeadSnapshot(mainBranch.ID)
-		if err != nil {
-			return nil, fmt.Errorf("main has no snapshots to branch from; create a snapshot first")
+		if head, err := store.GetHeadSnapshot(mainBranch.ID); err == nil {
+			baseSnapshotID = head.ID
 		}
-		baseSnapshotID = head.ID
+		// If main has no snapshots, leave baseSnapshotID = "" and materialize
+		// the workspace directly from the project root files.
 	} else {
 		if _, err := store.GetSnapshot(baseSnapshotID); err != nil {
 			return nil, fmt.Errorf("snapshot '%s' not found", baseSnapshotID)

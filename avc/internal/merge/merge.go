@@ -38,7 +38,7 @@ type Result struct {
 
 // Preview computes the merge plan without writing any files or recording a merge.
 func Preview(projectRoot, branchName string) (*Result, error) {
-	files, agentBranch, mainBranch, err := buildPlan(projectRoot, branchName)
+	files, _, agentBranch, mainBranch, err := buildPlan(projectRoot, branchName)
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +50,7 @@ func Preview(projectRoot, branchName string) (*Result, error) {
 // If there are conflicts the files are written with conflict markers and status is "conflicts".
 func Merge(projectRoot, branchName string) (*Result, error) {
 	// Phase 1: build the plan (opens and closes its own DB connection).
-	files, agentBranch, mainBranch, err := buildPlan(projectRoot, branchName)
+	files, resolvedBaseID, agentBranch, mainBranch, err := buildPlan(projectRoot, branchName)
 	if err != nil {
 		return nil, err
 	}
@@ -91,7 +91,7 @@ func Merge(projectRoot, branchName string) (*Result, error) {
 		ID:             mergeID,
 		ProjectID:      proj.ID,
 		BranchID:       agentBranch.ID,
-		BaseSnapshotID: agentBranch.BaseSnapshotID,
+		BaseSnapshotID: resolvedBaseID,
 		MainSnapshotID: mainSnap.ID,
 		HeadSnapshotID: headSnap.ID,
 		Status:         "in_progress",
@@ -217,54 +217,69 @@ func Abort(projectRoot string) error {
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
-// buildPlan computes the three-way merge file list.
-// It opens and closes its own DB connection.
-func buildPlan(projectRoot, branchName string) ([]FileResult, *db.Branch, *db.Branch, error) {
+// buildPlan computes the three-way merge file list and returns the resolved base
+// snapshot ID (which may differ from agentBranch.BaseSnapshotID when the branch
+// was created before any main snapshot existed).
+func buildPlan(projectRoot, branchName string) ([]FileResult, string, *db.Branch, *db.Branch, error) {
 	store, err := db.Open(projectRoot)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, "", nil, nil, err
 	}
 	defer store.Close()
 
 	proj, err := store.GetProject(projectRoot)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, "", nil, nil, err
 	}
 
 	mainBranch, err := store.EnsureMainBranch(proj.ID)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, "", nil, nil, err
 	}
 
 	agentBranch, err := store.GetBranchByName(proj.ID, branchName)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("branch '%s' not found", branchName)
-	}
-	if agentBranch.BaseSnapshotID == "" {
-		return nil, nil, nil, fmt.Errorf("branch '%s' has no base snapshot — cannot merge", branchName)
+		return nil, "", nil, nil, fmt.Errorf("branch '%s' not found", branchName)
 	}
 
 	headSnap, err := store.GetHeadSnapshot(agentBranch.ID)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("branch '%s' has no snapshots to merge", branchName)
+		return nil, "", nil, nil, fmt.Errorf("branch '%s' has no snapshots to merge", branchName)
 	}
 
-	mainHead, err := store.GetHeadSnapshot(mainBranch.ID)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("main branch has no snapshots")
+	// Resolve the merge base: use branch.BaseSnapshotID when set (normal case),
+	// or fall back to the branch's oldest snapshot when the branch was created
+	// before any main snapshot existed.
+	baseSnapID := agentBranch.BaseSnapshotID
+	if baseSnapID == "" {
+		oldest, err := store.GetOldestSnapshot(agentBranch.ID)
+		if err != nil {
+			return nil, "", nil, nil, fmt.Errorf("branch '%s' has no snapshots to use as merge base", branchName)
+		}
+		baseSnapID = oldest.ID
 	}
 
-	baseFiles, err := store.GetSnapshotFiles(agentBranch.BaseSnapshotID)
+	baseFiles, err := store.GetSnapshotFiles(baseSnapID)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, "", nil, nil, err
 	}
-	mainFiles, err := store.GetSnapshotFiles(mainHead.ID)
-	if err != nil {
-		return nil, nil, nil, err
+
+	// Resolve main state: use HEAD snapshot when available, else treat main as
+	// identical to the base (no changes happened on main since branching, so all
+	// branch edits are clean merges with no conflicts).
+	var mainFiles []*db.File
+	if mainHead, err := store.GetHeadSnapshot(mainBranch.ID); err == nil {
+		mainFiles, err = store.GetSnapshotFiles(mainHead.ID)
+		if err != nil {
+			return nil, "", nil, nil, err
+		}
+	} else {
+		mainFiles = baseFiles
 	}
+
 	branchFiles, err := store.GetSnapshotFiles(headSnap.ID)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, "", nil, nil, err
 	}
 
 	// Build hash maps keyed by relative path.
@@ -313,7 +328,7 @@ func buildPlan(projectRoot, branchName string) ([]FileResult, *db.Branch, *db.Br
 		})
 	}
 
-	return files, agentBranch, mainBranch, nil
+	return files, baseSnapID, agentBranch, mainBranch, nil
 }
 
 // fileMap converts a slice of File records to a path→hash map.
