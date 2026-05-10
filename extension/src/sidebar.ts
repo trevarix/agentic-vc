@@ -5,7 +5,7 @@ import { formatBytes } from './webviewUtil';
 /** A single snapshot entry shown in the sidebar tree. */
 export class SnapshotItem extends vscode.TreeItem {
   constructor(public readonly snapshot: Snapshot) {
-    super(snapshot.label, vscode.TreeItemCollapsibleState.None);
+    super(snapshot.label, vscode.TreeItemCollapsibleState.Collapsed);
 
     const date = new Date(snapshot.timestamp * 1000).toLocaleString();
     this.description = date;
@@ -21,10 +21,28 @@ export class SnapshotItem extends vscode.TreeItem {
 
     this.contextValue = 'snapshot';
     this.iconPath = new vscode.ThemeIcon('history');
+    // Note: no this.command — clicking a snapshot row should toggle expand,
+    // not auto-trigger an action. Use the action child rows instead.
+  }
+}
+
+/** A button-like action row that appears beneath an expanded snapshot. */
+export class ActionItem extends vscode.TreeItem {
+  constructor(
+    label: string,
+    iconId: string,
+    commandId: string,
+    parent: SnapshotItem,
+    tooltip?: string
+  ) {
+    super(label, vscode.TreeItemCollapsibleState.None);
+    this.iconPath = new vscode.ThemeIcon(iconId);
+    this.tooltip = tooltip ?? label;
+    this.contextValue = 'snapshotAction';
     this.command = {
-      command: 'avc.viewInfo',
-      title: 'View Details',
-      arguments: [this],
+      command: commandId,
+      title: label,
+      arguments: [parent],
     };
   }
 }
@@ -39,7 +57,7 @@ export class GroupItem extends vscode.TreeItem {
   }
 }
 
-type SidebarItem = GroupItem | SnapshotItem;
+type SidebarItem = GroupItem | SnapshotItem | ActionItem;
 
 /** Bucket name for a snapshot's timestamp. */
 function bucketFor(timestamp: number, now: Date): string {
@@ -139,10 +157,27 @@ export class SnapshotProvider implements vscode.TreeDataProvider<SidebarItem> {
   }
 
   getChildren(element?: SidebarItem): SidebarItem[] {
-    // Children of a group: its snapshots.
+    // Children of a date-bucket group: its snapshots.
     if (element instanceof GroupItem) {
       return element.snapshots.map((s) => new SnapshotItem(s));
     }
+
+    // Children of a snapshot: action rows (Restore / Diff / Delete / etc.).
+    if (element instanceof SnapshotItem) {
+      return [
+        new ActionItem('View Details', 'info', 'avc.viewInfo', element, 'Open snapshot details panel'),
+        new ActionItem('View Diff (vs previous)', 'diff', 'avc.viewDiff', element, 'Compare against previous snapshot'),
+        new ActionItem('Diff with Current Files', 'compare-changes', 'avc.diffWithCurrent', element, 'Compare against the working tree'),
+        new ActionItem('Restore This Snapshot', 'history', 'avc.restoreSnapshot', element, 'Roll back the project to this snapshot'),
+        new ActionItem('Delete Snapshot', 'trash', 'avc.deleteSnapshot', element, 'Permanently delete this snapshot'),
+      ];
+    }
+
+    // Action items have no children.
+    if (element instanceof ActionItem) {
+      return [];
+    }
+
     // Root level: build date-bucket groups.
     const filtered = this.filteredSnapshots();
     const now = new Date();
