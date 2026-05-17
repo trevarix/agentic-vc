@@ -98,6 +98,11 @@ func dispatch(projectRoot string, compact bool, method string, rawParams json.Ra
 		return map[string]any{}, nil
 
 	case "tools/list":
+		// When no AVC project is detected, expose only avc_init so the agent
+		// can bootstrap AVC instead of misusing snapshot/branch/merge tools.
+		if projectRoot == "" {
+			return map[string]any{"tools": ProjectlessTools()}, nil
+		}
 		return map[string]any{"tools": AllTools()}, nil
 
 	case "tools/call":

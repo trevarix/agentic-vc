@@ -18,7 +18,7 @@ If the task has no file writes, proceed normally without calling any avc_* tools
 
 // instrNotInitialized tells the agent what to do when AVC is not set up.
 const instrNotInitialized = `NOT INITIALIZED
-If any avc_* tool returns "no AVC project found" or "project not initialized", stop using AVC tools immediately. Tell the user: "This project does not have AVC initialized. Run 'avc init' in the project directory to enable AVC." Then complete the task without AVC.`
+If no avc_* tools appear in your tool list, AVC is not initialized in this project. Do NOT attempt to call any avc_* tool. If the task involves file changes, tell the user: "AVC is not initialized in this project. To enable it, run 'avc init' in the project directory from a terminal, then restart Claude Code." Then complete the task without AVC.`
 
 // instrRequiredSequence is the core start/finish protocol for every file-editing task.
 const instrRequiredSequence = `REQUIRED SEQUENCE — follow this order for every file-editing task:
