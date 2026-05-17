@@ -20,6 +20,14 @@ type Property struct {
 	Description string `json:"description"`
 }
 
+// ProjectlessTools returns the tool set advertised when no AVC project is
+// detected. Empty — no AVC tools are exposed so the agent cannot misuse them
+// on an uninitialized directory. The user must run `avc init` from a terminal
+// and restart Claude Code to enable AVC.
+func ProjectlessTools() []Tool {
+	return []Tool{}
+}
+
 // AllTools returns the full list of AVC MCP tools.
 func AllTools() []Tool {
 	return []Tool{

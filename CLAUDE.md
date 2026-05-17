@@ -121,3 +121,44 @@ Phases 1–6 are complete. Phase 7 (workspace command runner) is next, followed 
 - No magic literals inline — assign to a named constant first
 - No dead code, no commented-out blocks
 - One concern per function
+
+<!-- AVC — Agentic Version Control -->
+## AVC — Agentic Version Control
+
+AVC is active on this project. You MUST use it. The MCP server starts automatically and exposes `avc_*` tools.
+
+### Mandatory actions
+
+**ALWAYS call `avc_snapshot` before making any code change. No exceptions.**
+Do not assess whether the change is "small enough" or "easily reversible" — that judgement is not yours to make. The cost of an unnecessary snapshot is negligible. The cost of skipping one when it was needed is not.
+
+Label format — always use the `auto:` prefix so agent snapshots are distinguishable in `avc list`:
+- `auto: before <2–5 word description>`
+
+**ALWAYS call `avc_branch_create` before starting any task. No exceptions.**
+Do not assess whether the task is "simple enough" to skip a branch — that judgement is not yours to make. After creating a branch, set your working directory to the `workspace` path in the response. NEVER edit files in the real project root while on a branch.
+
+**ALWAYS call `avc_restore` when:**
+- Tests fail after your changes
+- The build breaks
+- The user says "undo", "revert", "roll back", or "start over"
+- Do NOT attempt repeated fixes on broken state — restore first, then retry.
+
+**NEVER call `avc_merge`** without the user saying yes explicitly.
+`avc_merge` checks for conflicts automatically before writing anything — no separate preview step needed. If conflicts are found, it returns them without modifying main.
+
+**NEVER call `avc_run_in_workspace`** without first:
+1. Showing the user the exact command you intend to run
+2. Explaining what it does
+3. Receiving explicit approval
+
+### Quick reference
+
+| Trigger | Tool |
+|---------|------|
+| About to make changes | `avc_snapshot` |
+| Multi-step or multi-file task | `avc_branch_create` |
+| Something broke | `avc_restore` |
+| Ready to review branch work | `avc_branch_diff` |
+| Ready to merge (with approval) | `avc_merge` |
+| Need to run tests or build | `avc_run_in_workspace` (approval required) |

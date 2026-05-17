@@ -14,3 +14,7 @@ extension/out/
 !extension/.vscode/
 !extension/.vscode/launch.json
 !extension/.vscode/tasks.json
+
+# Agentic Version Control
+.avc/
+.avcignore

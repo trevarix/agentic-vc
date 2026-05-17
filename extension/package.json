@@ -173,9 +173,8 @@
       ],
       "view/item/context": [
         {
-          "command": "avc.restoreSnapshot",
-          "when": "viewItem == snapshot",
-          "group": "inline"
+          "command": "avc.viewInfo",
+          "when": "viewItem == snapshot"
         },
         {
           "command": "avc.viewDiff",
@@ -183,6 +182,10 @@
         },
         {
           "command": "avc.diffWithCurrent",
+          "when": "viewItem == snapshot"
+        },
+        {
+          "command": "avc.restoreSnapshot",
           "when": "viewItem == snapshot"
         },
         {
