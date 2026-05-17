@@ -58,10 +58,12 @@ avc/
     skills/      # writes MCP configs and agent instruction files per framework
     config/      # reads/writes .avc/config.toml; active branch name
     statcache/   # mtime+size cache to skip re-hashing unchanged files
+    annotate/    # line-blame: traces each file line to its originating snapshot
+    workspace/   # sandboxed command runner; env scrubbing, venv isolation, process tree kill
+    web/         # standalone web UI server
   tests/                 # integration and cross-package tests
 extension/src/           # TypeScript — extension.ts, sidebar.ts, diffViewer.ts, cliProxy.ts
 docs/                    # architecture.md, cli-reference.md, contributing.md, project-description.md
-examples/                # example agent workflow scripts
 ```
 
 ---
@@ -88,7 +90,7 @@ examples/                # example agent workflow scripts
 
 ## Current implementation status
 
-Phases 1–6 are complete. Phase 7 (workspace command runner) is next, followed by Phase 8 (polish and release).
+Phases 1–7 are complete. Phase 8 (integration tests, docs, cross-platform binaries, VSCode Marketplace release) is next.
 
 | Phase | Status | Scope |
 |-------|--------|-------|
@@ -98,7 +100,7 @@ Phases 1–6 are complete. Phase 7 (workspace command runner) is next, followed 
 | 4 | ✅ | `avc branch` — branches table, agent workspaces, workspace isolation |
 | 5 | ✅ | `avc merge` — three-way merge, conflict markers, auto-snapshot, abort |
 | 6 | ✅ | MCP server (`avc mcp serve`), `avc init --skills <framework>` |
-| 7 | ⬜ | `avc run` + `avc_run_in_workspace` MCP tool — agent-driven test execution with venv isolation |
+| 7 | ✅ | `avc run` + `avc_run_in_workspace` MCP tool — agent-driven test execution with venv isolation |
 | 8 | ⬜ | Integration tests, docs, cross-platform binaries, VSCode Marketplace release |
 
 ---
