@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AVC — Agentic Version Control</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="brand">AVC</span>
+      <span class="project-name" id="project-name">…</span>
+      <span class="branch-badge" id="branch-badge">main</span>
+    </div>
+    <div class="topbar-right">
+      <button id="btn-new-snapshot" class="btn btn-primary">+ New Snapshot</button>
+      <button id="btn-refresh" class="btn">↻ Refresh</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">Snapshots</div>
+      <div id="snapshot-list" class="snapshot-list">
+        <p class="muted">Loading…</p>
+      </div>
+    </aside>
+
+    <section class="detail" id="detail">
+      <div class="empty-state">
+        <p>Select a snapshot from the left to view details.</p>
+      </div>
+    </section>
+  </main>
+
+  <!-- Modal: Save Snapshot -->
+  <div class="modal" id="modal-save" hidden>
+    <div class="modal-card">
+      <h3>Create Snapshot</h3>
+      <label>Label
+        <input type="text" id="save-label" placeholder="e.g. Before refactor" />
+      </label>
+      <label>Agent (optional)
+        <input type="text" id="save-agent" placeholder="e.g. claude" />
+      </label>
+      <label>Notes (optional)
+        <textarea id="save-notes" rows="3" placeholder="What changed?"></textarea>
+      </label>
+      <div class="modal-actions">
+        <button class="btn" data-close="modal-save">Cancel</button>
+        <button class="btn btn-primary" id="confirm-save">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Confirm -->
+  <div class="modal" id="modal-confirm" hidden>
+    <div class="modal-card">
+      <h3 id="confirm-title">Are you sure?</h3>
+      <p id="confirm-message"></p>
+      <div class="modal-actions">
+        <button class="btn" data-close="modal-confirm">Cancel</button>
+        <button class="btn btn-danger" id="confirm-yes">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Diff Viewer -->
+  <div class="modal modal-wide" id="modal-diff" hidden>
+    <div class="modal-card modal-card-wide">
+      <div class="modal-header">
+        <h3 id="diff-title">Diff</h3>
+        <button class="icon-btn" data-close="modal-diff">✕</button>
+      </div>
+      <div class="diff-summary" id="diff-summary"></div>
+      <div id="diff-body" class="diff-body"></div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
