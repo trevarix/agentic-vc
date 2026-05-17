@@ -1,0 +1,84 @@
+---
+title: AVC
+description: Local version control built for AI agents. Snapshot, diff, branch, and merge primitives without the complexity of Git.
+template: splash
+hero:
+  tagline: Local version control built for AI agents. Snapshot, diff, branch, and merge — without the complexity of Git.
+  image:
+    file: ../../assets/logo.svg
+  actions:
+    - text: Get Started
+      link: /agentic-vc/install/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/SkillMythOrg/agentic-vc
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+## Why AVC?
+
+<CardGrid stagger>
+  <Card title="Built for agents" icon="rocket">
+    Every agent action is captured as a reversible snapshot. Branch, experiment, and roll back without fear.
+  </Card>
+  <Card title="Simpler than Git" icon="puzzle">
+    Four primitives: snapshot, diff, branch, merge. No staging, no rebase, no detached HEAD.
+  </Card>
+  <Card title="Local-first" icon="laptop">
+    Your code never leaves your machine. Pure-Go SQLite + content-addressed storage. No cloud, no telemetry.
+  </Card>
+  <Card title="Multi-surface" icon="open-book">
+    CLI, VSCode extension, standalone web UI, and an MCP server so AI agents can call AVC as a tool.
+  </Card>
+</CardGrid>
+
+## Quick start
+
+```bash
+# Install
+brew install skillmythorg/tap/avc          # macOS
+# or download from GitHub Releases
+
+# Initialize and start using
+avc init
+avc snapshot "Baseline"
+# ...let an agent work...
+avc snapshot "After agent run" --agent claude --notes "Refactored auth"
+avc diff snap-abc snap-def
+avc restore snap-abc                       # if needed
+```
+
+<LinkCard
+  title="Read the Quick Start guide"
+  href="/agentic-vc/quick-start/"
+  description="Initialize a project, take a snapshot, make changes, diff, and restore — in five minutes."
+/>
+
+## Surfaces
+
+<CardGrid>
+  <LinkCard
+    title="CLI"
+    href="/agentic-vc/cli/"
+    description="The primary interface. Every command supports --json for scripting."
+  />
+  <LinkCard
+    title="VSCode Extension"
+    href="/agentic-vc/extension/"
+    description="Sidebar, Source Control integration, file history, gutter annotations."
+  />
+  <LinkCard
+    title="Web UI"
+    href="/agentic-vc/web-ui/"
+    description="avc ui serves a standalone web app at http://localhost:3004 — no editor required."
+  />
+  <LinkCard
+    title="Agent Integration"
+    href="/agentic-vc/agents/"
+    description="MCP server + auto-generated configs for Claude Code, Cursor, and Windsurf."
+  />
+</CardGrid>
