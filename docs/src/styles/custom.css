@@ -1,0 +1,26 @@
+/* AVC brand colors and fonts layered on top of Starlight's defaults. */
+
+:root {
+  /* Accent — blue (matches the avc ui app and VSCode extension) */
+  --sl-color-accent-low: hsl(212, 90%, 12%);
+  --sl-color-accent: hsl(212, 90%, 50%);
+  --sl-color-accent-high: hsl(212, 90%, 80%);
+
+  /* Fonts */
+  --sl-font: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
+  --sl-font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', Menlo, monospace;
+}
+
+/* Dark mode tweaks — slightly warmer accent so it pops against the GH-style dark bg */
+:root[data-theme='dark'] {
+  --sl-color-accent: hsl(212, 100%, 60%);
+}
+
+/* Hero card hover affordance on the splash page */
+.card {
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+.card:hover {
+  transform: translateY(-2px);
+  border-color: var(--sl-color-accent);
+}
