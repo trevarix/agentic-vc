@@ -50,6 +50,27 @@ jobs:
           name: ${{ matrix.asset }}
           path: avc/${{ matrix.asset }}
 
+  build-extension:
+    name: Build VSCode extension
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extension
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+      - run: npm ci
+      - run: npm install -g @vscode/vsce
+      - run: vsce package --out avc-${{ github.ref_name }}.vsix
+      - uses: actions/upload-artifact@v4
+        with:
+          name: avc-extension
+          path: extension/avc-${{ github.ref_name }}.vsix
+
   release:
     name: Create GitHub Release
     needs: [build-cli, build-extension]
