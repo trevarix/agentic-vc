@@ -2,12 +2,12 @@ name: Deploy Docs
 
 # Builds the Astro Starlight site under docs/ and publishes it to GitHub Pages.
 # Triggered on:
-#   - any push to main that touches docs/ or this workflow file
+#   - any push to dev that touches docs/ or this workflow file
 #   - manual run from the Actions tab
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
     paths:
       - 'docs/**'
       - '.github/workflows/docs.yml'
