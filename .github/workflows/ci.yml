@@ -6,8 +6,8 @@ on:
   pull_request:
 
 jobs:
-  go:
-    name: Go (${{ matrix.os }})
+  avc:
+    name: AVC CLI on (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -30,7 +30,7 @@ jobs:
         run: go test ./... -count=1 -timeout=120s
 
   extension:
-    name: Extension
+    name: AVC Extension
     runs-on: ubuntu-latest
     defaults:
       run:
