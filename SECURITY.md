@@ -4,7 +4,7 @@
 
 If you discover a security vulnerability in AVC, please **do not open a public GitHub issue**.
 
-Instead, email **security-placeholder@example.com** with:
+Instead, email **avc.dev247@gmail.com** with:
 
 - A description of the vulnerability
 - Steps to reproduce

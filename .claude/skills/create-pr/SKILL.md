@@ -24,9 +24,10 @@ The optional `<hint>` provides context the diff alone won't reveal (e.g. `/creat
    - Check `gh auth status`. If not authenticated, stop and tell the user to run `gh auth login`.
 
 2. **Gather branch context**
-   - Run `git log main..HEAD --pretty=format:"%s"` to list commits on this branch.
-   - Run `git diff main...HEAD --stat` to get a file-level summary of changes.
-   - Run `git diff main...HEAD` to read the full diff (used for drafting the body).
+   - Run `git fetch origin main` first to ensure the local view of `main` is up to date.
+   - Run `git log origin/main..HEAD --pretty=format:"%s"` to list commits on this branch.
+   - Run `git diff origin/main...HEAD --stat` to get a file-level summary of changes.
+   - Run `git diff origin/main...HEAD` to read the full diff (used for drafting the body).
    - Note the branch name — it signals intent (e.g. `feat/annotate-command`, `fix/workspace-path`, `docs/contributing`).
 
 3. **Detect change surfaces**
@@ -61,9 +62,9 @@ The optional `<hint>` provides context the diff alone won't reveal (e.g. `/creat
    Ask: "Shall I push this branch and open the PR?"
    - If yes:
      1. Run `git push -u origin <branch>` (only if the branch has no upstream yet — check with `git rev-parse --abbrev-ref @{u}` first).
-     2. Check if a PR already exists: `gh pr view --json url 2>/dev/null`.
-        - If a PR exists → run `gh pr edit --title "<title>" --body "<body>"` to update it.
-        - If no PR exists → run `gh pr create --base <target> --title "<title>" --body "<body>"`.
+     2. Check if an **open** PR already exists: `gh pr view --json url,state 2>/dev/null`.
+        - If a PR exists and `state` is `OPEN` → run `gh pr edit --title "<title>" --body "<body>"` to update it.
+        - If no PR exists, or the existing PR is `MERGED` or `CLOSED` → run `gh pr create --base <target> --title "<title>" --body "<body>"`.
      3. Print the PR URL.
    - If the user wants to edit the title or body first → apply edits, show updated draft, confirm again.
    - If no → stop without pushing or creating anything.
