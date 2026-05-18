@@ -16,5 +16,7 @@ extension/out/
 !extension/.vscode/tasks.json
 
 # Agentic Version Control
+# .avc/ holds the local database and object store — never commit it
 .avc/
-.avcignore
+# .avcignore is intentionally committable so contributors share the same AVC ignore rules
+# .claude/ is intentionally committed — Claude Code skills live there
