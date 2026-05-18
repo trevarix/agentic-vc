@@ -23,8 +23,11 @@ jobs:
           cache-dependency-path: avc/go.sum
       - run: go mod tidy
       - run: go build ./...
-      - run: go test ./...
       - run: go vet ./...
+      - name: Test
+        env:
+          CGO_ENABLED: "0"
+        run: go test ./... -count=1 -timeout=120s
 
   extension:
     name: Extension
@@ -40,4 +43,9 @@ jobs:
           cache: npm
           cache-dependency-path: extension/package-lock.json
       - run: npm ci
-      - run: npm run compile
+      - name: Type-check
+        run: npx tsc --noEmit
+      - name: Test
+        run: npm test
+      - name: Compile
+        run: npm run compile
