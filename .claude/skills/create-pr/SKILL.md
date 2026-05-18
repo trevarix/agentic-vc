@@ -61,7 +61,9 @@ The optional `<hint>` provides context the diff alone won't reveal (e.g. `/creat
    Ask: "Shall I push this branch and open the PR?"
    - If yes:
      1. Run `git push -u origin <branch>` (only if the branch has no upstream yet — check with `git rev-parse --abbrev-ref @{u}` first).
-     2. Run `gh pr create --base main --title "<title>" --body "<body>"`.
+     2. Check if a PR already exists: `gh pr view --json url 2>/dev/null`.
+        - If a PR exists → run `gh pr edit --title "<title>" --body "<body>"` to update it.
+        - If no PR exists → run `gh pr create --base <target> --title "<title>" --body "<body>"`.
      3. Print the PR URL.
    - If the user wants to edit the title or body first → apply edits, show updated draft, confirm again.
    - If no → stop without pushing or creating anything.
