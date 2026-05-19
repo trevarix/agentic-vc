@@ -420,6 +420,27 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
   flex-shrink: 0;
   text-align: center;
 }
+.change-badge {
+  width: 14px;
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  text-align: center;
+  line-height: 1;
+}
+.change-badge.added    { color: var(--added); }
+.change-badge.modified { color: var(--modified); }
+.change-badge.deleted  { color: var(--removed); }
+.file-row-deleted { opacity: 0.5; }
+.file-row-deleted .tree-name { text-decoration: line-through; }
+.tree-changed-summary {
+  font-weight: 400;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: 0;
+}
 .file-badge {
   display: inline-block;
   font-size: 8px;

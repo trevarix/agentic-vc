@@ -161,15 +161,37 @@ async function selectSnapshot(id) {
 
   try {
     const snap = await api(`/api/snapshots/${id}`);
-    renderDetail(snap);
+    await renderDetail(snap);
   } catch (err) {
     detail.innerHTML = `<p class="muted">Error: ${escapeHtml(err.message)}</p>`;
   }
 }
 
-function renderDetail(snap) {
+async function renderDetail(snap) {
   const detail = $('detail');
-  const tree = buildTree(snap.files);
+
+  // Build a change map by diffing against the previous snapshot.
+  // Keys are file paths; values are 'added' or 'modified'.
+  const changeMap = {};
+  const idx = state.snapshots.findIndex(s => s.id === snap.id);
+  const prev = idx !== -1 ? state.snapshots[idx + 1] : null;
+  const deletedPaths = [];
+  if (prev) {
+    try {
+      const diff = await api(`/api/diff?from=${encodeURIComponent(prev.id)}&to=${encodeURIComponent(snap.id)}`);
+      for (const f of diff.files) {
+        changeMap[f.path] = f.type;
+        if (f.type === 'deleted') deletedPaths.push(f.path);
+      }
+    } catch { /* non-critical — tree renders without indicators */ }
+  }
+
+  const changedCount = Object.keys(changeMap).length;
+  const filesLabel = prev
+    ? `Files (${snap.files.length}${changedCount ? ` · <span class="tree-changed-summary">${changedCount} changed</span>` : ''})`
+    : `Files (${snap.files.length})`;
+
+  const tree = buildTree(snap.files, deletedPaths);
   detail.innerHTML = `
     <h2>${escapeHtml(snap.label)}</h2>
     <div class="detail-grid">
@@ -186,15 +208,14 @@ function renderDetail(snap) {
       <button class="btn" id="btn-diff-prev">↔ Diff vs Previous</button>
       <button class="btn btn-danger" id="btn-delete-snap">Delete</button>
     </div>
-    <h3>Files (${snap.files.length})</h3>
-    <div class="file-tree" id="file-tree">${renderTree(tree, snap.id, 0)}</div>
+    <h3>${filesLabel}</h3>
+    <div class="file-tree" id="file-tree">${renderTree(tree, snap.id, 0, changeMap)}</div>
   `;
 
   // Wire up action buttons.
   $('btn-restore-snap').onclick = () => confirmRestore(snap.id, snap.label);
   $('btn-delete-snap').onclick  = () => confirmDelete(snap.id, snap.label);
   $('btn-diff-current').onclick = () => viewDiffCurrent(snap.id, snap.label);
-  const idx = state.snapshots.findIndex(s => s.id === snap.id);
   const hasPrev = idx !== -1 && idx < state.snapshots.length - 1;
   const diffPrevBtn = $('btn-diff-prev');
   diffPrevBtn.disabled = !hasPrev;
@@ -214,10 +235,11 @@ function renderDetail(snap) {
 }
 
 // ── File tree builder ────────────────────────────────────────────────────
-function buildTree(files) {
+function buildTree(files, deletedPaths = []) {
   const root = { name: '', path: '', children: new Map() };
-  for (const f of files) {
-    const parts = f.path.split('/').filter(Boolean);
+
+  function insertPath(pathStr, fileObj) {
+    const parts = pathStr.split('/').filter(Boolean);
     let current = root;
     parts.forEach((part, i) => {
       if (!current.children.has(part)) {
@@ -229,8 +251,16 @@ function buildTree(files) {
       }
       current = current.children.get(part);
     });
-    current.file = f;
+    current.file = fileObj;
   }
+
+  for (const f of files) insertPath(f.path, f);
+
+  // Ghost entries for files deleted since the previous snapshot.
+  for (const p of deletedPaths) {
+    insertPath(p, { path: p, hash: '', size: 0, deleted: true });
+  }
+
   return root;
 }
 function countFiles(node) {
@@ -282,7 +312,7 @@ function fileIcon(name) {
   if (!b) return `<span class="file-badge file-badge-default">&#x1F4C4;</span>`;
   return `<span class="file-badge" style="background:${b.bg};color:${b.fg}">${b.label}</span>`;
 }
-function renderTree(node, snapshotId, depth) {
+function renderTree(node, snapshotId, depth, changeMap = {}) {
   const sorted = [...node.children.values()].sort((a, b) => {
     const aIsDir = !a.file, bIsDir = !b.file;
     if (aIsDir && !bIsDir) return -1;
@@ -301,16 +331,35 @@ function renderTree(node, snapshotId, depth) {
           <span class="tree-name">${escapeHtml(child.name)}</span>
           <span class="tree-meta">${fileCount} file${fileCount === 1 ? '' : 's'}</span>
         </div>
-        <div class="tree-children">${renderTree(child, snapshotId, depth + 1)}</div>
+        <div class="tree-children">${renderTree(child, snapshotId, depth + 1, changeMap)}</div>
       </div>`;
     } else {
       const f = child.file;
-      html += `<div class="tree-row file-row" style="padding-left:${indent + 14}px">
-        <span class="file-icon">${fileIcon(child.name)}</span>
-        <span class="tree-name">${escapeHtml(child.name)}</span>
-        <span class="tree-size">${formatBytes(f.size)}</span>
-        <button class="restore-btn" data-path="${escapeHtml(f.path)}">Restore</button>
-      </div>`;
+      const changeType = changeMap[f.path];
+      const changeBadge = changeType === 'added'
+        ? `<span class="change-badge added" title="New in this snapshot">A</span>`
+        : changeType === 'modified'
+        ? `<span class="change-badge modified" title="Changed from previous snapshot">M</span>`
+        : changeType === 'deleted'
+        ? `<span class="change-badge deleted" title="Removed in this snapshot">D</span>`
+        : `<span class="change-badge"></span>`;
+
+      if (f.deleted) {
+        // Ghost row — file existed in the previous snapshot but is gone now.
+        html += `<div class="tree-row file-row file-row-deleted" style="padding-left:${indent + 14}px">
+          <span class="file-icon">${fileIcon(child.name)}</span>
+          ${changeBadge}
+          <span class="tree-name">${escapeHtml(child.name)}</span>
+        </div>`;
+      } else {
+        html += `<div class="tree-row file-row" style="padding-left:${indent + 14}px">
+          <span class="file-icon">${fileIcon(child.name)}</span>
+          ${changeBadge}
+          <span class="tree-name">${escapeHtml(child.name)}</span>
+          <span class="tree-size">${formatBytes(f.size)}</span>
+          <button class="restore-btn" data-path="${escapeHtml(f.path)}">Restore</button>
+        </div>`;
+      }
     }
   }
   return html;
