@@ -43,9 +43,9 @@ func runUi(cmd *cobra.Command, args []string) error {
 	addr := fmt.Sprintf("%s:%d", uiHost, uiPort)
 	url := fmt.Sprintf("http://%s/", addr)
 
-	fmt.Printf("AVC UI starting at %s\n", url)
-	fmt.Println("Project:", projectPath)
-	fmt.Println("Press Ctrl+C to stop.")
+	fmt.Printf("%s %s\n", success("✓ AVC UI running at"), accent(url))
+	fmt.Printf("  %s %s\n", prop("Project:"), cyan(projectPath))
+	fmt.Printf("  %s\n", dim("Press Ctrl+C to stop."))
 
 	if !uiNoOpen {
 		// Brief delay so the server is ready before the browser request.

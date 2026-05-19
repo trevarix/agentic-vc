@@ -22,7 +22,7 @@
 
   <main class="layout">
     <aside class="sidebar" id="sidebar">
-      <div class="sidebar-header">Snapshots</div>
+      <div class="sidebar-header">Snapshots <span id="snapshot-count" class="sidebar-count"></span></div>
       <div id="snapshot-list" class="snapshot-list">
         <p class="muted">Loading…</p>
       </div>
@@ -30,7 +30,9 @@
 
     <section class="detail" id="detail">
       <div class="empty-state">
-        <p>Select a snapshot from the left to view details.</p>
+        <div class="empty-icon">◈</div>
+        <p class="empty-title">No snapshot selected</p>
+        <p class="empty-sub">Choose a snapshot from the sidebar to view its files, metadata, and diffs.</p>
       </div>
     </section>
   </main>
@@ -79,6 +81,7 @@
     </div>
   </div>
 
+  <div id="toast-container" class="toast-container"></div>
   <script src="/app.js"></script>
 </body>
 </html>
