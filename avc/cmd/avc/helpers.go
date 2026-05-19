@@ -9,6 +9,12 @@ import (
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
 )
 
+// isAVCDir reports whether path already contains an .avc directory.
+func isAVCDir(path string) bool {
+	fi, err := os.Stat(filepath.Join(path, ".avc"))
+	return err == nil && fi.IsDir()
+}
+
 // resolveProjectPath converts a potentially relative path to an absolute one.
 func resolveProjectPath(path string) (string, error) {
 	abs, err := filepath.Abs(path)

@@ -74,8 +74,8 @@ func runRestore(cmd *cobra.Command, args []string) error {
 		})
 	}
 
-	fmt.Printf("%s %s\n", bold("Restored:"), cyan(result.SnapshotID))
-	fmt.Printf("  Files restored: %s\n", green(fmt.Sprintf("%d", result.RestoredFiles)))
-	fmt.Printf("  Total size:     %s\n", dim(fmt.Sprintf("%d bytes", result.RestoredSize)))
+	fmt.Printf("%s %s\n", success("✓ Restored:"), cyan(result.SnapshotID))
+	fmt.Printf("  %s %s\n", prop("Files restored:"), green(fmt.Sprintf("%d", result.RestoredFiles)))
+	fmt.Printf("  %s %s\n", prop("Total size:    "), dim(fmt.Sprintf("%d bytes", result.RestoredSize)))
 	return nil
 }

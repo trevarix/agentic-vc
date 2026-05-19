@@ -46,6 +46,6 @@ func runDelete(cmd *cobra.Command, args []string) error {
 		})
 	}
 
-	fmt.Printf("Deleted snapshot %s\n", snapshotID)
+	fmt.Printf("%s %s\n", success("✓ Deleted snapshot:"), dim(snapshotID))
 	return nil
 }

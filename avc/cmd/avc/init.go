@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/config"
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
@@ -43,10 +44,15 @@ func runInit(cmd *cobra.Command, args []string) error {
 		projectPath = args[0]
 	}
 
-	absPath, err := resolveProjectPath(projectPath)
+	absPath, err := filepath.Abs(projectPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("invalid project path: %w", err)
 	}
+	if err := os.MkdirAll(absPath, 0o755); err != nil {
+		return fmt.Errorf("could not create project directory: %w", err)
+	}
+
+	alreadyInit := isAVCDir(absPath)
 
 	project, err := db.InitProject(absPath)
 	if err != nil {
@@ -98,34 +104,40 @@ func runInit(cmd *cobra.Command, args []string) error {
 			srJSON[i] = skillJSON{sr.Framework, actions, sr.Warnings}
 		}
 		return json.NewEncoder(os.Stdout).Encode(map[string]any{
-			"id":      project.ID,
-			"path":    project.Path,
-			"name":    project.Name,
-			"skills":  srJSON,
-			"success": true,
+			"id":                 project.ID,
+			"path":               project.Path,
+			"name":               project.Name,
+			"skills":             srJSON,
+			"already_initialized": alreadyInit,
+			"success":            true,
 		})
 	}
 
-	fmt.Printf("Initialized AVC project at %s\n", absPath)
-	fmt.Printf("Project ID: %s\n", project.ID)
+	if alreadyInit {
+		fmt.Printf("%s %s\n", accent("◆ AVC already initialized at"), cyan(absPath))
+		fmt.Printf("  %s %s\n", prop("Project ID:"), dim(project.ID))
+	} else {
+		fmt.Printf("%s %s\n", success("✓ Initialized AVC project at"), cyan(absPath))
+		fmt.Printf("  %s %s\n", prop("Project ID:"), dim(project.ID))
+	}
 	for _, sr := range skillResults {
-		fmt.Printf("\nSkills for %s:\n", sr.Framework)
+		fmt.Printf("\n%s %s\n", accent("◆ Skills:"), bold(sr.Framework))
 		for _, w := range sr.Warnings {
-			fmt.Printf("  Warning: %s\n", w)
+			fmt.Printf("  %s %s\n", warn("⚠"), w)
 		}
 		for _, a := range sr.Actions {
 			switch a.Status {
 			case "created":
-				fmt.Printf("  created  %s\n", a.Path)
+				fmt.Printf("  %s  %s\n", success("✓ created"), cyan(a.Path))
 			case "updated":
-				fmt.Printf("  updated  %s\n", a.Path)
+				fmt.Printf("  %s  %s\n", warn("↑ updated"), yellow(a.Path))
 			case "skipped":
-				fmt.Printf("  skipped  %s  (%s)\n", a.Path, a.Reason)
+				fmt.Printf("  %s  %s  %s\n", dim("  skipped"), dim(a.Path), dim("("+a.Reason+")"))
 			}
 		}
 	}
 	if len(skillResults) > 0 {
-		fmt.Println("\nStart the MCP server with: avc mcp serve")
+		fmt.Printf("\n%s\n", dim("Start the MCP server with: avc mcp serve"))
 	}
 	return nil
 }

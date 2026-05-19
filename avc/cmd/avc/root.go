@@ -23,6 +23,8 @@ func Execute() error {
 func init() {
 	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Output results as JSON")
 
+	initHelp()
+
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(snapshotCmd)
 	rootCmd.AddCommand(listCmd)

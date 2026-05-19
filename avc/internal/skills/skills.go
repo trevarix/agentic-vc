@@ -702,6 +702,10 @@ Do not assess whether the task is "simple enough" to skip a branch — that judg
 
 ## MUST call when
 
+- You are about to create, edit, or delete any file
+- The task involves more than one file or more than one step
+- The user asks you to implement, refactor, fix, or add anything
+
 ## Steps
 
 1. Create the branch:
@@ -722,8 +726,8 @@ Do not assess whether the task is "simple enough" to skip a branch — that judg
 ## NEVER
 
 - Edit files outside the workspace path while on a branch
-- Merge without calling **avc_merge_preview** first
-- Merge without explicit user approval
+- Call **avc_merge** without explicit user approval — show the diff first and wait for yes
+- Retry a failed merge without calling **avc_merge_abort** first
 `,
 
 	"avc-merge": `---

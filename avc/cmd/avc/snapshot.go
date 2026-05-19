@@ -69,10 +69,10 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		})
 	}
 
-	fmt.Printf("%s %s\n", bold("Snapshot created:"), cyan(snap.ID))
-	fmt.Printf("  Label:    %s\n", bold(snap.Label))
-	fmt.Printf("  Branch:   %s\n", green(branchpkg.GetActiveBranchName(projectPath)))
-	fmt.Printf("  Files:    %s\n", yellow(fmt.Sprintf("%d", snap.FileCount)))
-	fmt.Printf("  Size:     %s\n", dim(fmt.Sprintf("%d bytes", snap.TotalSize)))
+	fmt.Printf("%s %s\n", success("✓ Snapshot created:"), cyan(snap.ID))
+	fmt.Printf("  %s %s\n", prop("Label:  "), bold(snap.Label))
+	fmt.Printf("  %s %s\n", prop("Branch: "), green(branchpkg.GetActiveBranchName(projectPath)))
+	fmt.Printf("  %s %s\n", prop("Files:  "), yellow(fmt.Sprintf("%d", snap.FileCount)))
+	fmt.Printf("  %s %s\n", prop("Size:   "), dim(fmt.Sprintf("%d bytes", snap.TotalSize)))
 	return nil
 }

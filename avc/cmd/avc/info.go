@@ -64,16 +64,29 @@ func runInfo(cmd *cobra.Command, args []string) error {
 	}
 
 	ts := time.Unix(snap.Timestamp, 0).Format("2006-01-02 15:04:05")
-	fmt.Printf("Snapshot: %s\n", snap.ID)
-	fmt.Printf("  Label:     %s\n", snap.Label)
-	fmt.Printf("  Created:   %s\n", ts)
-	fmt.Printf("  Agent:     %s\n", snap.AgentName)
-	fmt.Printf("  Notes:     %s\n", snap.Notes)
-	fmt.Printf("  Files:     %d\n", snap.FileCount)
-	fmt.Printf("  Size:      %d bytes\n\n", snap.TotalSize)
-	fmt.Println("Files:")
+
+	agentVal := dim("—")
+	if snap.AgentName != "" {
+		agentVal = blue(snap.AgentName)
+	}
+	notesVal := dim("—")
+	if snap.Notes != "" {
+		notesVal = snap.Notes
+	}
+
+	fmt.Printf("%s %s\n", accent("◆ Snapshot:"), cyan(snap.ID))
+	fmt.Println(ruler(60))
+	fmt.Printf("  %s %s\n", prop("Label:  "), bold(snap.Label))
+	fmt.Printf("  %s %s\n", prop("Created:"), dim(ts))
+	fmt.Printf("  %s %s\n", prop("Agent:  "), agentVal)
+	fmt.Printf("  %s %s\n", prop("Notes:  "), notesVal)
+	fmt.Printf("  %s %s\n", prop("Files:  "), yellow(fmt.Sprintf("%d", snap.FileCount)))
+	fmt.Printf("  %s %s\n\n", prop("Size:   "), dim(fmt.Sprintf("%d bytes", snap.TotalSize)))
+
+	fmt.Printf("%s\n", accent("Files"))
+	fmt.Println(ruler(60))
 	for _, f := range files {
-		fmt.Printf("  %s  (%d bytes)\n", f.RelativePath, f.FileSize)
+		fmt.Printf("  %s  %s\n", cyan(f.RelativePath), dim(fmt.Sprintf("(%d bytes)", f.FileSize)))
 	}
 	return nil
 }
