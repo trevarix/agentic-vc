@@ -42,15 +42,15 @@ func runLog(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	fmt.Println(bold("  Snapshot history"))
-	fmt.Println()
+	fmt.Printf("  %s\n", accent("Snapshot history"))
+	fmt.Printf("  %s\n\n", ruler(50))
 
 	for i, s := range snapshots {
 		ts := time.Unix(s.Timestamp, 0).Format("2006-01-02 15:04:05")
 
 		// Node
 		fmt.Printf("  %s  %s  %s\n",
-			cyan("●"),
+			magenta("◆"),
 			cyan(s.ID),
 			bold(s.Label),
 		)
@@ -58,17 +58,17 @@ func runLog(cmd *cobra.Command, args []string) error {
 		// Metadata row
 		agent := dim("—")
 		if s.AgentName != "" {
-			agent = dim(s.AgentName)
+			agent = blue(s.AgentName)
 		}
 		notes := ""
 		if s.Notes != "" {
 			notes = "  " + dim("\""+s.Notes+"\"")
 		}
-		fmt.Printf("  %s  %s  agent: %s  files: %s%s\n",
+		fmt.Printf("  %s  %s  %s %s  %s %s%s\n",
 			dim("│"),
 			dim(ts),
-			agent,
-			yellow(fmt.Sprintf("%d", s.FileCount)),
+			dim("agent:"), agent,
+			dim("files:"), yellow(fmt.Sprintf("%d", s.FileCount)),
 			notes,
 		)
 
@@ -76,7 +76,7 @@ func runLog(cmd *cobra.Command, args []string) error {
 		if i < len(snapshots)-1 {
 			fmt.Printf("  %s\n", dim("│"))
 		} else {
-			fmt.Printf("  %s\n", dim("◎  (root)"))
+			fmt.Printf("  %s\n", dim("◎  root"))
 		}
 	}
 

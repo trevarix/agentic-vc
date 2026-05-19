@@ -53,9 +53,9 @@ var branchDeleteCmd = &cobra.Command{
 }
 
 var branchDiffCmd = &cobra.Command{
-	Use:   "diff <name>",
+	Use:   "diff [branch]",
 	Short: "Show cumulative diff from a branch's base snapshot to its HEAD",
-	Args:  cobra.ExactArgs(1),
+	Args:  cobra.MaximumNArgs(1),
 	RunE:  runBranchDiff,
 }
 
@@ -95,9 +95,9 @@ func runBranchCreate(cmd *cobra.Command, args []string) error {
 		})
 	}
 
-	fmt.Printf("%s %s\n", bold("Branch created and switched:"), cyan(b.Name))
-	fmt.Printf("  Workspace: %s\n", green(workspacePath))
-	fmt.Printf("\nDirect your agent to work in the workspace directory.\n")
+	fmt.Printf("%s %s\n", success("✓ Branch created and switched:"), cyan(b.Name))
+	fmt.Printf("  %s %s\n", prop("Workspace:"), green(workspacePath))
+	fmt.Printf("\n%s\n", dim("Direct your agent to work in the workspace directory."))
 	return nil
 }
 
@@ -175,7 +175,7 @@ func runBranchSwitch(cmd *cobra.Command, args []string) error {
 		})
 	}
 
-	fmt.Printf("Switched to branch %s\n", bold(cyan(name)))
+	fmt.Printf("%s %s\n", success("✓ Switched to branch"), cyan(name))
 	fmt.Printf("%s\n", dim("Working directory unchanged — use `avc restore <id>` to restore a snapshot."))
 	return nil
 }
@@ -198,15 +198,19 @@ func runBranchDelete(cmd *cobra.Command, args []string) error {
 		})
 	}
 
-	fmt.Printf("Deleted branch %s\n", bold(name))
+	fmt.Printf("%s %s\n", success("✓ Deleted branch:"), bold(name))
 	return nil
 }
 
 func runBranchDiff(cmd *cobra.Command, args []string) error {
-	name := args[0]
 	projectPath, err := requireInitializedProject()
 	if err != nil {
 		return err
+	}
+
+	name := branch.GetActiveBranchName(projectPath)
+	if len(args) > 0 {
+		name = args[0]
 	}
 
 	branches, err := branch.List(projectPath)
@@ -281,7 +285,7 @@ func runBranchDiff(cmd *cobra.Command, args []string) error {
 		})
 	}
 
-	fmt.Printf("%s %s (base → HEAD)\n\n", bold("Branch diff:"), cyan(name))
+	fmt.Printf("%s %s\n%s\n\n", accent("◆ Branch diff:"), cyan(name), ruler(50))
 	for _, f := range result.Files {
 		symbol, pathColor := changeSymbol(string(f.Type))
 		added := green(fmt.Sprintf("+%d", f.LinesAdded))

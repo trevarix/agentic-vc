@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/diff"
@@ -31,6 +30,8 @@ type AnnotateResult struct {
 // Annotate traces line origins for filePath across all snapshots.
 // filePath must be a slash-separated relative path within the project.
 func Annotate(projectRoot, filePath string) (*AnnotateResult, error) {
+	filePath = filepath.ToSlash(filepath.Clean(filePath))
+
 	store, err := db.Open(projectRoot)
 	if err != nil {
 		return nil, err
@@ -190,7 +191,7 @@ func annotateCurrentOnly(projectRoot, filePath string) (*AnnotateResult, error) 
 	if err != nil {
 		return nil, fmt.Errorf("file '%s' not found on disk or in any snapshot", filePath)
 	}
-	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	lines := diff.SplitLines(data)
 
 	result := &AnnotateResult{
 		FilePath:   filePath,

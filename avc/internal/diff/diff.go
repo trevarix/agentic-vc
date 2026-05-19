@@ -141,6 +141,9 @@ func ReadObjectSafe(projectRoot, hash string) []byte {
 }
 
 // SplitLines normalizes line endings and splits data into lines.
+// A single trailing empty string produced by a terminal newline is trimmed so
+// that a 3-line file ending with \n returns 3 elements, not 4.
+// Genuine interior blank lines (two consecutive newlines) are preserved.
 func SplitLines(data []byte) []string {
 	if len(data) == 0 {
 		return nil
@@ -148,7 +151,11 @@ func SplitLines(data []byte) []string {
 	// Normalize line endings so CRLF and LF lines compare equal.
 	normalized := strings.ReplaceAll(string(data), "\r\n", "\n")
 	normalized = strings.ReplaceAll(normalized, "\r", "\n")
-	return strings.Split(normalized, "\n")
+	lines := strings.Split(normalized, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
 }
 
 const (

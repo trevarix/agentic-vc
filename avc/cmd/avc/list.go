@@ -80,10 +80,13 @@ func runList(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	fmt.Printf("Branch: %s\n\n", bold(green(activeName)))
-	fmt.Printf("%-20s  %-30s  %-20s  %s\n",
-		bold("ID"), bold("Label"), bold("Timestamp"), bold("Files"))
-	fmt.Println(dim("------------------------------------------------------------------------------------"))
+	fmt.Printf("%s %s\n\n", prop("Branch:"), success(activeName))
+	fmt.Printf("%s  %s  %s  %s\n",
+		accent(fmt.Sprintf("%-20s", "ID")),
+		accent(fmt.Sprintf("%-30s", "Label")),
+		accent(fmt.Sprintf("%-20s", "Timestamp")),
+		accent("Files"))
+	fmt.Println(ruler(82))
 	for _, s := range snapshots {
 		ts := time.Unix(s.Timestamp, 0).Format("2006-01-02 15:04:05")
 		fmt.Printf("%s  %-30s  %s  %s\n",

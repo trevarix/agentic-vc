@@ -59,7 +59,7 @@ func runDiff(cmd *cobra.Command, args []string) error {
 		})
 	}
 
-	fmt.Printf("%s %s → %s\n\n", bold("Diff:"), dim(fromID), dim(toID))
+	fmt.Printf("%s %s %s %s\n%s\n\n", accent("◆ Diff:"), dim(fromID), dim("→"), dim(toID), ruler(50))
 	for _, f := range result.Files {
 		symbol, pathColor := changeSymbol(string(f.Type))
 		added := green(fmt.Sprintf("+%d", f.LinesAdded))

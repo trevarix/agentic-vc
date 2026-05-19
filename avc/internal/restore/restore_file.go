@@ -33,7 +33,7 @@ func RestoreFile(projectRoot, snapshotID, filePath string) (*RestoreFileResult, 
 	}
 
 	// Normalize the requested path to forward slashes for comparison.
-	normalizedPath := filepath.ToSlash(filePath)
+	normalizedPath := filepath.ToSlash(filepath.Clean(filePath))
 
 	var target *db.File
 	for _, f := range files {
