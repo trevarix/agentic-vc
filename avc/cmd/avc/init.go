@@ -18,24 +18,26 @@ var initCmd = &cobra.Command{
 	Use:   "init [project_path]",
 	Short: "Initialize AVC for a project",
 	Long: `Creates a .avc/ directory inside the project with a SQLite database,
-default config, and .gitignore. Defaults to the current directory.
-Safe to re-run on an already-initialized project.
+default config, and .avcignore. Defaults to the current directory.
+Creates the directory if it does not exist. Safe to re-run — existing
+snapshots, branches, and config are left untouched.
 
 Use --skills to wire up AVC as an MCP server for your agent framework.
 Accepts a comma-separated list of frameworks:
 
   avc init --skills claude-code
+  avc init --skills claude-desktop
   avc init --skills claude-code,cursor
   avc init --skills claude-code,cursor,windsurf,generic
 
-Supported frameworks: claude-code, cursor, windsurf, generic`,
+Supported frameworks: claude-code, claude-desktop, cursor, windsurf, generic`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runInit,
 }
 
 func init() {
 	initCmd.Flags().StringSliceVar(&initSkills, "skills", nil,
-		"Comma-separated list of agent frameworks to configure (claude-code, cursor, windsurf, generic)")
+		"Comma-separated list of agent frameworks to configure (claude-code, claude-desktop, cursor, windsurf, generic)")
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
