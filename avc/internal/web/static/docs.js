@@ -32,7 +32,10 @@ avc snapshot "After agent run" --agent "claude" --notes "Refactored auth"
 avc diff snap-abc123 snap-def456
 
 # Roll back if needed
-avc restore snap-abc123</code></pre>
+avc restore snap-abc123
+
+# Browse snapshots in the web UI
+avc ui</code></pre>
 
           <h2>Global flags</h2>
           <table>
@@ -59,15 +62,30 @@ avc restore snap-abc123</code></pre>
           <p class="lede">Initialize AVC in a project directory. Creates <code>.avc/</code> with a SQLite database, default config, and <code>.avcignore</code>.</p>
 
           <h2>Usage</h2>
-          <pre><code>avc init                         # initialize current directory
-avc init /path/to/project        # initialize a specific directory
-avc init --skills claude-code    # also write agent integration files</code></pre>
+          <pre><code>avc init                                    # initialize current directory
+avc init my-project                         # creates directory if needed, then init
+avc init --skills claude-code               # Claude Code (CLI + VSCode + desktop app)
+avc init --skills claude-desktop            # Claude Desktop standalone app
+avc init --skills claude-code,cursor        # multiple frameworks at once
+avc init --skills cursor,windsurf,generic   # all non-Claude frameworks</code></pre>
 
           <h2>Flags</h2>
           <table>
             <thead><tr><th>Flag</th><th>Description</th></tr></thead>
             <tbody>
-              <tr><td><code>--skills &lt;list&gt;</code> <span class="docs-tag optional">optional</span></td><td>Comma-separated agent frameworks to set up. Supported: <code>claude-code</code>, <code>cursor</code>, <code>windsurf</code>, <code>generic</code></td></tr>
+              <tr><td><code>--skills &lt;list&gt;</code> <span class="docs-tag optional">optional</span></td><td>Comma-separated agent frameworks to configure. See the table below for what each framework writes.</td></tr>
+            </tbody>
+          </table>
+
+          <h2>What each --skills framework writes</h2>
+          <table>
+            <thead><tr><th>Framework</th><th>What it writes</th></tr></thead>
+            <tbody>
+              <tr><td><code>claude-code</code></td><td>MCP entry in <code>~/.claude.json</code> (global, picked up by CLI, VSCode extension, and desktop app); <code>CLAUDE.md</code> block; skill files in <code>.claude/skills/</code></td></tr>
+              <tr><td><code>claude-desktop</code></td><td>MCP entry in the Claude Desktop config file with <code>AVC_PROJECT</code> env var set — required because Claude Desktop spawns the server without a project CWD</td></tr>
+              <tr><td><code>cursor</code></td><td>MCP entry in <code>~/.cursor/mcp.json</code>; rules file in <code>.cursor/rules/avc.mdc</code></td></tr>
+              <tr><td><code>windsurf</code></td><td>MCP entry in <code>~/.codeium/windsurf/mcp_config.json</code>; rules block appended to <code>.windsurfrules</code></td></tr>
+              <tr><td><code>generic</code></td><td>Writes <code>AGENT_INSTRUCTIONS.md</code> to the project root — framework-agnostic instructions for any MCP-capable agent</td></tr>
             </tbody>
           </table>
 
@@ -76,10 +94,12 @@ avc init --skills claude-code    # also write agent integration files</code></pr
   "id": "proj-a1b2c3",
   "path": "/path/to/project",
   "name": "project",
+  "already_initialized": false,
+  "skills": [],
   "success": true
 }</code></pre>
 
-          <p>Safe to run more than once — re-running on an already-initialized project is a no-op.</p>
+          <p>Safe to run more than once. Re-running on an already-initialized project reports <code>"already_initialized": true</code> and leaves all existing snapshots, branches, and config untouched. If the target directory does not exist, <code>avc init</code> creates it.</p>
         `,
       },
     ],
@@ -193,11 +213,37 @@ avc info snap-abc123 --json</code></pre>
         title: 'avc log',
         synopsis: 'Tree-style history of snapshots.',
         body: `
-          <p class="lede">Visual history of snapshots on the current branch.</p>
+          <p class="lede">Shows a tree-style history of every snapshot on the current branch, newest first, with metadata on each node.</p>
 
           <h2>Usage</h2>
           <pre><code>avc log
 avc log --json</code></pre>
+
+          <h2>Example output</h2>
+          <pre><code>  Snapshot history
+  ──────────────────────────────────────────────────
+
+  ◆  snap-def456  After agent run
+  │  2026-05-18 14:30:00  agent: claude  files: 42
+  │
+  ◆  snap-abc123  Baseline
+  │  2026-05-18 09:00:00  agent: —  files: 40
+  │
+  ◎  root</code></pre>
+
+          <h2>JSON output</h2>
+          <pre><code>[
+  {
+    "id": "snap-def456",
+    "label": "After agent run",
+    "timestamp": 1716042600,
+    "agent_name": "claude",
+    "notes": "Refactored auth",
+    "file_count": 42,
+    "total_size": 1048576,
+    "branch_id": "branch-main"
+  }
+]</code></pre>
         `,
       },
       {
@@ -205,13 +251,19 @@ avc log --json</code></pre>
         title: 'avc delete',
         synopsis: 'Delete a snapshot and unreferenced objects.',
         body: `
-          <p class="lede">Removes a snapshot and any object blobs that are no longer referenced by other snapshots.</p>
+          <p class="lede">Permanently removes a snapshot record and its associated file entries. Object blobs shared with other snapshots are preserved; only unreferenced blobs are removed.</p>
 
           <h2>Usage</h2>
           <pre><code>avc delete snap-abc123
 avc delete snap-abc123 --json</code></pre>
 
-          <blockquote>This is permanent. The snapshot cannot be recovered.</blockquote>
+          <h2>JSON output</h2>
+          <pre><code>{
+  "id": "snap-abc123",
+  "success": true
+}</code></pre>
+
+          <blockquote>This is permanent. The snapshot cannot be recovered. If you might need it, take a note of the ID first.</blockquote>
         `,
       },
     ],
@@ -268,13 +320,21 @@ avc diff-current snap-abc123 --json</code></pre>
         title: 'avc restore',
         synopsis: 'Roll back the project to a snapshot.',
         body: `
-          <p class="lede">Restores every file in the project to the state captured in the snapshot. Files not in the snapshot are left untouched.</p>
+          <p class="lede">Rolls the entire project back to the exact state captured in a snapshot. Every tracked file is overwritten with its snapshot version, and any files added after the snapshot are deleted.</p>
 
           <h2>Usage</h2>
           <pre><code>avc restore snap-abc123
 avc restore snap-abc123 --json</code></pre>
 
-          <blockquote>This overwrites current files. Take a snapshot first if you want to preserve work in progress.</blockquote>
+          <h2>JSON output</h2>
+          <pre><code>{
+  "id": "snap-abc123",
+  "restored_files": 42,
+  "restored_size": 1048576,
+  "success": true
+}</code></pre>
+
+          <blockquote>Files added after the snapshot are <strong>deleted</strong> during restore — not just untouched. Take a snapshot of the current state first if there is any work you want to keep.</blockquote>
         `,
       },
       {
@@ -294,12 +354,14 @@ avc restore-file snap-abc123 src/auth.go --json</code></pre>
         title: 'avc cat',
         synopsis: 'Print file contents from a snapshot.',
         body: `
-          <p class="lede">Outputs the raw bytes of a file as it was stored in a snapshot. Useful for piping into other tools.</p>
+          <p class="lede">Prints the contents of a file as stored in a snapshot. When run in a terminal, displays a formatted view with line numbers. When piped or redirected, outputs raw bytes — safe for binary files.</p>
 
           <h2>Usage</h2>
-          <pre><code>avc cat snap-abc123 src/auth.go
-avc cat snap-abc123 src/auth.go > old-auth.go
-avc cat snap-abc123 src/auth.go --json   # base64-encoded for binary safety</code></pre>
+          <pre><code>avc cat snap-abc123 src/auth.go           # formatted view in terminal
+avc cat snap-abc123 src/auth.go > out.go  # raw bytes (pipe-safe)
+avc cat snap-abc123 src/auth.go --json    # base64-encoded content</code></pre>
+
+          <p>The terminal view strips UTF-8, UTF-16 LE, and UTF-16 BE byte-order marks before display. The piped / redirected path always writes the original bytes unchanged.</p>
         `,
       },
       {
@@ -331,11 +393,46 @@ avc file-history src/auth.go --json</code></pre>
         title: 'avc annotate',
         synopsis: 'Show which snapshot introduced each line.',
         body: `
-          <p class="lede">Like <code>git blame</code> but for AVC snapshots. Traces every line in a file back to the snapshot that introduced it.</p>
+          <p class="lede">Like <code>git blame</code> but for AVC snapshots. Traces every line in a file back to the snapshot that first introduced it, using LCS diffing across the snapshot history.</p>
 
           <h2>Usage</h2>
           <pre><code>avc annotate src/auth.go
 avc annotate src/auth.go --json</code></pre>
+
+          <h2>Example output</h2>
+          <pre><code>src/auth.go  (12 lines)
+
+   1 │ initial commit
+   2 │ initial commit
+   3 │ add JWT support
+   4 │ add JWT support
+   5 │ initial commit</code></pre>
+
+          <p>Each row shows the line number, a separator, and the label of the snapshot that introduced that line. If an agent name was recorded, it appears beside the label.</p>
+
+          <h2>JSON output</h2>
+          <pre><code>{
+  "file_path": "src/auth.go",
+  "total_lines": 12,
+  "lines": [
+    {
+      "line": 1,
+      "snapshot_id": "snap-abc123",
+      "label": "initial commit",
+      "agent_name": "",
+      "timestamp": 1716000000
+    },
+    {
+      "line": 3,
+      "snapshot_id": "snap-def456",
+      "label": "add JWT support",
+      "agent_name": "claude",
+      "timestamp": 1716042600
+    }
+  ]
+}</code></pre>
+
+          <p>Lines not yet captured in any snapshot are attributed to <code>"(untracked)"</code>.</p>
         `,
       },
     ],
@@ -352,11 +449,21 @@ avc annotate src/auth.go --json</code></pre>
           <p class="lede">Branches isolate agent work in <code>.avc/workspaces/&lt;branch&gt;/</code> so experiments never touch your real project until you merge.</p>
 
           <h2>Subcommands</h2>
-          <pre><code>avc branch create &lt;name&gt;       # create a branch from the current snapshot
-avc branch list                  # list all branches
-avc branch switch &lt;name&gt;       # switch active branch
-avc branch delete &lt;name&gt;       # delete a branch and its workspace
-avc branch diff &lt;name&gt;         # cumulative diff from branch point to HEAD</code></pre>
+          <pre><code>avc branch create &lt;branch&gt;              # create from current HEAD of main
+avc branch create &lt;branch&gt; --from &lt;id&gt;  # create from a specific snapshot
+avc branch list                           # list all branches
+avc branch switch &lt;branch&gt;              # switch active branch
+avc branch delete &lt;branch&gt;              # delete a branch and its workspace
+avc branch diff [branch]                  # cumulative diff from branch point to HEAD
+                                          # omit branch to diff the active branch</code></pre>
+
+          <h2>branch create flags</h2>
+          <table>
+            <thead><tr><th>Flag</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>--from &lt;snapshot-id&gt;</code> <span class="docs-tag optional">optional</span></td><td>Base the new branch on a specific snapshot instead of the current HEAD of main</td></tr>
+            </tbody>
+          </table>
 
           <h2>Workflow example</h2>
           <pre><code># Start a new agent task on a branch
@@ -427,6 +534,47 @@ avc mcp serve --compact    # compact JSON for token-sensitive contexts</code></p
           </ul>
 
           <p>Agent integration files (<code>.claude/skills/</code>, <code>.cursor/rules/</code>, etc.) are written by <code>avc init --skills</code>.</p>
+        `,
+      },
+      {
+        id: 'run',
+        title: 'avc run',
+        synopsis: 'Run a command inside a branch workspace.',
+        body: `
+          <p class="lede">Executes a shell command inside the materialized workspace for a branch. The command runs with environment scrubbing, an execution timeout, and process-tree kill on timeout.</p>
+
+          <h2>Usage</h2>
+          <pre><code>avc run --branch feature-x "npm test"
+avc run --branch feature-x "go build ./..."
+avc run --branch feature-x --timeout 300 "pip install -r requirements.txt"</code></pre>
+
+          <h2>Flags</h2>
+          <table>
+            <thead><tr><th>Flag</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>--branch &lt;name&gt;</code> <span class="docs-tag required">required</span></td><td>Branch whose workspace to run the command in</td></tr>
+              <tr><td><code>--timeout &lt;seconds&gt;</code></td><td>Override the execution timeout (default and max are set in <code>.avc/config.toml</code>)</td></tr>
+            </tbody>
+          </table>
+
+          <h2>Sandbox rules</h2>
+          <ul>
+            <li>System package managers (<code>brew</code>, <code>apt</code>, <code>choco</code>, <code>sudo</code>) are blocked</li>
+            <li><strong>Python</strong> — <code>pip install</code> auto-redirects into a workspace-local venv. Never use <code>--user</code> or <code>--system</code></li>
+            <li><strong>Node</strong> — <code>npm install</code> installs into workspace <code>node_modules</code>. Never use <code>-g</code> or <code>--global</code></li>
+          </ul>
+
+          <blockquote class="callout-warn">Always show the user the exact command before running it. The MCP tool <code>avc_run_in_workspace</code> enforces this by requiring explicit approval before every call.</blockquote>
+
+          <h2>JSON output</h2>
+          <pre><code>{
+  "exit_code": 0,
+  "stdout": "ok  github.com/example/app\\n",
+  "stderr": "",
+  "workspace_path": ".avc/workspaces/feature-x"
+}</code></pre>
+
+          <p>The command's exit code is propagated to the shell. On timeout, the entire process tree is killed before the timeout error is returned.</p>
         `,
       },
     ],
@@ -822,26 +970,52 @@ build/
 // ── Sidebar rendering ──────────────────────────────────────────────────────
 function renderSidebar() {
   const sidebar = document.getElementById('docs-sidebar');
-  sidebar.innerHTML = CATALOG.map(group => `
-    <div class="docs-section" data-id="${group.id}">
-      <div class="docs-section-header">
-        <span class="docs-section-chevron">▼</span>
-        <span>${group.section}</span>
-      </div>
-      <div class="docs-section-items">
-        ${group.commands.map(cmd => `
-          <a class="docs-link" href="#${cmd.id}" data-id="${cmd.id}">${cmd.title}</a>
-        `).join('')}
-      </div>
+  sidebar.innerHTML = `
+    <div class="docs-search-wrap">
+      <input type="text" id="docs-search" class="docs-search"
+             placeholder="Filter… (press /)" autocomplete="off" spellcheck="false">
     </div>
-  `).join('');
+    ${CATALOG.map(group => `
+      <div class="docs-section" data-id="${group.id}">
+        <div class="docs-section-header">
+          <span class="docs-section-chevron">▼</span>
+          <span>${group.section}</span>
+          <span class="docs-section-count">${group.commands.length}</span>
+        </div>
+        <div class="docs-section-items">
+          ${group.commands.map(cmd => `
+            <a class="docs-link" href="#${cmd.id}" data-id="${cmd.id}">${cmd.title}</a>
+          `).join('')}
+        </div>
+      </div>
+    `).join('')}
+  `;
 
   sidebar.querySelectorAll('.docs-section-header').forEach(header => {
     header.onclick = () => header.parentElement.classList.toggle('collapsed');
   });
+
+  document.getElementById('docs-search').addEventListener('input', (e) => {
+    const q = e.target.value.toLowerCase().trim();
+    document.querySelectorAll('.docs-link').forEach(link => {
+      link.style.display = q === '' || link.textContent.toLowerCase().includes(q) ? '' : 'none';
+    });
+    document.querySelectorAll('.docs-section').forEach(section => {
+      const hasVisible = [...section.querySelectorAll('.docs-link')].some(l => l.style.display !== 'none');
+      if (q !== '') {
+        section.classList.toggle('collapsed', !hasVisible);
+      } else {
+        section.classList.remove('collapsed');
+      }
+    });
+  });
 }
 
 // ── Content rendering ──────────────────────────────────────────────────────
+function getAllCommands() {
+  return CATALOG.flatMap(g => g.commands);
+}
+
 function findCommand(id) {
   for (const group of CATALOG) {
     for (const cmd of group.commands) {
@@ -861,10 +1035,27 @@ function renderCommand(id) {
   }
 
   const { cmd, group } = found;
+
+  // Prev / next within the flat command list.
+  const all = getAllCommands();
+  const idx = all.findIndex(c => c.id === id);
+  const prev = idx > 0 ? all[idx - 1] : null;
+  const next = idx < all.length - 1 ? all[idx + 1] : null;
+  const pager = `
+    <div class="docs-pager">
+      <div class="docs-pager-side">
+        ${prev ? `<a href="#${prev.id}" class="docs-pager-btn">← ${escapeHtml(prev.title)}</a>` : ''}
+      </div>
+      <div class="docs-pager-side right">
+        ${next ? `<a href="#${next.id}" class="docs-pager-btn">${escapeHtml(next.title)} →</a>` : ''}
+      </div>
+    </div>`;
+
+  // Render: title → body (body already opens with its own lede paragraph).
   content.innerHTML = `
     <h1>${escapeHtml(cmd.title)}</h1>
-    <p class="lede">${escapeHtml(cmd.synopsis)}</p>
     ${cmd.body}
+    ${pager}
   `;
 
   // Highlight active link, expand parent section.
@@ -898,4 +1089,20 @@ window.addEventListener('hashchange', routeFromHash);
 window.addEventListener('DOMContentLoaded', () => {
   renderSidebar();
   routeFromHash();
+
+  // Press / to focus the search box.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '/' && e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+      e.preventDefault();
+      document.getElementById('docs-search').focus();
+    }
+    if (e.key === 'Escape') {
+      const search = document.getElementById('docs-search');
+      if (document.activeElement === search) {
+        search.value = '';
+        search.dispatchEvent(new Event('input'));
+        search.blur();
+      }
+    }
+  });
 });

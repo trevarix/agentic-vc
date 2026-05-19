@@ -719,6 +719,32 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
 .docs-section {
   margin-bottom: 8px;
 }
+.docs-search-wrap {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  position: sticky;
+  top: 0;
+  background: var(--bg-elevated);
+  z-index: 1;
+}
+.docs-search {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.docs-search:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.docs-search::placeholder { color: var(--text-muted); }
+
 .docs-section-header {
   display: flex;
   align-items: center;
@@ -734,6 +760,17 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
   transition: color 0.15s;
 }
 .docs-section-header:hover { color: var(--text-bright); }
+.docs-section-count {
+  margin-left: auto;
+  background: var(--bg-soft);
+  color: var(--text-muted);
+  border-radius: 999px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
 .docs-section-chevron {
   font-size: 9px;
   transition: transform 0.15s;
@@ -877,6 +914,34 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
 }
 .docs-tag.required { background: rgba(248,81,73,0.15); color: var(--removed); }
 .docs-tag.optional { background: var(--bg-soft); color: var(--text-muted); }
+
+.docs-pager {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 48px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border-soft);
+}
+.docs-pager-side.right { text-align: right; }
+.docs-pager-btn {
+  display: inline-block;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  transition: all 0.15s;
+  text-decoration: none;
+}
+.docs-pager-btn:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  text-decoration: none;
+  color: var(--accent);
+}
 
 .docs-empty {
   color: var(--text-muted);
