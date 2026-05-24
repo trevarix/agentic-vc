@@ -82,15 +82,19 @@ func printMergeResult(result *mergepkg.Result, preview bool) {
 		for i, f := range result.Files {
 			files[i] = fileJSON{f.Path, f.Decision}
 		}
-		out, _ := json.MarshalIndent(map[string]any{
-			"merge_id":   result.MergeID,
-			"branch":     result.BranchName,
-			"preview":    preview,
-			"clean":      result.Clean,
-			"conflicts":  result.Conflicts,
-			"skipped":    result.Skipped,
-			"files":      files,
-		}, "", "  ")
+		m := map[string]any{
+			"merge_id":  result.MergeID,
+			"branch":    result.BranchName,
+			"preview":   preview,
+			"clean":     result.Clean,
+			"conflicts": result.Conflicts,
+			"skipped":   result.Skipped,
+			"files":     files,
+		}
+		if result.PostMergeSnapshotID != "" {
+			m["post_merge_snapshot_id"] = result.PostMergeSnapshotID
+		}
+		out, _ := json.MarshalIndent(m, "", "  ")
 		fmt.Println(string(out))
 		return
 	}
@@ -112,6 +116,14 @@ func printMergeResult(result *mergepkg.Result, preview bool) {
 		fmt.Printf("\n  %s\n", warn("⚠ Conflicts written with markers (<<<<<<< / ======= / >>>>>>>)."))
 		fmt.Printf("  %s\n", dim("Resolve them, then snapshot to record the resolution."))
 		fmt.Printf("  %s\n", dim("Or run: avc merge --abort  to undo and restore main."))
+	}
+
+	if result.PostMergeSnapshotID != "" {
+		fmt.Printf("\n  %s %s\n",
+			success("✓ Post-merge snapshot:"),
+			dim(result.PostMergeSnapshotID[:12]+"…"),
+		)
+		fmt.Printf("  %s\n", dim("Main is now at the merged state. Run `avc list` to confirm."))
 	}
 
 	if result.Clean > 0 || result.Conflicts > 0 {

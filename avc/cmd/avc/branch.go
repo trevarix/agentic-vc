@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/branch"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/config"
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/diff"
 	"github.com/spf13/cobra"
@@ -29,16 +28,25 @@ var branchCreateCmd = &cobra.Command{
 	RunE:  runBranchCreate,
 }
 
+var (
+	branchListAll    bool
+	branchListStatus string
+)
+
 var branchListCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List all branches",
-	RunE:  runBranchList,
+	Short: "List branches (active by default)",
+	Long: `Lists branches. By default, only active branches are shown.
+
+Use --all to include merged and abandoned branches.
+Use --status to filter by a specific status: active, merged, or abandoned.`,
+	RunE: runBranchList,
 }
 
 var branchSwitchCmd = &cobra.Command{
 	Use:   "switch <name>",
 	Short: "Switch the active branch",
-	Long: `Updates the active branch in .avc/config.toml.
+	Long: `Updates the active branch.
 Does not modify the working directory — use avc restore to roll the project
 state to a specific snapshot on the target branch.`,
 	Args: cobra.ExactArgs(1),
@@ -47,21 +55,66 @@ state to a specific snapshot on the target branch.`,
 
 var branchDeleteCmd = &cobra.Command{
 	Use:   "delete <name>",
-	Short: "Delete a branch",
+	Short: "Delete a branch and its snapshot history",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runBranchDelete,
 }
 
+var branchDeleteKeepHistory bool
+
+var branchDiffStatMode bool
+
 var branchDiffCmd = &cobra.Command{
 	Use:   "diff [branch]",
 	Short: "Show cumulative diff from a branch's base snapshot to its HEAD",
-	Args:  cobra.MaximumNArgs(1),
-	RunE:  runBranchDiff,
+	Long: `Shows all changes made on the branch since it was created.
+
+Use --stat for a compact summary (file names + line counts only).
+Use --json for machine-readable output.`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: runBranchDiff,
 }
+
+var branchRenameCmd = &cobra.Command{
+	Use:   "rename <old> <new>",
+	Short: "Rename a branch",
+	Args:  cobra.ExactArgs(2),
+	RunE:  runBranchRename,
+}
+
+var branchAbandonCmd = &cobra.Command{
+	Use:   "abandon <name>",
+	Short: "Mark a branch as abandoned (keeps history, removes nothing)",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runBranchAbandon,
+}
+
+var branchPruneCmd = &cobra.Command{
+	Use:   "prune",
+	Short: "Remove workspaces for merged branches",
+	Long:  `Deletes workspace directories for all branches with status 'merged'. DB records and snapshots are kept.`,
+	RunE:  runBranchPrune,
+}
+
+var branchPruneMerged bool
 
 func init() {
 	branchCreateCmd.Flags().StringVar(&branchFromSnapshot, "from", "", "Base snapshot ID (defaults to HEAD of main)")
-	branchCmd.AddCommand(branchCreateCmd, branchListCmd, branchSwitchCmd, branchDeleteCmd, branchDiffCmd)
+	branchDeleteCmd.Flags().BoolVar(&branchDeleteKeepHistory, "keep-history", false, "Retain snapshot rows; do not cascade-delete them")
+	branchDiffCmd.Flags().BoolVar(&branchDiffStatMode, "stat", false, "Show compact summary (file names + line counts) instead of full diff")
+	branchListCmd.Flags().BoolVar(&branchListAll, "all", false, "Show all branches including merged and abandoned")
+	branchListCmd.Flags().StringVar(&branchListStatus, "status", "", "Filter by status: active, merged, abandoned")
+	branchPruneCmd.Flags().BoolVar(&branchPruneMerged, "merged", false, "Remove workspaces for all merged branches")
+	branchCmd.AddCommand(
+		branchCreateCmd,
+		branchListCmd,
+		branchSwitchCmd,
+		branchDeleteCmd,
+		branchDiffCmd,
+		branchRenameCmd,
+		branchAbandonCmd,
+		branchPruneCmd,
+	)
 }
 
 func runBranchCreate(cmd *cobra.Command, args []string) error {
@@ -107,16 +160,20 @@ func runBranchList(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	branches, err := branch.List(projectPath)
+	// Resolve which status filter to apply.
+	statusFilter := "active" // default: only active
+	if branchListAll {
+		statusFilter = "" // all statuses
+	} else if branchListStatus != "" {
+		statusFilter = branchListStatus
+	}
+
+	branches, err := branch.ListByStatus(projectPath, statusFilter)
 	if err != nil {
 		return err
 	}
 
-	cfg, _ := config.Load(projectPath)
-	activeName := cfg.Branch.Active
-	if activeName == "" {
-		activeName = "main"
-	}
+	activeName := branch.GetActiveBranchName(projectPath)
 
 	if jsonOutput {
 		type branchJSON struct {
@@ -124,6 +181,7 @@ func runBranchList(cmd *cobra.Command, args []string) error {
 			Name           string `json:"name"`
 			BaseSnapshotID string `json:"base_snapshot_id"`
 			CreatedAt      int64  `json:"created_at"`
+			Status         string `json:"status"`
 			Active         bool   `json:"active"`
 			Workspace      string `json:"workspace"`
 		}
@@ -134,6 +192,7 @@ func runBranchList(cmd *cobra.Command, args []string) error {
 				Name:           b.Name,
 				BaseSnapshotID: b.BaseSnapshotID,
 				CreatedAt:      b.CreatedAt,
+				Status:         b.Status,
 				Active:         b.Name == activeName,
 				Workspace:      branch.WorkspacePath(projectPath, b.Name),
 			}
@@ -142,18 +201,101 @@ func runBranchList(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(branches) == 0 {
-		fmt.Println("No branches found. Run `avc init` to set up branches.")
+		fmt.Println(dim("No branches found for the current filter."))
 		return nil
 	}
 
 	for _, b := range branches {
 		ts := time.Unix(b.CreatedAt, 0).Format("2006-01-02 15:04")
+		statusStr := ""
+		switch b.Status {
+		case "merged":
+			statusStr = "  " + dim("[merged]")
+		case "abandoned":
+			statusStr = "  " + yellow("[abandoned]")
+		}
 		if b.Name == activeName {
-			fmt.Printf("* %s  %s\n", bold(green(b.Name)), dim(ts))
+			fmt.Printf("* %s  %s%s\n", bold(green(b.Name)), dim(ts), statusStr)
 		} else {
-			fmt.Printf("  %s  %s\n", b.Name, dim(ts))
+			fmt.Printf("  %s  %s%s\n", b.Name, dim(ts), statusStr)
 		}
 	}
+	return nil
+}
+
+func runBranchRename(cmd *cobra.Command, args []string) error {
+	oldName, newName := args[0], args[1]
+	projectPath, err := requireInitializedProject()
+	if err != nil {
+		return err
+	}
+
+	if err := branch.Rename(projectPath, oldName, newName); err != nil {
+		return fmt.Errorf("branch rename: %w", err)
+	}
+
+	if jsonOutput {
+		return json.NewEncoder(os.Stdout).Encode(map[string]any{
+			"old_name": oldName,
+			"new_name": newName,
+			"success":  true,
+		})
+	}
+
+	fmt.Printf("%s %s %s %s\n", success("✓ Renamed branch"), cyan(oldName), dim("→"), cyan(newName))
+	return nil
+}
+
+func runBranchAbandon(cmd *cobra.Command, args []string) error {
+	name := args[0]
+	projectPath, err := requireInitializedProject()
+	if err != nil {
+		return err
+	}
+
+	if err := branch.Abandon(projectPath, name); err != nil {
+		return fmt.Errorf("branch abandon: %w", err)
+	}
+
+	if jsonOutput {
+		return json.NewEncoder(os.Stdout).Encode(map[string]any{
+			"name":    name,
+			"status":  "abandoned",
+			"success": true,
+		})
+	}
+
+	fmt.Printf("%s %s\n", success("✓ Marked branch as abandoned:"), bold(name))
+	return nil
+}
+
+func runBranchPrune(cmd *cobra.Command, args []string) error {
+	projectPath, err := requireInitializedProject()
+	if err != nil {
+		return err
+	}
+
+	pruned, err := branch.PruneMergedWorkspaces(projectPath)
+	if err != nil {
+		return fmt.Errorf("branch prune: %w", err)
+	}
+
+	if jsonOutput {
+		return json.NewEncoder(os.Stdout).Encode(map[string]any{
+			"pruned":  pruned,
+			"count":   len(pruned),
+			"success": true,
+		})
+	}
+
+	if len(pruned) == 0 {
+		fmt.Println(dim("No merged branch workspaces to prune."))
+		return nil
+	}
+	for _, name := range pruned {
+		fmt.Printf("%s %s\n", success("✓ Pruned workspace:"), cyan(name))
+	}
+	fmt.Printf("%s\n", dim(fmt.Sprintf("Removed %d workspace(s). DB records and snapshots are retained.", len(pruned))))
 	return nil
 }
 
@@ -187,7 +329,7 @@ func runBranchDelete(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if err := branch.Delete(projectPath, name); err != nil {
+	if err := branch.Delete(projectPath, name, branchDeleteKeepHistory); err != nil {
 		return fmt.Errorf("branch delete: %w", err)
 	}
 
@@ -283,6 +425,11 @@ func runBranchDiff(cmd *cobra.Command, args []string) error {
 			"to_snapshot":   head.ID,
 			"files":         files,
 		})
+	}
+
+	if branchDiffStatMode {
+		printDiffStat(result.Files)
+		return nil
 	}
 
 	fmt.Printf("%s %s\n%s\n\n", accent("◆ Branch diff:"), cyan(name), ruler(50))

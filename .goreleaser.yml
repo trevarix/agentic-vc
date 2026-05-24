@@ -1,0 +1,191 @@
+# GoReleaser configuration for AVC (Agentic Version Control).
+# Run locally:  goreleaser release --snapshot --clean
+# CI:           triggered automatically on tag push via .github/workflows/release.yml
+version: 2
+
+project_name: avc
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: avc
+    dir: avc
+    main: .
+    binary: avc
+    env:
+      - CGO_ENABLED=0   # modernc.org/sqlite is pure Go — no CGO required
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      # Windows arm64 is not yet a common target; skip to reduce build matrix.
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - id: avc-archive
+    builds:
+      - avc
+    name_template: >-
+      {{- .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- .Arch }}
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - README.md
+      - LICENSE
+      - docs/cli-reference.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+# Sigstore/cosign provenance — signs the checksums file against the GitHub OIDC
+# token so users can verify the artifact came from this CI run.
+# No stored secrets needed. Install cosign: https://docs.sigstore.dev/cosign/system_config/installation
+# Verify: cosign verify-blob --certificate avc_<version>_checksums.txt.pem \
+#           --signature avc_<version>_checksums.txt.sig checksums.txt
+signs:
+  - cmd: cosign
+    env:
+      - COSIGN_EXPERIMENTAL=1
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-certificate=${certificate}"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+# Homebrew tap — macOS users can install without Gatekeeper friction:
+#   brew install SkillMythOrg/tap/avc
+# Requires a public GitHub repo named "homebrew-tap" under the SkillMythOrg org.
+brews:
+  - name: avc
+    repository:
+      owner: SkillMythOrg
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    commit_msg_template: "Brew formula update for {{ .ProjectName }} version {{ .Tag }}"
+    homepage: "https://github.com/SkillMythOrg/agentic-vc"
+    description: "Agentic Version Control — lightweight, agent-safe project snapshots"
+    license: "MIT"
+    install: |
+      bin.install "avc"
+    test: |
+      system "#{bin}/avc", "--version"
+
+# Scoop bucket — Windows users can install without SmartScreen friction:
+#   scoop bucket add avc https://github.com/SkillMythOrg/scoop-bucket
+#   scoop install avc
+# Requires a public GitHub repo named "scoop-bucket" under the SkillMythOrg org.
+scoops:
+  - repository:
+      owner: SkillMythOrg
+      name: scoop-bucket
+      branch: main
+      token: "{{ .Env.SCOOP_BUCKET_TOKEN }}"
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    homepage: "https://github.com/SkillMythOrg/agentic-vc"
+    description: "Agentic Version Control — lightweight, agent-safe project snapshots"
+    license: "MIT"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
+  groups:
+    - title: "New Features"
+      regexp: "^feat"
+      order: 0
+    - title: "Bug Fixes"
+      regexp: "^fix"
+      order: 1
+    - title: "Other Changes"
+      order: 999
+
+release:
+  github:
+    owner: SkillMythOrg
+    name: agentic-vc
+  name_template: "AVC {{.Version}}"
+  draft: false
+  prerelease: auto
+  footer: |
+    ## Install
+
+    ### macOS (recommended — no Gatekeeper prompt)
+    ```bash
+    brew install SkillMythOrg/tap/avc
+    ```
+
+    ### Windows (recommended — no SmartScreen prompt)
+    ```powershell
+    scoop bucket add avc https://github.com/SkillMythOrg/scoop-bucket
+    scoop install avc
+    ```
+
+    ### Linux
+    ```bash
+    curl -sfL https://github.com/SkillMythOrg/agentic-vc/releases/download/{{.Tag}}/avc_{{.Version}}_linux_amd64.tar.gz | tar xz
+    sudo mv avc /usr/local/bin/
+    ```
+
+    ### Direct download (macOS / Windows)
+    Download the archive for your platform from the assets below.
+
+    **macOS** — after extracting, remove the quarantine attribute before first run:
+    ```bash
+    xattr -rd com.apple.quarantine avc
+    chmod +x avc && sudo mv avc /usr/local/bin/
+    ```
+
+    **Windows** — after extracting `avc.exe`: right-click → Properties → check *Unblock* → OK,
+    then move to a directory on your PATH.
+
+    ### Verify the download (optional)
+    ```bash
+    cosign verify-blob \
+      --certificate checksums.txt.pem \
+      --signature checksums.txt.sig \
+      checksums.txt
+    ```
+
+    ### After installing
+    ```bash
+    avc init                          # initialize AVC in your project
+    avc init --skills claude-code     # configure Claude Code integration
+    avc --version                     # confirm the installed version
+    ```

@@ -7,7 +7,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var mcpCompact bool
+var (
+	mcpCompact   bool
+	mcpToolsTier string
+)
 
 var mcpCmd = &cobra.Command{
 	Use:   "mcp",
@@ -22,14 +25,17 @@ var mcpServeCmd = &cobra.Command{
 Configure your agent framework to run: avc mcp serve
 The server resolves the AVC project from the current working directory.
 
-Available tools:
-  avc_snapshot, avc_list, avc_diff, avc_restore, avc_info, avc_delete
-  avc_branch_create, avc_branch_list, avc_branch_switch, avc_branch_diff`,
+Tool tiers (--tools):
+  core      4 tools: snapshot, list, diff, restore
+  standard  11 tools: core + branch (create/list/switch/diff) + merge + merge_abort + status  (default)
+  full      All ~24 tools including annotate, run, tag, conflict resolution, etc.`,
 	RunE: runMCPServe,
 }
 
 func init() {
 	mcpServeCmd.Flags().BoolVar(&mcpCompact, "compact", false, "Emit compact JSON instead of pretty-printed")
+	mcpServeCmd.Flags().StringVar(&mcpToolsTier, "tools", "standard",
+		"Tool tier to advertise: core (4), standard (11, default), or full (~24)")
 	mcpCmd.AddCommand(mcpServeCmd)
 }
 
@@ -46,5 +52,5 @@ func runMCPServe(cmd *cobra.Command, args []string) error {
 		// where CWD may not be an AVC project.
 		projectPath, _ = requireInitializedProject()
 	}
-	return mcp.Serve(projectPath, mcpCompact)
+	return mcp.Serve(projectPath, mcpCompact, mcpToolsTier)
 }

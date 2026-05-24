@@ -149,7 +149,7 @@ func TestBranch_Switch_ToMain(t *testing.T) {
 func TestBranch_Delete_RefusesMain(t *testing.T) {
 	projectRoot := setupTestProject(t)
 
-	if err := branch.Delete(projectRoot, "main"); err == nil {
+	if err := branch.Delete(projectRoot, "main", false); err == nil {
 		t.Error("expected error when deleting 'main' branch, got nil")
 	}
 }
@@ -171,7 +171,7 @@ func TestBranch_Delete_RefusesActiveBranch(t *testing.T) {
 		t.Fatalf("Switch: %v", err)
 	}
 
-	if err := branch.Delete(projectRoot, "feat/active"); err == nil {
+	if err := branch.Delete(projectRoot, "feat/active", false); err == nil {
 		t.Error("expected error when deleting the active branch, got nil")
 	}
 }
@@ -181,7 +181,7 @@ func TestBranch_Delete_RefusesActiveBranch(t *testing.T) {
 func TestBranch_Delete_NonExistentBranch(t *testing.T) {
 	projectRoot := setupTestProject(t)
 
-	if err := branch.Delete(projectRoot, "does-not-exist"); err == nil {
+	if err := branch.Delete(projectRoot, "does-not-exist", false); err == nil {
 		t.Error("expected error when deleting non-existent branch, got nil")
 	}
 }

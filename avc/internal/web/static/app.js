@@ -4,6 +4,8 @@
 const state = {
   snapshots: [],
   selectedId: null,
+  branches: [],
+  activeBranch: 'main',
 };
 
 // ── Utils ────────────────────────────────────────────────────────────────
@@ -573,6 +575,228 @@ function setupSaveModal() {
   };
 }
 
+// ── Branches ─────────────────────────────────────────────────────────────
+async function loadBranches() {
+  try {
+    const data = await api('/api/branches');
+    state.branches = data.branches;
+    state.activeBranch = data.active_name;
+    renderBranchSelect();
+  } catch { /* non-critical on first load */ }
+}
+
+function renderBranchSelect() {
+  const sel = $('branch-select');
+  sel.innerHTML = '';
+  for (const b of state.branches) {
+    const opt = document.createElement('option');
+    opt.value = b.name;
+    opt.textContent = b.name;
+    if (b.name === state.activeBranch) opt.selected = true;
+    sel.appendChild(opt);
+  }
+}
+
+async function switchBranch(name) {
+  try {
+    await api('/api/branches/switch', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    });
+    state.activeBranch = name;
+    renderBranchSelect();
+    await refreshAll();
+    showToast(`Switched to branch "${name}"`);
+  } catch (err) {
+    showToast(`Switch failed: ${err.message}`, 'error');
+    await loadBranches(); // revert selector to actual state
+  }
+}
+
+function renderBranchesList() {
+  const container = $('branches-list');
+  if (!state.branches.length) {
+    container.innerHTML = '<p class="muted">No branches found.</p>';
+    return;
+  }
+  container.innerHTML = '';
+  for (const b of state.branches) {
+    const row = document.createElement('div');
+    row.className = 'branch-row';
+    const isActive = b.name === state.activeBranch;
+    row.innerHTML = `
+      <div class="branch-row-left">
+        <span class="branch-name">${escapeHtml(b.name)}</span>
+        ${isActive ? '<span class="badge-active">active</span>' : ''}
+        ${b.workspace ? `<span class="branch-ws muted">${escapeHtml(b.workspace)}</span>` : ''}
+      </div>
+      <div class="branch-row-actions">
+        ${!isActive ? `<button class="btn btn-sm" data-action="switch" data-name="${escapeHtml(b.name)}">Switch</button>` : ''}
+        <button class="btn btn-sm" data-action="diff" data-name="${escapeHtml(b.name)}">Diff</button>
+        ${b.name !== 'main' && !isActive ? `<button class="btn btn-sm btn-primary" data-action="merge" data-name="${escapeHtml(b.name)}">Merge→main</button>` : ''}
+        ${b.name !== 'main' ? `<button class="btn btn-sm btn-danger" data-action="delete" data-name="${escapeHtml(b.name)}">Delete</button>` : ''}
+      </div>
+    `;
+    container.appendChild(row);
+  }
+
+  container.querySelectorAll('[data-action]').forEach(btn => {
+    btn.onclick = async () => {
+      const name = btn.dataset.name;
+      switch (btn.dataset.action) {
+        case 'switch': closeModal('modal-branches'); await switchBranch(name); break;
+        case 'diff':   closeModal('modal-branches'); await viewBranchDiff(name); break;
+        case 'merge':  closeModal('modal-branches'); await openMergePreview(name); break;
+        case 'delete': await deleteBranch(name); break;
+      }
+    };
+  });
+}
+
+async function deleteBranch(name) {
+  showConfirm(
+    `Delete branch "${name}"?`,
+    `The branch workspace will be removed. Snapshots can be kept with the keep_history option.`,
+    async () => {
+      try {
+        await api(`/api/branches/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        showToast(`Branch "${name}" deleted`);
+        await loadBranches();
+        renderBranchesList();
+      } catch (err) {
+        showToast(`Delete failed: ${err.message}`, 'error');
+      }
+    }
+  );
+}
+
+async function viewBranchDiff(name) {
+  $('branch-diff-title').textContent = `Branch diff: ${name}`;
+  $('branch-diff-summary').textContent = 'Loading…';
+  $('branch-diff-body').innerHTML = '';
+  openModal('modal-branch-diff');
+  try {
+    const result = await api(`/api/branches/${encodeURIComponent(name)}/diff`);
+    const totalAdded   = result.files.reduce((s, f) => s + f.lines_added,   0);
+    const totalRemoved = result.files.reduce((s, f) => s + f.lines_removed, 0);
+    $('branch-diff-summary').innerHTML =
+      `${result.files.length} file(s) changed &nbsp; <span class="added">+${totalAdded}</span> &nbsp; <span class="removed">-${totalRemoved}</span>` +
+      `<span class="muted" style="margin-left:12px">from ${result.from_snapshot_id.slice(0,8)} → ${result.to_snapshot_id.slice(0,8)}</span>`;
+    $('branch-diff-body').innerHTML = result.files.map(f => `
+      <div class="diff-file">
+        <div class="diff-file-header">
+          <span>${escapeHtml(f.path)}</span>
+          <span>
+            <span class="diff-badge ${f.type}">${f.type}</span>
+            <span class="added">+${f.lines_added}</span>
+            <span class="removed">-${f.lines_removed}</span>
+          </span>
+        </div>
+        ${f.diff_preview ? `<div>${renderUnifiedDiff(f.diff_preview)}</div>` : ''}
+      </div>
+    `).join('');
+  } catch (err) {
+    $('branch-diff-summary').textContent = '';
+    $('branch-diff-body').innerHTML = `<p class="muted">Error: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+// ── Merge panel ───────────────────────────────────────────────────────────
+async function openMergePreview(branchName) {
+  $('merge-title').textContent = `Merge "${branchName}" → main`;
+  $('merge-summary').textContent = 'Computing merge plan…';
+  $('merge-file-list').innerHTML = '';
+  $('btn-merge-confirm').disabled = true;
+  openModal('modal-merge');
+
+  try {
+    const plan = await api(`/api/merge/preview?branch=${encodeURIComponent(branchName)}`);
+    renderMergePlan(plan, branchName);
+  } catch (err) {
+    $('merge-summary').innerHTML = `<span class="removed">Error: ${escapeHtml(err.message)}</span>`;
+  }
+}
+
+function renderMergePlan(plan, branchName) {
+  const hasConflicts = plan.conflicts > 0;
+  $('merge-summary').innerHTML = `
+    <span class="added">✓ ${plan.clean} clean</span>
+    ${hasConflicts ? `&nbsp; <span class="removed">✕ ${plan.conflicts} conflict${plan.conflicts === 1 ? '' : 's'}</span>` : ''}
+    ${plan.skipped ? `&nbsp; <span class="muted">${plan.skipped} skipped</span>` : ''}
+  `;
+  $('merge-file-list').innerHTML = plan.files.map(f => `
+    <div class="merge-file-row ${f.decision}">
+      <span class="merge-decision-badge">${f.decision}</span>
+      <span>${escapeHtml(f.path)}</span>
+    </div>
+  `).join('');
+
+  const confirmBtn = $('btn-merge-confirm');
+  confirmBtn.disabled = hasConflicts;
+  if (hasConflicts) {
+    confirmBtn.title = 'Resolve conflicts before merging';
+  } else {
+    confirmBtn.title = '';
+    confirmBtn.onclick = async () => {
+      setLoading(confirmBtn, true);
+      try {
+        const result = await api('/api/merge', {
+          method: 'POST',
+          body: JSON.stringify({ branch: branchName }),
+        });
+        closeModal('modal-merge');
+        if (result.conflicts > 0) {
+          showToast(`Merge has ${result.conflicts} conflict(s) — resolve manually`, 'error');
+        } else {
+          showToast(`Merged "${branchName}" into main — ${result.clean} file(s)`);
+          await refreshAll();
+          await loadBranches();
+        }
+      } catch (err) {
+        showToast(`Merge failed: ${err.message}`, 'error');
+      } finally {
+        setLoading(confirmBtn, false);
+      }
+    };
+  }
+}
+
+// ── Status panel ──────────────────────────────────────────────────────────
+async function showStatus() {
+  $('status-body').innerHTML = '<p class="muted">Loading…</p>';
+  openModal('modal-status');
+  try {
+    const result = await api('/api/status');
+    if (!result.files || result.files.length === 0) {
+      $('status-body').innerHTML = `
+        <div class="status-clean">
+          <span class="added">✓</span> Working tree is clean
+          <p class="muted">No changes since snapshot: <strong>${escapeHtml(result.snapshot_label || '(none)')}</strong></p>
+        </div>`;
+      return;
+    }
+    const totalAdded   = result.files.reduce((s, f) => s + f.lines_added,   0);
+    const totalRemoved = result.files.reduce((s, f) => s + f.lines_removed, 0);
+    $('status-body').innerHTML = `
+      <div class="status-header muted">
+        Branch: <strong>${escapeHtml(result.branch_name)}</strong> &nbsp;·&nbsp;
+        Since: <strong>${escapeHtml(result.snapshot_label || result.snapshot_id || 'initial')}</strong> &nbsp;·&nbsp;
+        <span class="added">+${totalAdded}</span> <span class="removed">-${totalRemoved}</span>
+      </div>
+      <div class="status-file-list">
+        ${result.files.map(f => `
+          <div class="status-file-row">
+            <span class="status-badge ${f.type}">${f.type[0].toUpperCase()}</span>
+            <span>${escapeHtml(f.path)}</span>
+            <span class="muted"><span class="added">+${f.lines_added}</span> <span class="removed">-${f.lines_removed}</span></span>
+          </div>
+        `).join('')}
+      </div>`;
+  } catch (err) {
+    $('status-body').innerHTML = `<p class="muted">Error: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
 // ── Bootstrap ────────────────────────────────────────────────────────────
 async function refreshAll() {
   try {
@@ -587,7 +811,6 @@ async function loadProjectInfo() {
   try {
     const info = await api('/api/project');
     $('project-name').textContent = info.name;
-    $('branch-badge').textContent = info.active_branch;
   } catch {
     $('project-name').textContent = '(unknown)';
   }
@@ -605,11 +828,57 @@ function setupModalCloseButtons() {
   });
 }
 
+function setupBranchSelector() {
+  const sel = $('branch-select');
+  sel.addEventListener('change', () => {
+    const chosen = sel.value;
+    if (chosen !== state.activeBranch) {
+      switchBranch(chosen);
+    }
+  });
+}
+
+function setupBranchesModal() {
+  $('btn-branches').onclick = async () => {
+    await loadBranches();
+    renderBranchesList();
+    openModal('modal-branches');
+  };
+
+  $('btn-create-branch').onclick = async () => {
+    const name = $('new-branch-name').value.trim();
+    if (!name) { showToast('Branch name is required', 'error'); return; }
+    const fromSnap = $('new-branch-from').value.trim();
+    const btn = $('btn-create-branch');
+    setLoading(btn, true);
+    try {
+      await api('/api/branches', {
+        method: 'POST',
+        body: JSON.stringify({ name, from_snapshot_id: fromSnap || undefined }),
+      });
+      $('new-branch-name').value = '';
+      $('new-branch-from').value = '';
+      showToast(`Branch "${name}" created — switching…`);
+      await loadBranches();
+      renderBranchesList();
+      await refreshAll();
+    } catch (err) {
+      showToast(`Create failed: ${err.message}`, 'error');
+    } finally {
+      setLoading(btn, false);
+    }
+  };
+}
+
 window.addEventListener('DOMContentLoaded', () => {
   setupSaveModal();
   setupModalCloseButtons();
-  $('btn-refresh').onclick = refreshAll;
+  setupBranchSelector();
+  setupBranchesModal();
+  $('btn-refresh').onclick = async () => { await refreshAll(); await loadBranches(); };
+  $('btn-status').onclick = showStatus;
   loadProjectInfo();
+  loadBranches();
   refreshAll();
 
   document.addEventListener('keydown', (e) => {
