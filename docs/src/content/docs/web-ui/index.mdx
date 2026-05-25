@@ -1,0 +1,48 @@
+---
+title: Web UI
+description: The standalone web UI served by `avc ui` — for users who don't use VSCode.
+sidebar:
+  order: 0
+---
+
+import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+`avc ui` serves a complete graphical interface at `http://127.0.0.1:3004` for managing snapshots. It works in any browser, on any machine, without an editor extension — ideal for Cursor, JetBrains, Neovim, Sublime, plain terminal users, or non-technical teammates.
+
+## Why use it
+
+- **No editor dependency** — works in Chrome, Firefox, Safari, Edge, anywhere
+- **One binary** — the entire web app is embedded in the `avc` binary via Go's `//go:embed`
+- **Same features as the VSCode extension** — date-grouped snapshots, folder-tree file browser, side-by-side diffs, one-click restore
+- **Built-in REST API** — every endpoint the UI uses is documented and stable
+
+## Pages in this section
+
+<CardGrid>
+  <LinkCard
+    title="Overview"
+    href="/agentic-vc/web-ui/overview/"
+    description="Features, design rationale, theme behavior, network exposure."
+  />
+  <LinkCard
+    title="REST API"
+    href="/agentic-vc/web-ui/api/"
+    description="Every HTTP endpoint with example curl commands."
+  />
+</CardGrid>
+
+## Quick start
+
+```bash
+avc ui
+```
+
+The server starts on port 3004 and your default browser opens automatically. Stop with `Ctrl+C`.
+
+```bash
+avc ui --port 8080            # custom port
+avc ui --no-open              # don't open browser (SSH / headless)
+avc ui --host 0.0.0.0         # bind all interfaces (LAN access)
+```
+
+See [`avc ui`](/agentic-vc/cli/ui/) for the full flag reference.
