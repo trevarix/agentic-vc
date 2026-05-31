@@ -52,3 +52,9 @@ AVC is **not** trying to replace Git. Use Git for your repo, branches, PRs, and 
 - **Not** a cloud service — 100% local, your code never leaves your machine
 - **Not** a collaboration tool — single-user by design (v1)
 - **Not** a backup tool — focused on dev-session snapshots, not long-term archival
+
+## Next steps
+
+- [Install AVC](/agentic-vc/install/) — three install paths for any OS
+- [Quick Start](/agentic-vc/quick-start/) — take your first snapshot in 5 minutes
+- [Concepts → Snapshots](/agentic-vc/concepts/snapshots/) — how the content-addressed store works

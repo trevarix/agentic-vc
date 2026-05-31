@@ -1,0 +1,71 @@
+---
+title: CLI Overview
+description: Every AVC command, organized by topic.
+sidebar:
+  order: 0
+---
+
+import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+The AVC CLI is the primary interface — every other surface (VSCode extension, web UI, MCP server) calls these commands underneath. Each command supports `--json` for machine-readable output.
+
+## Global flags
+
+| Flag | Description |
+|------|-------------|
+| `--json` | Emit results as JSON to stdout instead of human-readable text |
+| `--help` | Show help for any command |
+
+Errors are written to `stderr`; the process exits with code `1` on failure.
+
+## Project setup
+
+<CardGrid>
+  <LinkCard title="avc init" href="/agentic-vc/cli/init/" description="Initialize AVC for a project. Optionally set up agent integration files." />
+</CardGrid>
+
+## Snapshots
+
+<CardGrid>
+  <LinkCard title="avc snapshot" href="/agentic-vc/cli/snapshot/" description="Create a snapshot of the current project state." />
+  <LinkCard title="avc list" href="/agentic-vc/cli/list/" description="List snapshots on the active branch." />
+  <LinkCard title="avc info" href="/agentic-vc/cli/info/" description="Show snapshot metadata and file list." />
+  <LinkCard title="avc log" href="/agentic-vc/cli/log/" description="Tree-style history of snapshots." />
+  <LinkCard title="avc delete" href="/agentic-vc/cli/delete/" description="Permanently delete a snapshot." />
+</CardGrid>
+
+## Diff & restore
+
+<CardGrid>
+  <LinkCard title="avc diff" href="/agentic-vc/cli/diff/" description="Compare two snapshots file-by-file." />
+  <LinkCard title="avc diff-current" href="/agentic-vc/cli/diff-current/" description="Compare a snapshot against the working tree." />
+  <LinkCard title="avc restore" href="/agentic-vc/cli/restore/" description="Roll back the entire project to a snapshot." />
+  <LinkCard title="avc restore-file" href="/agentic-vc/cli/restore-file/" description="Restore a single file from a snapshot." />
+  <LinkCard title="avc cat" href="/agentic-vc/cli/cat/" description="Print file contents from a snapshot to stdout." />
+  <LinkCard title="avc file-history" href="/agentic-vc/cli/file-history/" description="List every snapshot that contains a specific file." />
+  <LinkCard title="avc annotate" href="/agentic-vc/cli/annotate/" description="Show which snapshot introduced each line." />
+</CardGrid>
+
+## Branches & merge
+
+<CardGrid>
+  <LinkCard title="avc branch" href="/agentic-vc/cli/branch/" description="Create, list, switch, delete, and diff branches." />
+  <LinkCard title="avc merge" href="/agentic-vc/cli/merge/" description="Three-way merge with conflict detection and abort." />
+</CardGrid>
+
+## Agents & UI
+
+<CardGrid>
+  <LinkCard title="avc mcp" href="/agentic-vc/cli/mcp/" description="Start the MCP server for AI agents." />
+  <LinkCard title="avc ui" href="/agentic-vc/cli/ui/" description="Start the standalone web UI server." />
+</CardGrid>
+
+## JSON output convention
+
+Every command that returns structured data accepts `--json`. The shape mirrors what's documented per-command. Errors always include an `error` field:
+
+```json
+{ "error": "snapshot 'snap-foo' not found" }
+```
+
+For scripts and agents, prefer `--json` — it's stable across CLI text-output revisions.

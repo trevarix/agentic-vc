@@ -1,7 +1,7 @@
-/* AVC brand colors and fonts layered on top of Starlight's defaults. */
+/* AVC docs — modern, polished overrides for Starlight. */
 
 :root {
-  /* Accent — blue (matches the avc ui app and VSCode extension) */
+  /* Accent — AVC blue, matches the web UI and extension */
   --sl-color-accent-low: hsl(212, 90%, 12%);
   --sl-color-accent: hsl(212, 90%, 50%);
   --sl-color-accent-high: hsl(212, 90%, 80%);
@@ -9,18 +9,414 @@
   /* Fonts */
   --sl-font: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
   --sl-font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', Menlo, monospace;
+
+  /* Sizing tweaks */
+  --sl-text-h1: 2.5rem;
+  --sl-line-height-headings: 1.2;
+  --sl-content-width: 50rem;
 }
 
-/* Dark mode tweaks — slightly warmer accent so it pops against the GH-style dark bg */
+/* Slightly warmer accent for dark mode so it stands out on the dark bg */
 :root[data-theme='dark'] {
-  --sl-color-accent: hsl(212, 100%, 60%);
+  --sl-color-accent: hsl(212, 100%, 62%);
+  --sl-color-accent-high: hsl(212, 100%, 78%);
 }
 
-/* Hero card hover affordance on the splash page */
-.card {
-  transition: transform 0.15s ease, border-color 0.15s ease;
+/* ──────────────────────────────────────────────────────────────────────────
+   Typography — better default rendering
+   ────────────────────────────────────────────────────────────────────────── */
+
+body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+
+.sl-markdown-content h1 {
+  letter-spacing: -0.02em;
+  font-weight: 700;
 }
-.card:hover {
+.sl-markdown-content h2 {
+  letter-spacing: -0.01em;
+  font-weight: 650;
+  margin-top: 2.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--sl-color-hairline);
+}
+.sl-markdown-content h3 {
+  letter-spacing: -0.005em;
+  font-weight: 600;
+  margin-top: 2rem;
+}
+/* Don't show the divider on the very first h2 (right after the lede) */
+.sl-markdown-content > h2:first-of-type { border-top: none; padding-top: 0; margin-top: 1.5rem; }
+
+/* Inline code — softer background, accent foreground */
+.sl-markdown-content :not(pre) > code {
+  background: var(--sl-color-bg-inline-code);
+  color: var(--sl-color-text-accent);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  font-size: 0.9em;
+  font-weight: 500;
+}
+
+/* Tables — cleaner spacing and stronger header */
+.sl-markdown-content table {
+  border-collapse: collapse;
+  margin: 1.25rem 0;
+  font-size: 0.92rem;
+}
+.sl-markdown-content table th {
+  background: var(--sl-color-gray-6);
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.78em;
+  letter-spacing: 0.04em;
+  color: var(--sl-color-gray-2);
+  padding: 0.5rem 0.75rem;
+  border-bottom: 2px solid var(--sl-color-hairline);
+}
+.sl-markdown-content table td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--sl-color-hairline);
+}
+.sl-markdown-content table tr:hover td { background: var(--sl-color-gray-6); }
+
+/* Blockquotes — accent left bar, soft tint */
+.sl-markdown-content blockquote {
+  border-left: 3px solid var(--sl-color-accent);
+  background: var(--sl-color-accent-low);
+  border-radius: 0 6px 6px 0;
+  padding: 0.75rem 1.25rem;
+  margin: 1rem 0;
+  color: var(--sl-color-text);
+  font-style: normal;
+}
+
+/* Code blocks — subtle glow on hover for tactility */
+.sl-markdown-content pre {
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Hero — splash page (modern dev-tool style)
+   ────────────────────────────────────────────────────────────────────────── */
+
+/* Force a single-column, centered hero (no image slot). */
+.hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 4rem 1.5rem 2rem;
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+/* Mesh-gradient background — soft, animated drift, theme-aware. */
+.hero::before {
+  content: '';
+  position: absolute;
+  inset: -20%;
+  z-index: -1;
+  background:
+    radial-gradient(circle at 20% 30%, hsla(212, 90%, 50%, 0.18), transparent 40%),
+    radial-gradient(circle at 80% 20%, hsla(265, 80%, 60%, 0.15), transparent 40%),
+    radial-gradient(circle at 60% 80%, hsla(190, 90%, 55%, 0.13), transparent 40%);
+  filter: blur(40px);
+  animation: hero-drift 22s ease-in-out infinite alternate;
+  opacity: 0.85;
+}
+
+/* Subtle grid pattern on top for texture. */
+.hero::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background-image:
+    linear-gradient(to right, var(--sl-color-hairline) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--sl-color-hairline) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse at center, black 30%, transparent 70%);
+  -webkit-mask-image: radial-gradient(ellipse at center, black 30%, transparent 70%);
+  opacity: 0.4;
+}
+
+@keyframes hero-drift {
+  0%   { transform: translate(0, 0)       scale(1); }
+  50%  { transform: translate(2%, -1%)    scale(1.05); }
+  100% { transform: translate(-2%, 1%)    scale(1); }
+}
+
+/* Hide the image slot — we use our own visuals below. */
+.hero .hero-html { display: none; }
+
+.hero h1 {
+  font-size: clamp(2.25rem, 4.5vw, 3.75rem) !important;
+  letter-spacing: -0.035em;
+  font-weight: 800;
+  line-height: 1.05;
+  margin-bottom: 0.75rem;
+  /* Solid color for reliable rendering across browsers/themes. */
+  color: var(--sl-color-text);
+  /* Gradient overlay via background-clip for the accent shimmer. */
+  background-image: linear-gradient(
+    135deg,
+    var(--sl-color-text) 0%,
+    var(--sl-color-text) 30%,
+    var(--sl-color-text-accent) 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: hero-fade-in 0.6s ease-out;
+}
+
+/* Fallback if background-clip:text isn't supported. */
+@supports not ((-webkit-background-clip: text) or (background-clip: text)) {
+  .hero h1 {
+    background: none;
+    color: var(--sl-color-text);
+    -webkit-text-fill-color: var(--sl-color-text);
+  }
+}
+
+.hero .tagline {
+  font-size: clamp(1.05rem, 1.4vw, 1.25rem);
+  color: var(--sl-color-gray-2);
+  max-width: 38rem;
+  line-height: 1.55;
+  margin: 0 auto 2rem;
+  animation: hero-fade-in 0.7s ease-out 0.1s both;
+}
+
+.hero .actions {
+  justify-content: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  animation: hero-fade-in 0.7s ease-out 0.2s both;
+}
+
+.hero .actions a {
+  transition: transform 0.15s ease, box-shadow 0.2s ease, background 0.15s ease;
+  font-weight: 600;
+  padding: 0.65rem 1.4rem;
+  border-radius: 8px;
+}
+.hero .actions a:hover {
   transform: translateY(-2px);
-  border-color: var(--sl-color-accent);
+  box-shadow: 0 8px 20px rgba(47, 129, 247, 0.25);
 }
+
+@keyframes hero-fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Hero badge — small pill above the title
+   ────────────────────────────────────────────────────────────────────────── */
+
+.hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.85rem;
+  margin: -1rem auto 1.25rem;
+  background: var(--sl-color-accent-low);
+  border: 1px solid var(--sl-color-accent);
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--sl-color-text-accent);
+  letter-spacing: 0.02em;
+  animation: hero-fade-in 0.5s ease-out;
+}
+
+.hero-badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sl-color-accent-high);
+  box-shadow: 0 0 0 4px var(--sl-color-accent-low);
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.6; transform: scale(0.85); }
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Hero terminal mockup
+   ────────────────────────────────────────────────────────────────────────── */
+
+.hero-terminal {
+  max-width: 760px;
+  margin: 3rem auto 1rem;
+  background: var(--sl-color-gray-7, #0d1117);
+  border: 1px solid var(--sl-color-hairline);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.04) inset,
+    0 20px 60px rgba(0, 0, 0, 0.35),
+    0 8px 20px rgba(47, 129, 247, 0.12);
+  text-align: left;
+  animation: hero-fade-in 0.8s ease-out 0.3s both;
+}
+
+:root[data-theme='light'] .hero-terminal {
+  background: #0d1117;
+}
+
+.hero-terminal-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.65rem 1rem;
+  background: rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.hero-terminal-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.dot-red    { background: #ff5f57; }
+.dot-yellow { background: #ffbd2e; }
+.dot-green  { background: #28c941; }
+
+.hero-terminal-title {
+  margin-left: auto;
+  margin-right: auto;
+  font-size: 0.78rem;
+  color: rgba(255, 255, 255, 0.45);
+  font-family: var(--sl-font-mono);
+}
+
+/* Shiki code block inside the terminal frame — strip its own chrome. */
+.hero-terminal .expressive-code,
+.hero-terminal pre {
+  margin: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+.hero-terminal .frame,
+.hero-terminal .frame.is-terminal {
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+.hero-terminal .header,
+.hero-terminal .frame .header {
+  display: none !important; /* hide Expressive Code's own header — we have our own */
+}
+.hero-terminal pre code,
+.hero-terminal .ec-line {
+  font-size: 0.88rem !important;
+  line-height: 1.65 !important;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Cards & LinkCards — more elevated, hoverable
+   ────────────────────────────────────────────────────────────────────────── */
+
+.card,
+.sl-link-card {
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  border-radius: 8px !important;
+}
+.card:hover,
+.sl-link-card:hover {
+  transform: translateY(-3px);
+  border-color: var(--sl-color-accent) !important;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
+}
+
+.sl-link-card .title {
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Sidebar — tighter, more polished nav
+   ────────────────────────────────────────────────────────────────────────── */
+
+.sidebar-content summary,
+.sidebar-content a {
+  border-radius: 4px;
+}
+.sidebar-content a[aria-current='page'] {
+  background: var(--sl-color-accent-low);
+  color: var(--sl-color-text-accent);
+  font-weight: 600;
+  border-left: 2px solid var(--sl-color-accent);
+}
+
+/* Section headers in the sidebar */
+.sidebar-content > ul > li > details > summary {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--sl-color-gray-3);
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Header — subtle bottom border
+   ────────────────────────────────────────────────────────────────────────── */
+
+.header {
+  border-bottom: 1px solid var(--sl-color-hairline);
+  backdrop-filter: blur(8px);
+  background: color-mix(in srgb, var(--sl-color-bg) 80%, transparent);
+}
+
+/* Site title pops more */
+.site-title {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Page nav (right sidebar / TOC) — cleaner indicators
+   ────────────────────────────────────────────────────────────────────────── */
+
+#starlight__on-this-page--mobile,
+.right-sidebar a {
+  font-size: 0.85rem;
+}
+.right-sidebar a[aria-current='true'] {
+  color: var(--sl-color-text-accent);
+  font-weight: 600;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Footer — softer
+   ────────────────────────────────────────────────────────────────────────── */
+
+footer {
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--sl-color-hairline);
+  color: var(--sl-color-gray-3);
+  font-size: 0.85rem;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Scrollbar — match the theme
+   ────────────────────────────────────────────────────────────────────────── */
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--sl-color-hairline);
+  border-radius: 5px;
+  border: 2px solid var(--sl-color-bg);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--sl-color-gray-4); }
