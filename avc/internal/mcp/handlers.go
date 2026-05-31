@@ -4,15 +4,15 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/annotate"
-	branchpkg "github.com/SkillMythOrg/agentic-vc/avc/internal/branch"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/config"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
-	diffpkg "github.com/SkillMythOrg/agentic-vc/avc/internal/diff"
-	mergepkg "github.com/SkillMythOrg/agentic-vc/avc/internal/merge"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/restore"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/snapshot"
-	workspacepkg "github.com/SkillMythOrg/agentic-vc/avc/internal/workspace"
+	"github.com/trevarix/agentic-vc/avc/internal/annotate"
+	branchpkg "github.com/trevarix/agentic-vc/avc/internal/branch"
+	"github.com/trevarix/agentic-vc/avc/internal/config"
+	"github.com/trevarix/agentic-vc/avc/internal/db"
+	diffpkg "github.com/trevarix/agentic-vc/avc/internal/diff"
+	mergepkg "github.com/trevarix/agentic-vc/avc/internal/merge"
+	"github.com/trevarix/agentic-vc/avc/internal/restore"
+	"github.com/trevarix/agentic-vc/avc/internal/snapshot"
+	workspacepkg "github.com/trevarix/agentic-vc/avc/internal/workspace"
 )
 
 // dispatchTool executes the named tool with the given arguments and wraps the

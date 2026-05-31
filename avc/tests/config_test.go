@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/config"
+	"github.com/trevarix/agentic-vc/avc/internal/config"
 )
 
 // TestConfig_Load_ReturnsDefaults_WhenFileAbsent verifies that loading from a

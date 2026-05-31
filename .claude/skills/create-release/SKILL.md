@@ -95,7 +95,7 @@ This skill's job is to validate everything is ready, then push the tag.
      2. Run `git push origin "v<version>"`.
      3. Report success and print the Actions URL:
         > Tag v<version> pushed. Release workflow running at:
-        > https://github.com/SkillMythOrg/agentic-vc/actions
+        > https://github.com/trevarix/agentic-vc/actions
         > Monitor progress there, or run `gh run list --workflow=release.yml` to check status.
    - If no → stop. The tag has not been created.
 

@@ -16,13 +16,13 @@ brew install skillmythorg/tap/avc
 ### Linux / macOS — one-line install
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/SkillMythOrg/agentic-vc/main/install.sh | sh
+curl -sSL https://raw.githubusercontent.com/trevarix/agentic-vc/main/install.sh | sh
 ```
 
 ### Windows — PowerShell
 
 ```powershell
-irm https://raw.githubusercontent.com/SkillMythOrg/agentic-vc/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/trevarix/agentic-vc/main/install.ps1 | iex
 ```
 
 ### Build from source
@@ -30,7 +30,7 @@ irm https://raw.githubusercontent.com/SkillMythOrg/agentic-vc/main/install.ps1 |
 Requires Go 1.22 or newer.
 
 ```bash
-git clone https://github.com/SkillMythOrg/agentic-vc.git
+git clone https://github.com/trevarix/agentic-vc.git
 cd agentic-vc/avc
 go install .
 ```
@@ -62,7 +62,7 @@ The extension calls the `avc` CLI under the hood, so install the CLI first.
 
 ### From a VSIX
 
-1. Download the latest `.vsix` from [GitHub Releases](https://github.com/SkillMythOrg/agentic-vc/releases)
+1. Download the latest `.vsix` from [GitHub Releases](https://github.com/trevarix/agentic-vc/releases)
 2. In VSCode: `Ctrl+Shift+P` → **Extensions: Install from VSIX…**
 3. Pick the downloaded file
 

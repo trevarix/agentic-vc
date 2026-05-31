@@ -8,12 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/api"
-	branchpkg "github.com/SkillMythOrg/agentic-vc/avc/internal/branch"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/diff"
-	mergepkg "github.com/SkillMythOrg/agentic-vc/avc/internal/merge"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/restore"
+	"github.com/trevarix/agentic-vc/avc/internal/api"
+	branchpkg "github.com/trevarix/agentic-vc/avc/internal/branch"
+	"github.com/trevarix/agentic-vc/avc/internal/db"
+	"github.com/trevarix/agentic-vc/avc/internal/diff"
+	mergepkg "github.com/trevarix/agentic-vc/avc/internal/merge"
+	"github.com/trevarix/agentic-vc/avc/internal/restore"
 )
 
 // Serve starts the HTTP server. Blocks until the server stops.

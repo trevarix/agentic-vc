@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/diff"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/snapshot"
+	"github.com/trevarix/agentic-vc/avc/internal/diff"
+	"github.com/trevarix/agentic-vc/avc/internal/snapshot"
 )
 
 func TestDiff_DetectsModifiedFile(t *testing.T) {

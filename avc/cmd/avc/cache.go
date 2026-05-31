@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
+	"github.com/trevarix/agentic-vc/avc/internal/db"
 	"github.com/spf13/cobra"
 )
 

@@ -3,8 +3,8 @@ package tests
 import (
 	"testing"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/snapshot"
+	"github.com/trevarix/agentic-vc/avc/internal/db"
+	"github.com/trevarix/agentic-vc/avc/internal/snapshot"
 )
 
 // setupProjectWithMain initializes a project and ensures the main branch record

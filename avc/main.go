@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/cmd/avc"
+	"github.com/trevarix/agentic-vc/avc/cmd/avc"
 )
 
 // version, commit, and date are injected at build time via -ldflags:

@@ -6,7 +6,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/web"
+	"github.com/trevarix/agentic-vc/avc/internal/web"
 	"github.com/spf13/cobra"
 )
 

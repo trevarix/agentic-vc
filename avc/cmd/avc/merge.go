@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	mergepkg "github.com/SkillMythOrg/agentic-vc/avc/internal/merge"
+	mergepkg "github.com/trevarix/agentic-vc/avc/internal/merge"
 	"github.com/spf13/cobra"
 )
 

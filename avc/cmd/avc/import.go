@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/archive"
+	"github.com/trevarix/agentic-vc/avc/internal/archive"
 	"github.com/spf13/cobra"
 )
 

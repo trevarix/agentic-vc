@@ -7,11 +7,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/config"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/fileutil"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/hooks"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/statcache"
+	"github.com/trevarix/agentic-vc/avc/internal/config"
+	"github.com/trevarix/agentic-vc/avc/internal/db"
+	"github.com/trevarix/agentic-vc/avc/internal/fileutil"
+	"github.com/trevarix/agentic-vc/avc/internal/hooks"
+	"github.com/trevarix/agentic-vc/avc/internal/statcache"
 )
 
 // Result is returned by Restore on success.

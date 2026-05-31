@@ -11,12 +11,12 @@ import (
 	"path/filepath"
 	"sort"
 
-	branchpkg "github.com/SkillMythOrg/agentic-vc/avc/internal/branch"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
-	diffpkg "github.com/SkillMythOrg/agentic-vc/avc/internal/diff"
-	mergepkg "github.com/SkillMythOrg/agentic-vc/avc/internal/merge"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/restore"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/snapshot"
+	branchpkg "github.com/trevarix/agentic-vc/avc/internal/branch"
+	"github.com/trevarix/agentic-vc/avc/internal/db"
+	diffpkg "github.com/trevarix/agentic-vc/avc/internal/diff"
+	mergepkg "github.com/trevarix/agentic-vc/avc/internal/merge"
+	"github.com/trevarix/agentic-vc/avc/internal/restore"
+	"github.com/trevarix/agentic-vc/avc/internal/snapshot"
 )
 
 // ─── Snapshot operations ──────────────────────────────────────────────────────

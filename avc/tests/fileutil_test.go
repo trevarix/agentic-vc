@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/fileutil"
+	"github.com/trevarix/agentic-vc/avc/internal/fileutil"
 )
 
 // TestFileutil_HashFile_Consistent verifies that hashing the same file twice

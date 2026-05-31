@@ -3,7 +3,7 @@ package avc
 import (
 	"os"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/mcp"
+	"github.com/trevarix/agentic-vc/avc/internal/mcp"
 	"github.com/spf13/cobra"
 )
 
