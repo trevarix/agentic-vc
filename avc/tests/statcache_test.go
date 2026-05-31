@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/statcache"
+	"github.com/trevarix/agentic-vc/avc/internal/statcache"
 )
 
 // TestStatCache_Miss_OnEmptyCache verifies that an empty cache returns a miss

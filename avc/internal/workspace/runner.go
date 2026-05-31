@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/config"
+	"github.com/trevarix/agentic-vc/avc/internal/config"
 )
 
 // RunRequest describes a command to execute in a branch workspace.

@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/snapshot"
+	"github.com/trevarix/agentic-vc/avc/internal/db"
+	"github.com/trevarix/agentic-vc/avc/internal/snapshot"
 )
 
 func TestSnapshot_Create_BasicSnapshot(t *testing.T) {

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/restore"
+	"github.com/trevarix/agentic-vc/avc/internal/db"
+	"github.com/trevarix/agentic-vc/avc/internal/restore"
 )
 
 // CatFile returns the raw bytes of filePath as stored in snapshotID.

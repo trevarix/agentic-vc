@@ -9,9 +9,9 @@ package tests
 import (
 	"testing"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/api"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
-	branchpkg "github.com/SkillMythOrg/agentic-vc/avc/internal/branch"
+	"github.com/trevarix/agentic-vc/avc/internal/api"
+	"github.com/trevarix/agentic-vc/avc/internal/db"
+	branchpkg "github.com/trevarix/agentic-vc/avc/internal/branch"
 )
 
 // ─── SnapshotOps ──────────────────────────────────────────────────────────────

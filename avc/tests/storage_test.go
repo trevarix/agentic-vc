@@ -15,12 +15,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/branch"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/config"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/gc"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/retention"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/snapshot"
+	"github.com/trevarix/agentic-vc/avc/internal/branch"
+	"github.com/trevarix/agentic-vc/avc/internal/config"
+	"github.com/trevarix/agentic-vc/avc/internal/db"
+	"github.com/trevarix/agentic-vc/avc/internal/gc"
+	"github.com/trevarix/agentic-vc/avc/internal/retention"
+	"github.com/trevarix/agentic-vc/avc/internal/snapshot"
 )
 
 // ─── 2.1 · Cascade delete ────────────────────────────────────────────────────

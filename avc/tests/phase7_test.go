@@ -12,10 +12,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/branch"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/config"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/snapshot"
+	"github.com/trevarix/agentic-vc/avc/internal/branch"
+	"github.com/trevarix/agentic-vc/avc/internal/config"
+	"github.com/trevarix/agentic-vc/avc/internal/db"
+	"github.com/trevarix/agentic-vc/avc/internal/snapshot"
 )
 
 // ─── 7.1 Branch Lifecycle States ─────────────────────────────────────────────

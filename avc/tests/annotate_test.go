@@ -3,8 +3,8 @@ package tests
 import (
 	"testing"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/annotate"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/snapshot"
+	"github.com/trevarix/agentic-vc/avc/internal/annotate"
+	"github.com/trevarix/agentic-vc/avc/internal/snapshot"
 )
 
 // TestAnnotate_SingleSnapshot_AllLinesToFirstSnapshot verifies that when only

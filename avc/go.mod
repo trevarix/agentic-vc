@@ -1,4 +1,4 @@
-module github.com/SkillMythOrg/agentic-vc/avc
+module github.com/trevarix/agentic-vc/avc
 
 go 1.22
 

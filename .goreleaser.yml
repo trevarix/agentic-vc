@@ -82,12 +82,12 @@ snapshot:
   version_template: "{{ incpatch .Version }}-next"
 
 # Homebrew tap — macOS users can install without Gatekeeper friction:
-#   brew install SkillMythOrg/tap/avc
-# Requires a public GitHub repo named "homebrew-tap" under the SkillMythOrg org.
+#   brew install trevarix/tap/avc
+# Requires a public GitHub repo named "homebrew-tap" under the trevarix org.
 brews:
   - name: avc
     repository:
-      owner: SkillMythOrg
+      owner: trevarix
       name: homebrew-avc
       branch: main
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
@@ -95,7 +95,7 @@ brews:
       name: goreleaserbot
       email: bot@goreleaser.com
     commit_msg_template: "Brew formula update for {{ .ProjectName }} version {{ .Tag }}"
-    homepage: "https://github.com/SkillMythOrg/agentic-vc"
+    homepage: "https://github.com/trevarix/agentic-vc"
     description: "Agentic Version Control — lightweight, agent-safe project snapshots"
     license: "MIT"
     install: |
@@ -104,19 +104,19 @@ brews:
       system "#{bin}/avc", "--version"
 
 # Scoop bucket — Windows users can install without SmartScreen friction:
-#   scoop bucket add avc https://github.com/SkillMythOrg/scoop-avc
+#   scoop bucket add avc https://github.com/trevarix/scoop-avc
 #   scoop install avc
-# Requires a public GitHub repo named "scoop-bucket" under the SkillMythOrg org.
+# Requires a public GitHub repo named "scoop-bucket" under the trevarix org.
 scoops:
   - repository:
-      owner: SkillMythOrg
+      owner: trevarix
       name: scoop-avc
       branch: main
       token: "{{ .Env.SCOOP_BUCKET_TOKEN }}"
     commit_author:
       name: goreleaserbot
       email: bot@goreleaser.com
-    homepage: "https://github.com/SkillMythOrg/agentic-vc"
+    homepage: "https://github.com/trevarix/agentic-vc"
     description: "Agentic Version Control — lightweight, agent-safe project snapshots"
     license: "MIT"
 
@@ -128,7 +128,7 @@ changelog:
 
 release:
   github:
-    owner: SkillMythOrg
+    owner: trevarix
     name: agentic-vc
   name_template: "AVC {{.Version}}"
   # Use the section extracted from CHANGELOG.md by the before hook as the
@@ -142,20 +142,20 @@ release:
     ### macOS
     > Recommended — Homebrew handles PATH and removes the Gatekeeper prompt automatically.
     ```bash
-    brew install SkillMythOrg/avc/avc
+    brew install trevarix/avc/avc
     ```
 
     ### Windows
     > Recommended — Scoop handles PATH and bypasses the SmartScreen warning automatically.
     > No admin rights required. `avc` is available in any terminal immediately after install.
     ```powershell
-    scoop bucket add avc https://github.com/SkillMythOrg/scoop-avc
+    scoop bucket add avc https://github.com/trevarix/scoop-avc
     scoop install avc
     ```
 
     ### Linux
     ```bash
-    curl -sfL https://github.com/SkillMythOrg/agentic-vc/releases/download/{{.Tag}}/avc_{{.Version}}_linux_amd64.tar.gz | tar xz
+    curl -sfL https://github.com/trevarix/agentic-vc/releases/download/{{.Tag}}/avc_{{.Version}}_linux_amd64.tar.gz | tar xz
     sudo mv avc /usr/local/bin/
     ```
 

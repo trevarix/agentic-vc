@@ -6,9 +6,9 @@ import (
 	"os"
 	"time"
 
-	branchpkg "github.com/SkillMythOrg/agentic-vc/avc/internal/branch"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/config"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
+	branchpkg "github.com/trevarix/agentic-vc/avc/internal/branch"
+	"github.com/trevarix/agentic-vc/avc/internal/config"
+	"github.com/trevarix/agentic-vc/avc/internal/db"
 	"github.com/spf13/cobra"
 )
 

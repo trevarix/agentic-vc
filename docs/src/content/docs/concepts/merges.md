@@ -93,7 +93,7 @@ The merge engine opens the database in **three separate phases** to avoid lock c
 2. **Apply** — write clean files to the working tree, write conflict markers where needed
 3. **Record** — write the `merges` row and per-file results
 
-Each phase opens and closes the DB connection. This is one of the architectural rules in [CLAUDE.md](https://github.com/SkillMythOrg/agentic-vc/blob/main/CLAUDE.md) — one DB connection per operation.
+Each phase opens and closes the DB connection. This is one of the architectural rules in [CLAUDE.md](https://github.com/trevarix/agentic-vc/blob/main/CLAUDE.md) — one DB connection per operation.
 
 ## When merge is appropriate
 

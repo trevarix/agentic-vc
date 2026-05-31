@@ -4,7 +4,7 @@ import starlight from '@astrojs/starlight';
 
 const SITE_URL = 'https://skillmythorg.github.io';
 const BASE_PATH = '/agentic-vc';
-const REPO_URL = 'https://github.com/SkillMythOrg/agentic-vc';
+const REPO_URL = 'https://github.com/trevarix/agentic-vc';
 
 export default defineConfig({
   site: SITE_URL,

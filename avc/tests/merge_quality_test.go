@@ -13,11 +13,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/branch"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
-	diffpkg "github.com/SkillMythOrg/agentic-vc/avc/internal/diff"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/merge"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/snapshot"
+	"github.com/trevarix/agentic-vc/avc/internal/branch"
+	"github.com/trevarix/agentic-vc/avc/internal/db"
+	diffpkg "github.com/trevarix/agentic-vc/avc/internal/diff"
+	"github.com/trevarix/agentic-vc/avc/internal/merge"
+	"github.com/trevarix/agentic-vc/avc/internal/snapshot"
 )
 
 // ─── 4.1 Post-merge auto-snapshot ────────────────────────────────────────────

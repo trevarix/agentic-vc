@@ -16,9 +16,9 @@ import (
 	"io"
 	"time"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/config"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/gc"
+	"github.com/trevarix/agentic-vc/avc/internal/config"
+	"github.com/trevarix/agentic-vc/avc/internal/db"
+	"github.com/trevarix/agentic-vc/avc/internal/gc"
 )
 
 // Enforce prunes snapshots on branchID that violate the retention policy.

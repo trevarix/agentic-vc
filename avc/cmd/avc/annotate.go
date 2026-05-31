@@ -6,7 +6,7 @@ import (
 	"os"
 	"unicode/utf8"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/annotate"
+	"github.com/trevarix/agentic-vc/avc/internal/annotate"
 	"github.com/spf13/cobra"
 )
 

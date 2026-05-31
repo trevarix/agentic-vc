@@ -3,8 +3,8 @@ package tests
 import (
 	"testing"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/branch"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/config"
+	"github.com/trevarix/agentic-vc/avc/internal/branch"
+	"github.com/trevarix/agentic-vc/avc/internal/config"
 )
 
 // TestBranch_Create_RefusesMainName verifies that creating a branch named

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"os"
 
-	branchpkg "github.com/SkillMythOrg/agentic-vc/avc/internal/branch"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/diff"
+	branchpkg "github.com/trevarix/agentic-vc/avc/internal/branch"
+	"github.com/trevarix/agentic-vc/avc/internal/db"
+	"github.com/trevarix/agentic-vc/avc/internal/diff"
 	"github.com/spf13/cobra"
 )
 

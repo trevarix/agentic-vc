@@ -10,12 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/branch"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/fileutil"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/restore"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/snapshot"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/statcache"
+	"github.com/trevarix/agentic-vc/avc/internal/branch"
+	"github.com/trevarix/agentic-vc/avc/internal/db"
+	"github.com/trevarix/agentic-vc/avc/internal/fileutil"
+	"github.com/trevarix/agentic-vc/avc/internal/restore"
+	"github.com/trevarix/agentic-vc/avc/internal/snapshot"
+	"github.com/trevarix/agentic-vc/avc/internal/statcache"
 )
 
 // FileResult holds the three-way merge decision for a single file.

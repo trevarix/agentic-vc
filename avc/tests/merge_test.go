@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/branch"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/merge"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/snapshot"
+	"github.com/trevarix/agentic-vc/avc/internal/branch"
+	"github.com/trevarix/agentic-vc/avc/internal/db"
+	"github.com/trevarix/agentic-vc/avc/internal/merge"
+	"github.com/trevarix/agentic-vc/avc/internal/snapshot"
 )
 
 // setupMergeBase creates a fully initialized project with:
