@@ -366,7 +366,8 @@ func mergeMCPConfig(path, serverKey string, r *WriteResult) (string, error) {
 
 	entry := map[string]any{
 		"command": binaryPath,
-		"args":    []string{"mcp", "serve"},
+		// --tools standard is the default; change to "core" or "full" as needed.
+		"args": []string{"mcp", "serve", "--tools", "standard"},
 	}
 
 	var root map[string]any
@@ -440,8 +441,9 @@ func mergeMCPConfigWithEnv(path, serverKey, projectRoot string, r *WriteResult) 
 
 	entry := map[string]any{
 		"command": binaryPath,
-		"args":    []string{"mcp", "serve"},
-		"env":     map[string]any{"AVC_PROJECT": projectRoot},
+		// --tools standard is the default; change to "core" or "full" as needed.
+		"args": []string{"mcp", "serve", "--tools", "standard"},
+		"env":  map[string]any{"AVC_PROJECT": projectRoot},
 	}
 
 	var root map[string]any

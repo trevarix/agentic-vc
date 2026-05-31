@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/SkillMythOrg/agentic-vc/avc/internal/config"
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/fileutil"
+	"github.com/SkillMythOrg/agentic-vc/avc/internal/hooks"
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/statcache"
 )
 
@@ -20,9 +22,32 @@ type Result struct {
 }
 
 // Restore rolls the project back to the state captured in snapshotID.
-// This is a convenience wrapper around RestoreToDir targeting the project root.
+// Runs pre/post restore hooks if configured.
 func Restore(projectRoot, snapshotID string) (*Result, error) {
-	return RestoreToDir(projectRoot, snapshotID, projectRoot)
+	cfg, _ := config.Load(projectRoot)
+	activeBranch := "main"
+	if cfg != nil && cfg.Branch.Active != "" {
+		activeBranch = cfg.Branch.Active
+	}
+
+	// Pre-restore hook: abort on non-zero exit.
+	if cfg != nil && cfg.Hooks.PreRestore != "" {
+		if err := hooks.Run(cfg.Hooks.PreRestore, projectRoot, snapshotID, activeBranch); err != nil {
+			return nil, fmt.Errorf("pre-restore hook failed: %w", err)
+		}
+	}
+
+	result, err := RestoreToDir(projectRoot, snapshotID, projectRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	// Post-restore hook: non-fatal.
+	if cfg != nil {
+		hooks.RunPost(cfg.Hooks.PostRestore, projectRoot, snapshotID, activeBranch)
+	}
+
+	return result, nil
 }
 
 // RestoreToDir rolls a snapshot's file set back into targetDir.
