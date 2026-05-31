@@ -44,6 +44,7 @@ type Branch struct {
 	ProjectID      string
 	BaseSnapshotID string // empty string for main (no base snapshot)
 	CreatedAt      int64
+	Status         string // "active" | "merged" | "abandoned"
 }
 
 // Snapshot represents a row in the snapshots table.
@@ -112,6 +113,21 @@ func Open(projectRoot string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
+
+	// Apply pragmas before migrations so every subsequent query benefits from them.
+	pragmas := []string{
+		"PRAGMA journal_mode=WAL",  // concurrent readers during writes
+		"PRAGMA synchronous=NORMAL", // safe + faster than FULL
+		"PRAGMA cache_size=-65536",  // 64 MB page cache
+		"PRAGMA foreign_keys=ON",   // enforce FK constraints
+	}
+	for _, p := range pragmas {
+		if _, err := db.Exec(p); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("pragma %q: %w", p, err)
+		}
+	}
+
 	s := &Store{db: db}
 	if err := s.migrate(); err != nil {
 		db.Close()
@@ -244,6 +260,60 @@ func (s *Store) migrate() error {
 	// Phase 4: add branch_id to snapshots (idempotent — SQLite returns an error
 	// if the column already exists, which we intentionally ignore).
 	_, _ = s.db.Exec(`ALTER TABLE snapshots ADD COLUMN branch_id TEXT REFERENCES branches(id)`)
+
+	// Phase 7.1: branch lifecycle status column.
+	_, _ = s.db.Exec(`ALTER TABLE branches ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`)
+
+	// Phase 7.3: project_state — stores the active branch name inside the DB
+	// (eliminates the config.toml race condition for concurrent writers).
+	if _, err := s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS project_state (
+			project_id    TEXT PRIMARY KEY,
+			active_branch TEXT NOT NULL DEFAULT 'main',
+			updated_at    INTEGER NOT NULL,
+			FOREIGN KEY (project_id) REFERENCES projects(id)
+		)`); err != nil {
+		return fmt.Errorf("create project_state table: %w", err)
+	}
+
+	// Phase 5.2: snapshot_tags table for machine-readable milestone markers.
+	_, err := s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS snapshot_tags (
+			snapshot_id TEXT NOT NULL,
+			tag         TEXT NOT NULL,
+			created_at  INTEGER NOT NULL,
+			PRIMARY KEY (snapshot_id, tag),
+			FOREIGN KEY (snapshot_id) REFERENCES snapshots(id)
+		)`)
+	if err != nil {
+		return fmt.Errorf("create snapshot_tags table: %w", err)
+	}
+
+	// Phase 5.3: add computed_at to the diffs cache table (tracks when each
+	// cached diff was computed; enables TTL-based invalidation).
+	_, _ = s.db.Exec(`ALTER TABLE diffs ADD COLUMN computed_at INTEGER NOT NULL DEFAULT 0`)
+
+	// Phase 1 improvement: query indexes for hot paths.
+	// All idempotent via IF NOT EXISTS — safe to run on every Open.
+	indexes := []string{
+		// GetSnapshotFiles: WHERE snapshot_id = ?
+		`CREATE INDEX IF NOT EXISTS idx_files_snapshot_id ON files(snapshot_id)`,
+		// GetFileVersions (annotate): WHERE relative_path = ?
+		`CREATE INDEX IF NOT EXISTS idx_files_path ON files(relative_path)`,
+		// ListSnapshotsByBranch: WHERE branch_id = ? ORDER BY timestamp DESC
+		`CREATE INDEX IF NOT EXISTS idx_snapshots_branch_ts ON snapshots(branch_id, timestamp DESC)`,
+		// GetMergeFiles: WHERE merge_id = ?
+		`CREATE INDEX IF NOT EXISTS idx_merge_files_merge_id ON merge_files(merge_id)`,
+		// GetBranchByName: WHERE project_id = ? AND name = ?
+		`CREATE INDEX IF NOT EXISTS idx_branches_project_name ON branches(project_id, name)`,
+		// ListSnapshotsByTag: WHERE tag = ?
+		`CREATE INDEX IF NOT EXISTS idx_snapshot_tags_tag ON snapshot_tags(tag)`,
+	}
+	for _, idx := range indexes {
+		if _, err := s.db.Exec(idx); err != nil {
+			return fmt.Errorf("create index: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -263,12 +333,24 @@ func (s *Store) GetProject(projectRoot string) (*Project, error) {
 
 // ─── Branch ──────────────────────────────────────────────────────────────────
 
+const branchSelectCols = `id, name, project_id, COALESCE(base_snapshot_id, ''), created_at, COALESCE(status, 'active')`
+
+func scanBranch(row interface{ Scan(...any) error }) (*Branch, error) {
+	b := &Branch{}
+	err := row.Scan(&b.ID, &b.Name, &b.ProjectID, &b.BaseSnapshotID, &b.CreatedAt, &b.Status)
+	return b, err
+}
+
 // InsertBranch persists a new branch record.
 func (s *Store) InsertBranch(b *Branch) error {
+	status := b.Status
+	if status == "" {
+		status = "active"
+	}
 	_, err := s.db.Exec(
-		`INSERT INTO branches (id, name, project_id, base_snapshot_id, created_at)
-		 VALUES (?, ?, ?, NULLIF(?, ''), ?)`,
-		b.ID, b.Name, b.ProjectID, b.BaseSnapshotID, b.CreatedAt,
+		`INSERT INTO branches (id, name, project_id, base_snapshot_id, created_at, status)
+		 VALUES (?, ?, ?, NULLIF(?, ''), ?, ?)`,
+		b.ID, b.Name, b.ProjectID, b.BaseSnapshotID, b.CreatedAt, status,
 	)
 	return err
 }
@@ -276,12 +358,11 @@ func (s *Store) InsertBranch(b *Branch) error {
 // GetBranchByName returns a branch by project and name.
 func (s *Store) GetBranchByName(projectID, name string) (*Branch, error) {
 	row := s.db.QueryRow(
-		`SELECT id, name, project_id, COALESCE(base_snapshot_id, ''), created_at
-		 FROM branches WHERE project_id = ? AND name = ?`,
+		`SELECT `+branchSelectCols+` FROM branches WHERE project_id = ? AND name = ?`,
 		projectID, name,
 	)
-	b := &Branch{}
-	if err := row.Scan(&b.ID, &b.Name, &b.ProjectID, &b.BaseSnapshotID, &b.CreatedAt); err != nil {
+	b, err := scanBranch(row)
+	if err != nil {
 		return nil, fmt.Errorf("branch '%s' not found", name)
 	}
 	return b, nil
@@ -290,8 +371,7 @@ func (s *Store) GetBranchByName(projectID, name string) (*Branch, error) {
 // ListBranches returns all branches for a project ordered by creation time.
 func (s *Store) ListBranches(projectID string) ([]*Branch, error) {
 	rows, err := s.db.Query(
-		`SELECT id, name, project_id, COALESCE(base_snapshot_id, ''), created_at
-		 FROM branches WHERE project_id = ? ORDER BY created_at ASC`,
+		`SELECT `+branchSelectCols+` FROM branches WHERE project_id = ? ORDER BY created_at ASC`,
 		projectID,
 	)
 	if err != nil {
@@ -301,8 +381,8 @@ func (s *Store) ListBranches(projectID string) ([]*Branch, error) {
 
 	var branches []*Branch
 	for rows.Next() {
-		b := &Branch{}
-		if err := rows.Scan(&b.ID, &b.Name, &b.ProjectID, &b.BaseSnapshotID, &b.CreatedAt); err != nil {
+		b, err := scanBranch(rows)
+		if err != nil {
 			return nil, err
 		}
 		branches = append(branches, b)
@@ -310,11 +390,134 @@ func (s *Store) ListBranches(projectID string) ([]*Branch, error) {
 	return branches, rows.Err()
 }
 
-// DeleteBranch removes a branch record. Snapshots on that branch are orphaned
-// (their branch_id remains set) rather than deleted.
+// ListBranchesByStatus returns all branches for a project with a given status.
+// Pass "" to list all statuses (same as ListBranches).
+func (s *Store) ListBranchesByStatus(projectID, status string) ([]*Branch, error) {
+	var q string
+	var args []any
+	if status == "" {
+		q = `SELECT ` + branchSelectCols + ` FROM branches WHERE project_id = ? ORDER BY created_at ASC`
+		args = []any{projectID}
+	} else {
+		q = `SELECT ` + branchSelectCols + ` FROM branches WHERE project_id = ? AND COALESCE(status,'active') = ? ORDER BY created_at ASC`
+		args = []any{projectID, status}
+	}
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var branches []*Branch
+	for rows.Next() {
+		b, err := scanBranch(rows)
+		if err != nil {
+			return nil, err
+		}
+		branches = append(branches, b)
+	}
+	return branches, rows.Err()
+}
+
+// SetBranchStatus updates the lifecycle status of a branch.
+// Valid values: "active", "merged", "abandoned".
+func (s *Store) SetBranchStatus(branchID, status string) error {
+	_, err := s.db.Exec(`UPDATE branches SET status = ? WHERE id = ?`, status, branchID)
+	return err
+}
+
+// RenameBranch changes the name of a branch record in the DB.
+func (s *Store) RenameBranch(branchID, newName string) error {
+	_, err := s.db.Exec(`UPDATE branches SET name = ? WHERE id = ?`, newName, branchID)
+	return err
+}
+
+// DeleteBranch removes a branch record. Callers should call
+// DeleteSnapshotsByBranch first unless they intend to keep the history.
 func (s *Store) DeleteBranch(id string) error {
 	_, err := s.db.Exec(`DELETE FROM branches WHERE id = ?`, id)
 	return err
+}
+
+// DeleteSnapshotsByBranch removes all snapshot and file records whose
+// branch_id matches the given branch. Object blobs in the object store are
+// NOT removed — call gc.Run afterwards to reclaim disk space.
+func (s *Store) DeleteSnapshotsByBranch(branchID string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	// Delete files first to satisfy the FK constraint on files.snapshot_id.
+	if _, err := tx.Exec(
+		`DELETE FROM files WHERE snapshot_id IN
+		 (SELECT id FROM snapshots WHERE branch_id = ?)`, branchID,
+	); err != nil {
+		tx.Rollback()
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM snapshots WHERE branch_id = ?`, branchID); err != nil {
+		tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
+// DetachSnapshotsFromBranch sets branch_id = NULL on all snapshots belonging
+// to branchID. Used when a branch is deleted with --keep-history so that the
+// FK constraint on branches(id) is satisfied while the snapshot rows are retained.
+func (s *Store) DetachSnapshotsFromBranch(branchID string) error {
+	_, err := s.db.Exec(
+		`UPDATE snapshots SET branch_id = NULL WHERE branch_id = ?`, branchID,
+	)
+	return err
+}
+
+// ─── Project State ───────────────────────────────────────────────────────────
+
+// GetActiveBranch returns the name of the currently active branch from the
+// project_state table. Returns "main" if no row exists yet.
+func (s *Store) GetActiveBranch(projectID string) (string, error) {
+	var name string
+	err := s.db.QueryRow(
+		`SELECT active_branch FROM project_state WHERE project_id = ?`, projectID,
+	).Scan(&name)
+	if err != nil {
+		// No row yet — default to main.
+		return "main", nil
+	}
+	return name, nil
+}
+
+// SetActiveBranch upserts the active branch name into project_state.
+func (s *Store) SetActiveBranch(projectID, name string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO project_state (project_id, active_branch, updated_at)
+		 VALUES (?, ?, ?)
+		 ON CONFLICT(project_id) DO UPDATE SET
+		     active_branch = excluded.active_branch,
+		     updated_at    = excluded.updated_at`,
+		projectID, name, nowUnix(),
+	)
+	return err
+}
+
+// LiveHashes returns the set of all file_hash values currently referenced by
+// any snapshot in the database. Used by GC to identify safe-to-delete objects.
+func (s *Store) LiveHashes() (map[string]bool, error) {
+	rows, err := s.db.Query(`SELECT DISTINCT file_hash FROM files`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	live := make(map[string]bool)
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			return nil, err
+		}
+		live[h] = true
+	}
+	return live, rows.Err()
 }
 
 // EnsureMainBranch creates the main branch for projectID if it does not exist,
@@ -322,12 +525,10 @@ func (s *Store) DeleteBranch(id string) error {
 // Safe to call multiple times — fully idempotent.
 func (s *Store) EnsureMainBranch(projectID string) (*Branch, error) {
 	row := s.db.QueryRow(
-		`SELECT id, name, project_id, COALESCE(base_snapshot_id, ''), created_at
-		 FROM branches WHERE project_id = ? AND name = 'main'`,
+		`SELECT `+branchSelectCols+` FROM branches WHERE project_id = ? AND name = 'main'`,
 		projectID,
 	)
-	b := &Branch{}
-	err := row.Scan(&b.ID, &b.Name, &b.ProjectID, &b.BaseSnapshotID, &b.CreatedAt)
+	b, err := scanBranch(row)
 	if err != nil {
 		// Main branch absent — create it.
 		b = &Branch{
@@ -335,21 +536,21 @@ func (s *Store) EnsureMainBranch(projectID string) (*Branch, error) {
 			Name:      "main",
 			ProjectID: projectID,
 			CreatedAt: nowUnix(),
+			Status:    "active",
 		}
 		if _, err := s.db.Exec(
-			`INSERT OR IGNORE INTO branches (id, name, project_id, base_snapshot_id, created_at)
-			 VALUES (?, 'main', ?, NULL, ?)`,
+			`INSERT OR IGNORE INTO branches (id, name, project_id, base_snapshot_id, created_at, status)
+			 VALUES (?, 'main', ?, NULL, ?, 'active')`,
 			b.ID, b.ProjectID, b.CreatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("create main branch: %w", err)
 		}
 		// Re-fetch in case INSERT OR IGNORE hit an existing row.
 		row = s.db.QueryRow(
-			`SELECT id, name, project_id, COALESCE(base_snapshot_id, ''), created_at
-			 FROM branches WHERE project_id = ? AND name = 'main'`,
+			`SELECT `+branchSelectCols+` FROM branches WHERE project_id = ? AND name = 'main'`,
 			projectID,
 		)
-		if err := row.Scan(&b.ID, &b.Name, &b.ProjectID, &b.BaseSnapshotID, &b.CreatedAt); err != nil {
+		if b, err = scanBranch(row); err != nil {
 			return nil, fmt.Errorf("fetch main branch: %w", err)
 		}
 	}
@@ -433,6 +634,156 @@ func (s *Store) ListSnapshotsByBranch(branchID string) ([]*Snapshot, error) {
 	return snapshots, rows.Err()
 }
 
+// SnapshotFilter holds optional predicates for ListSnapshotsFiltered.
+// Zero values mean "no filter" for that field.
+type SnapshotFilter struct {
+	BranchID  string // exact match; empty = all branches
+	AgentName string // LIKE match (case-insensitive prefix/substring)
+	Query     string // full-text search on label + notes (LIKE %query%)
+	Tag       string // only snapshots with this tag
+	Since     int64  // Unix timestamp lower bound (inclusive)
+	Until     int64  // Unix timestamp upper bound (inclusive)
+	FilePath  string // only snapshots that tracked this relative path
+	Limit     int    // 0 = use default (50); negative = unlimited
+}
+
+// ListSnapshotsFiltered returns snapshots matching all non-zero filter fields,
+// newest first. It is the engine behind `avc list --search`, `--agent`, etc.
+func (s *Store) ListSnapshotsFiltered(f SnapshotFilter) ([]*Snapshot, error) {
+	var conditions []string
+	var args []any
+
+	if f.BranchID != "" {
+		conditions = append(conditions, "s.branch_id = ?")
+		args = append(args, f.BranchID)
+	}
+	if f.AgentName != "" {
+		conditions = append(conditions, "s.agent_name LIKE ?")
+		args = append(args, "%"+f.AgentName+"%")
+	}
+	if f.Query != "" {
+		conditions = append(conditions, "(s.label LIKE ? OR s.notes LIKE ?)")
+		args = append(args, "%"+f.Query+"%", "%"+f.Query+"%")
+	}
+	if f.Since > 0 {
+		conditions = append(conditions, "s.timestamp >= ?")
+		args = append(args, f.Since)
+	}
+	if f.Until > 0 {
+		conditions = append(conditions, "s.timestamp <= ?")
+		args = append(args, f.Until)
+	}
+	if f.FilePath != "" {
+		conditions = append(conditions, "EXISTS (SELECT 1 FROM files WHERE snapshot_id = s.id AND relative_path = ?)")
+		args = append(args, f.FilePath)
+	}
+	if f.Tag != "" {
+		conditions = append(conditions, "EXISTS (SELECT 1 FROM snapshot_tags WHERE snapshot_id = s.id AND tag = ?)")
+		args = append(args, f.Tag)
+	}
+
+	where := ""
+	if len(conditions) > 0 {
+		where = "WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	limit := f.Limit
+	if limit == 0 {
+		limit = 50 // default
+	}
+	limitClause := ""
+	if limit > 0 {
+		limitClause = fmt.Sprintf("LIMIT %d", limit)
+	}
+
+	q := fmt.Sprintf(
+		`SELECT %s FROM snapshots s %s ORDER BY s.timestamp DESC, s.rowid DESC %s`,
+		snapshotSelectColsAliased, where, limitClause,
+	)
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var snapshots []*Snapshot
+	for rows.Next() {
+		snap, err := scanSnapshot(rows)
+		if err != nil {
+			return nil, err
+		}
+		snapshots = append(snapshots, snap)
+	}
+	return snapshots, rows.Err()
+}
+
+// snapshotSelectColsAliased is snapshotSelectCols with the "s." table alias
+// used by ListSnapshotsFiltered (which joins via EXISTS subqueries).
+const snapshotSelectColsAliased = `s.id, s.project_id, s.timestamp, s.label, s.agent_name, s.notes, s.file_count, s.total_size,
+	COALESCE(s.branch_id, '')`
+
+// ─── Snapshot tags ────────────────────────────────────────────────────────────
+
+// TagSnapshot applies tag to a snapshot. Idempotent — applying the same tag
+// twice is a no-op (PRIMARY KEY constraint).
+func (s *Store) TagSnapshot(snapshotID, tag string) error {
+	_, err := s.db.Exec(
+		`INSERT OR IGNORE INTO snapshot_tags (snapshot_id, tag, created_at) VALUES (?, ?, ?)`,
+		snapshotID, tag, nowUnix(),
+	)
+	return err
+}
+
+// UntagSnapshot removes a tag from a snapshot. Returns nil if the tag was not set.
+func (s *Store) UntagSnapshot(snapshotID, tag string) error {
+	_, err := s.db.Exec(
+		`DELETE FROM snapshot_tags WHERE snapshot_id = ? AND tag = ?`,
+		snapshotID, tag,
+	)
+	return err
+}
+
+// GetSnapshotTags returns all tags applied to a snapshot, in creation order.
+func (s *Store) GetSnapshotTags(snapshotID string) ([]string, error) {
+	rows, err := s.db.Query(
+		`SELECT tag FROM snapshot_tags WHERE snapshot_id = ? ORDER BY created_at ASC`,
+		snapshotID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var tags []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, err
+		}
+		tags = append(tags, t)
+	}
+	return tags, rows.Err()
+}
+
+// ListSnapshotsByTag returns all snapshots carrying the given tag, newest first.
+func (s *Store) ListSnapshotsByTag(tag string) ([]*Snapshot, error) {
+	return s.ListSnapshotsFiltered(SnapshotFilter{Tag: tag, Limit: -1})
+}
+
+// ─── Diff cache management ────────────────────────────────────────────────────
+
+// ClearDiffCache deletes all cached diff rows.
+func (s *Store) ClearDiffCache() error {
+	_, err := s.db.Exec(`DELETE FROM diffs`)
+	return err
+}
+
+// DiffCacheStats returns the count of cached diff rows and the oldest computed_at timestamp.
+func (s *Store) DiffCacheStats() (count int, oldest int64, err error) {
+	row := s.db.QueryRow(`SELECT COUNT(*), COALESCE(MIN(computed_at), 0) FROM diffs`)
+	err = row.Scan(&count, &oldest)
+	return
+}
+
 // GetSnapshot returns a single snapshot by ID.
 func (s *Store) GetSnapshot(id string) (*Snapshot, error) {
 	row := s.db.QueryRow(
@@ -449,7 +800,10 @@ func (s *Store) GetSnapshot(id string) (*Snapshot, error) {
 func (s *Store) GetHeadSnapshot(branchID string) (*Snapshot, error) {
 	row := s.db.QueryRow(
 		`SELECT `+snapshotSelectCols+
-			` FROM snapshots WHERE branch_id = ? ORDER BY timestamp DESC LIMIT 1`,
+			// rowid is the SQLite auto-assigned insertion order — used as a
+			// tiebreaker so two snapshots created in the same Unix second
+			// (e.g. pre-merge and post-merge) are ordered correctly.
+			` FROM snapshots WHERE branch_id = ? ORDER BY timestamp DESC, rowid DESC LIMIT 1`,
 		branchID,
 	)
 	snap, err := scanSnapshot(row)
@@ -464,7 +818,7 @@ func (s *Store) GetHeadSnapshot(branchID string) (*Snapshot, error) {
 func (s *Store) GetOldestSnapshot(branchID string) (*Snapshot, error) {
 	row := s.db.QueryRow(
 		`SELECT `+snapshotSelectCols+
-			` FROM snapshots WHERE branch_id = ? ORDER BY timestamp ASC LIMIT 1`,
+			` FROM snapshots WHERE branch_id = ? ORDER BY timestamp ASC, rowid ASC LIMIT 1`,
 		branchID,
 	)
 	snap, err := scanSnapshot(row)
@@ -489,6 +843,42 @@ func (s *Store) DeleteSnapshot(id string) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// FileVersion is a single (snapshot, hash, timestamp) tuple for one file path.
+// Used by annotate to load all versions in one query instead of N queries.
+type FileVersion struct {
+	SnapshotID string
+	FileHash   string
+	Timestamp  int64
+}
+
+// GetFileVersions returns all versions of relPath across all snapshots,
+// ordered oldest-first. Each row is a (snapshot_id, file_hash, timestamp)
+// triple. This replaces the N-query inner loop in the annotate package.
+func (s *Store) GetFileVersions(relPath string) ([]FileVersion, error) {
+	rows, err := s.db.Query(
+		`SELECT f.snapshot_id, f.file_hash, s.timestamp
+		 FROM files f
+		 JOIN snapshots s ON f.snapshot_id = s.id
+		 WHERE f.relative_path = ?
+		 ORDER BY s.timestamp ASC`,
+		relPath,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var versions []FileVersion
+	for rows.Next() {
+		var v FileVersion
+		if err := rows.Scan(&v.SnapshotID, &v.FileHash, &v.Timestamp); err != nil {
+			return nil, err
+		}
+		versions = append(versions, v)
+	}
+	return versions, rows.Err()
 }
 
 // ─── File ────────────────────────────────────────────────────────────────────
@@ -554,10 +944,10 @@ func (s *Store) GetSnapshotFiles(snapshotID string) ([]*File, error) {
 func (s *Store) UpsertDiffCache(d *DiffCache) error {
 	_, err := s.db.Exec(
 		`INSERT OR REPLACE INTO diffs
-		 (id, from_snapshot_id, to_snapshot_id, file_path, diff_type, old_hash, new_hash, change_summary)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		 (id, from_snapshot_id, to_snapshot_id, file_path, diff_type, old_hash, new_hash, change_summary, computed_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		d.ID, d.FromSnapshotID, d.ToSnapshotID, d.FilePath,
-		d.DiffType, d.OldHash, d.NewHash, d.ChangeSummary,
+		d.DiffType, d.OldHash, d.NewHash, d.ChangeSummary, nowUnix(),
 	)
 	return err
 }
@@ -646,6 +1036,21 @@ func (s *Store) InsertMergeFiles(files []*MergeFile) error {
 		}
 	}
 	return tx.Commit()
+}
+
+// GetMergeFileByPath returns the per-file record for a specific path in a merge.
+func (s *Store) GetMergeFileByPath(mergeID, relPath string) (*MergeFile, error) {
+	row := s.db.QueryRow(
+		`SELECT id, merge_id, relative_path, decision, base_hash, main_hash, branch_hash
+		 FROM merge_files WHERE merge_id = ? AND relative_path = ?`,
+		mergeID, relPath,
+	)
+	f := &MergeFile{}
+	if err := row.Scan(&f.ID, &f.MergeID, &f.RelativePath, &f.Decision,
+		&f.BaseHash, &f.MainHash, &f.BranchHash); err != nil {
+		return nil, fmt.Errorf("file '%s' not found in merge record", relPath)
+	}
+	return f, nil
 }
 
 // GetMergeFiles returns all per-file records for a merge.

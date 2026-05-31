@@ -47,7 +47,8 @@ type rpcError struct {
 //
 // projectRoot is the resolved AVC project root directory (.avc/ parent).
 // compact controls whether tool output JSON is compact or pretty-printed.
-func Serve(projectRoot string, compact bool) error {
+// toolTier selects the advertised tool set: "core", "standard" (default), or "full".
+func Serve(projectRoot string, compact bool, toolTier string) error {
 	enc := json.NewEncoder(os.Stdout)
 	scanner := bufio.NewScanner(os.Stdin)
 	// 4 MB buffer — large diffs can produce substantial JSON output.
@@ -70,7 +71,7 @@ func Serve(projectRoot string, compact bool) error {
 			continue
 		}
 
-		result, rpcErr := dispatch(projectRoot, compact, req.Method, req.Params)
+		result, rpcErr := dispatch(projectRoot, compact, toolTier, req.Method, req.Params)
 		resp := rpcResponse{JSONRPC: "2.0", ID: req.ID}
 		if rpcErr != nil {
 			resp.Error = rpcErr
@@ -84,7 +85,7 @@ func Serve(projectRoot string, compact bool) error {
 }
 
 // dispatch routes a method to its handler.
-func dispatch(projectRoot string, compact bool, method string, rawParams json.RawMessage) (any, *rpcError) {
+func dispatch(projectRoot string, compact bool, toolTier string, method string, rawParams json.RawMessage) (any, *rpcError) {
 	switch method {
 	case "initialize":
 		return map[string]any{
@@ -98,12 +99,12 @@ func dispatch(projectRoot string, compact bool, method string, rawParams json.Ra
 		return map[string]any{}, nil
 
 	case "tools/list":
-		// When no AVC project is detected, expose only avc_init so the agent
-		// can bootstrap AVC instead of misusing snapshot/branch/merge tools.
+		// When no AVC project is detected, expose an empty tool set so the agent
+		// cannot misuse snapshot/branch/merge tools on an uninitialised directory.
 		if projectRoot == "" {
 			return map[string]any{"tools": ProjectlessTools()}, nil
 		}
-		return map[string]any{"tools": AllTools()}, nil
+		return map[string]any{"tools": ToolsForTier(toolTier)}, nil
 
 	case "tools/call":
 		var p struct {

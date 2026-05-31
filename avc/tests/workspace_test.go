@@ -191,7 +191,7 @@ func TestWorkspace_DeleteRemovesWorkspace(t *testing.T) {
 		t.Fatal("workspace directory should exist after branch create")
 	}
 
-	if err := branch.Delete(projectRoot, b.Name); err != nil {
+	if err := branch.Delete(projectRoot, b.Name, false); err != nil {
 		t.Fatalf("delete branch: %v", err)
 	}
 

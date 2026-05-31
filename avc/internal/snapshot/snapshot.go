@@ -8,9 +8,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SkillMythOrg/agentic-vc/avc/internal/config"
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/fileutil"
+	"github.com/SkillMythOrg/agentic-vc/avc/internal/hooks"
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/restore"
+	"github.com/SkillMythOrg/agentic-vc/avc/internal/retention"
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/statcache"
 )
 
@@ -36,6 +39,25 @@ type Result struct {
 func Create(projectRoot, label, agentName, notes, branchID, sourceDir string) (*Result, error) {
 	if sourceDir == "" {
 		sourceDir = projectRoot
+	}
+
+	// Load config for hooks and retention (best-effort; nil cfg means no hooks).
+	cfg, _ := config.Load(projectRoot)
+
+	// Determine active branch name for hook env var (best effort — empty on error).
+	activeBranch := ""
+	if cfg != nil {
+		activeBranch = cfg.Branch.Active
+		if activeBranch == "" {
+			activeBranch = "main"
+		}
+	}
+
+	// Pre-snapshot hook: abort if it exits non-zero.
+	if cfg != nil && cfg.Hooks.PreSnapshot != "" {
+		if err := hooks.Run(cfg.Hooks.PreSnapshot, projectRoot, "", activeBranch); err != nil {
+			return nil, fmt.Errorf("pre-snapshot hook failed: %w", err)
+		}
 	}
 
 	ignore, err := fileutil.LoadIgnoreRules(projectRoot)
@@ -158,7 +180,7 @@ func Create(projectRoot, label, agentName, notes, branchID, sourceDir string) (*
 		}
 	}
 
-	return &Result{
+	result := &Result{
 		ID:        snapID,
 		Label:     label,
 		Timestamp: now,
@@ -167,5 +189,17 @@ func Create(projectRoot, label, agentName, notes, branchID, sourceDir string) (*
 		FileCount: len(files),
 		TotalSize: totalSize,
 		BranchID:  branchID,
-	}, nil
+	}
+
+	// Apply retention policy (best-effort).
+	if branchID != "" && cfg != nil {
+		_ = retention.Enforce(projectRoot, branchID, &cfg.Retention, os.Stderr)
+	}
+
+	// Post-snapshot hook: non-fatal (errors logged to stderr).
+	if cfg != nil {
+		hooks.RunPost(cfg.Hooks.PostSnapshot, projectRoot, result.ID, activeBranch)
+	}
+
+	return result, nil
 }

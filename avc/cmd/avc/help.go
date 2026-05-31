@@ -65,11 +65,27 @@ func printRootHelp() {
 	helpEntry("cat <snapshot-id> <file>", "Print a file's content from a snapshot")
 	fmt.Println()
 
+	helpSection("SEARCH & STATUS")
+	helpEntry("search <query>", "Search snapshot labels and notes")
+	helpEntry("status", "Compare working tree to the last snapshot")
+	fmt.Println()
+
 	helpSection("SETUP & AGENT INTEGRATION")
 	helpEntry("init [directory]", "Initialize AVC for a project (run once)")
 	helpEntry("ui", "Start the web UI (default port 3004)")
 	helpEntry("mcp serve", "Start the MCP server for agent frameworks")
 	helpEntry("run --branch <branch> <command>", "Run a command in a branch workspace")
+	fmt.Println()
+
+	helpSection("PORTABILITY")
+	helpEntry("export [--branch <branch>]", "Export snapshots to a .avc.tar.gz bundle")
+	helpEntry("import --from <file>", "Import a bundle into the current project")
+	fmt.Println()
+
+	helpSection("MAINTENANCE")
+	helpEntry("gc [--run]", "Find (and optionally delete) orphaned blobs")
+	helpEntry("storage", "Show disk usage breakdown for .avc/")
+	helpEntry("cache stats|clear", "Manage the diff cache")
 	fmt.Println()
 
 	fmt.Printf("  %s\n", ruler(48))
