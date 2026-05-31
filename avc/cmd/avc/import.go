@@ -64,6 +64,7 @@ func runImport(cmd *cobra.Command, args []string) error {
 	if result.SkippedRows > 0 {
 		fmt.Printf("  Skipped:   %d rows (already present)\n", result.SkippedRows)
 	}
-	fmt.Printf("\nRun %s to see imported snapshots.\n", bold("avc list --all"))
+	fmt.Printf("\nRun %s to see imported snapshots.\n", bold("avc list"))
+	fmt.Printf("%s\n", dim("  Tip: run `avc restore <id>` to restore files, or `avc snapshot` to baseline the current working tree."))
 	return nil
 }

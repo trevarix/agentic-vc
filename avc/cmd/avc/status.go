@@ -83,14 +83,14 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(result.Files) == 0 {
-		fmt.Printf("%s Nothing changed since snapshot %s %s\n",
-			success("✓"), dim(head.ID[:12]+"…"), cyan(fmt.Sprintf("%q", head.Label)))
+		fmt.Printf("%s Nothing changed since %s\n",
+			success("✓"), cyan(fmt.Sprintf("%q", head.Label)))
 		return nil
 	}
 
 	fmt.Printf("%s %s  %s %s\n\n",
 		accent("◆ Status:"), cyan(branchName),
-		dim("·  last snapshot:"), dim(fmt.Sprintf("%s %q", head.ID[:12]+"…", head.Label)))
+		dim("·  last snapshot:"), dim(fmt.Sprintf("%q", head.Label)))
 
 	symbols := map[string]string{
 		"added":    green("A"),

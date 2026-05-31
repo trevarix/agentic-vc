@@ -143,6 +143,14 @@ func Import(projectRoot, bundlePath string) (*ImportResult, error) {
 	result.SnapshotCount = imported
 	result.SkippedRows = skipped
 
+	// ── Remap imported branches to destination project ───────────────────────
+	// Imported snapshots point to branch IDs from the source project.
+	// Match by branch name so that `avc list` on the destination shows them
+	// without requiring --all.
+	if err := remapImportedBranches(projectRoot); err != nil {
+		return nil, fmt.Errorf("remap branches: %w", err)
+	}
+
 	return result, nil
 }
 
@@ -209,6 +217,133 @@ func replaySQL(projectRoot, dump string) (skipped, snapshots int, err error) {
 	}
 
 	return skipped, snapshots, nil
+}
+
+// remapImportedBranches fixes branch ownership after a SQL replay.
+//
+// The dump inserts source-project branch rows with a foreign project_id that
+// doesn't match the destination project. Snapshots therefore point to "orphan"
+// branch IDs that avc list (which scopes to the destination branch ID) can't see.
+//
+// This function:
+//  1. Finds every orphan branch (project_id ≠ destination project).
+//  2. If a destination branch with the same name already exists, remaps all
+//     snapshot/merge rows to use the destination branch ID, then deletes the
+//     orphan branch record.
+//  3. If no matching destination branch exists, re-parents the orphan branch
+//     under the destination project so it appears in branch list and avc list --all.
+//  4. Removes any orphan project records that have no remaining branches.
+func remapImportedBranches(projectRoot string) error {
+	dbPath := filepath.Join(projectRoot, ".avc", "avc.db")
+	rawDB, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return err
+	}
+	defer rawDB.Close()
+
+	// Look up the destination project by its filesystem path.
+	var destProjectID string
+	if err := rawDB.QueryRow(
+		`SELECT id FROM projects WHERE path = ?`, projectRoot,
+	).Scan(&destProjectID); err != nil {
+		return fmt.Errorf("find destination project: %w", err)
+	}
+
+	// Collect destination branches: name → id.
+	destBranches := make(map[string]string)
+	rows, err := rawDB.Query(
+		`SELECT id, name FROM branches WHERE project_id = ?`, destProjectID,
+	)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			rows.Close()
+			return err
+		}
+		destBranches[name] = id
+	}
+	rows.Close()
+
+	// Collect orphan branches (imported from another project).
+	type branchRow struct{ id, name, projectID string }
+	var orphans []branchRow
+	rows, err = rawDB.Query(
+		`SELECT id, name, project_id FROM branches WHERE project_id != ?`, destProjectID,
+	)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var b branchRow
+		if err := rows.Scan(&b.id, &b.name, &b.projectID); err != nil {
+			rows.Close()
+			return err
+		}
+		orphans = append(orphans, b)
+	}
+	rows.Close()
+
+	if len(orphans) == 0 {
+		return nil // nothing to remap
+	}
+
+	tx, err := rawDB.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	srcProjectIDs := make(map[string]bool)
+	for _, orphan := range orphans {
+		srcProjectIDs[orphan.projectID] = true
+
+		destID, exists := destBranches[orphan.name]
+		if !exists {
+			// No same-named branch in destination — adopt it into the dest project.
+			if _, err = tx.Exec(
+				`UPDATE branches SET project_id = ? WHERE id = ?`, destProjectID, orphan.id,
+			); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Same-named branch exists — remap all references then remove the orphan.
+		if _, err = tx.Exec(
+			`UPDATE snapshots SET branch_id = ? WHERE branch_id = ?`, destID, orphan.id,
+		); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(
+			`UPDATE merges SET branch_id = ? WHERE branch_id = ?`, destID, orphan.id,
+		); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(
+			`DELETE FROM branches WHERE id = ?`, orphan.id,
+		); err != nil {
+			return err
+		}
+	}
+
+	// Remove source project records that are now branchless.
+	for projID := range srcProjectIDs {
+		if _, err = tx.Exec(
+			`DELETE FROM projects WHERE id = ? AND NOT EXISTS (SELECT 1 FROM branches WHERE project_id = ?)`,
+			projID, projID,
+		); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
 }
 
 // splitStatements splits a SQL dump on ";\n" boundaries.

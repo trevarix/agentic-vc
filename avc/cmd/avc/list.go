@@ -111,10 +111,10 @@ func runList(cmd *cobra.Command, args []string) error {
 		f.Until = t.Add(24*time.Hour - time.Second).Unix()
 	}
 
-	// Branch scoping: filter to active branch unless --all or any filter is set
-	// that benefits from cross-branch visibility.
+	// Branch scoping: always filter to the active branch unless --all is set.
+	// Filters (search, agent, date, etc.) do not widen the scope — use --all for that.
 	isFiltered := listSearch != "" || listAgent != "" || listChanged != "" || listTag != "" || listSince != "" || listUntil != ""
-	if !listAll && !isFiltered {
+	if !listAll {
 		branchID, branchErr := branchpkg.GetActiveBranchID(projectPath)
 		if branchErr == nil {
 			f.BranchID = branchID
@@ -164,7 +164,7 @@ func runList(cmd *cobra.Command, args []string) error {
 	}
 
 	branchLabel := activeName
-	if listAll || isFiltered {
+	if listAll {
 		branchLabel = "all branches"
 	}
 	fmt.Printf("%s %s\n\n", prop("Branch:"), success(branchLabel))

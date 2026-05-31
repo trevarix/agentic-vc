@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SkillMythOrg/agentic-vc/avc/internal/branch"
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/fileutil"
 	"github.com/SkillMythOrg/agentic-vc/avc/internal/restore"
@@ -184,11 +185,12 @@ func Merge(projectRoot, branchName string) (*Result, error) {
 			result.PostMergeSnapshotID = postSnap.ID
 		}
 
-		// Mark the agent branch as merged (non-fatal if it fails).
+		// Mark the agent branch as merged and remove its workspace (non-fatal).
 		if store3, err3 := db.Open(projectRoot); err3 == nil {
 			_ = store3.SetBranchStatus(agentBranch.ID, "merged")
 			store3.Close()
 		}
+		_ = branch.RemoveWorkspace(projectRoot, agentBranch.Name)
 	}
 
 	return result, nil
