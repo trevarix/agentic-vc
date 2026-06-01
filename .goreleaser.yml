@@ -131,11 +131,7 @@ release:
     owner: trevarix
     name: agentic-vc
   name_template: "AVC {{.Version}}"
-  # Use the section extracted from CHANGELOG.md by the before hook as the
-  # release body instead of the auto-generated commit-based changelog.
-  header:
-    from_file:
-      path: .goreleaser-release-notes.md
+  # Release body comes from .goreleaser-release-notes.md via --release-notes flag in CI.
   draft: false
   prerelease: auto
   footer: |
