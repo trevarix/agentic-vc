@@ -52,7 +52,6 @@ archives:
           - zip
     files:
       - README.md
-      - LICENSE
       - docs/cli-reference.md
 
 checksum:
