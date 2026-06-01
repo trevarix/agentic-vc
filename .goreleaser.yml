@@ -133,7 +133,9 @@ release:
   name_template: "AVC {{.Version}}"
   # Use the section extracted from CHANGELOG.md by the before hook as the
   # release body instead of the auto-generated commit-based changelog.
-  release_notes_file: .goreleaser-release-notes.md
+  header:
+    from_file:
+      path: .goreleaser-release-notes.md
   draft: false
   prerelease: auto
   footer: |
