@@ -103,13 +103,13 @@ brews:
       system "#{bin}/avc", "--version"
 
 # Scoop bucket — Windows users can install without SmartScreen friction:
-#   scoop bucket add avc https://github.com/trevarix/scoop-avc
+#   scoop bucket add trevarix https://github.com/trevarix/scoop-bucket
 #   scoop install avc
 # Requires a public GitHub repo named "scoop-bucket" under the trevarix org.
 scoops:
   - repository:
       owner: trevarix
-      name: scoop-avc
+      name: scoop-bucket
       branch: main
       token: "{{ .Env.SCOOP_BUCKET_TOKEN }}"
     commit_author:
@@ -146,7 +146,7 @@ release:
     > Recommended — Scoop handles PATH and bypasses the SmartScreen warning automatically.
     > No admin rights required. `avc` is available in any terminal immediately after install.
     ```powershell
-    scoop bucket add avc https://github.com/trevarix/scoop-avc
+    scoop bucket add trevarix https://github.com/trevarix/scoop-bucket
     scoop install avc
     ```
 
