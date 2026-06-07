@@ -87,7 +87,7 @@ brews:
   - name: avc
     repository:
       owner: trevarix
-      name: homebrew-avc
+      name: homebrew-tap
       branch: main
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     commit_author:
@@ -139,7 +139,7 @@ release:
     ### macOS
     > Recommended — Homebrew handles PATH and removes the Gatekeeper prompt automatically.
     ```bash
-    brew install trevarix/avc/avc
+    brew install trevarix/tap/avc
     ```
 
     ### Windows
