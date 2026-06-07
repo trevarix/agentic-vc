@@ -7,7 +7,7 @@ project_name: avc
 
 before:
   hooks:
-    - go mod tidy
+    - sh -c 'cd avc && go mod tidy'
     # Extract the current version's section from CHANGELOG.md into a temp file.
     # GoReleaser sets GORELEASER_CURRENT_TAG (e.g. "v1.0.0"); strip the leading "v"
     # to match the Keep-a-Changelog heading format "## [1.0.0]".
@@ -52,7 +52,6 @@ archives:
           - zip
     files:
       - README.md
-      - LICENSE
       - docs/cli-reference.md
 
 checksum:
@@ -88,7 +87,7 @@ brews:
   - name: avc
     repository:
       owner: trevarix
-      name: homebrew-avc
+      name: homebrew-tap
       branch: main
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     commit_author:
@@ -131,9 +130,7 @@ release:
     owner: trevarix
     name: agentic-vc
   name_template: "AVC {{.Version}}"
-  # Use the section extracted from CHANGELOG.md by the before hook as the
-  # release body instead of the auto-generated commit-based changelog.
-  release_notes_file: .goreleaser-release-notes.md
+  # Release body comes from .goreleaser-release-notes.md via --release-notes flag in CI.
   draft: false
   prerelease: auto
   footer: |
@@ -142,7 +139,7 @@ release:
     ### macOS
     > Recommended — Homebrew handles PATH and removes the Gatekeeper prompt automatically.
     ```bash
-    brew install trevarix/avc/avc
+    brew install trevarix/tap/avc
     ```
 
     ### Windows
