@@ -219,6 +219,11 @@ func fileAction(rel, action string) FileAction {
 
 const claudeMDMarker = "<!-- AVC — Agentic Version Control -->"
 
+// avcBlockEndMarker closes both the CLAUDE.md block and the Windsurf rules
+// block, delimiting the AVC section so it can be located precisely in files
+// that may contain other content.
+const avcBlockEndMarker = "<!-- /AVC — Agentic Version Control -->"
+
 const claudeMDBlock = `
 <!-- AVC — Agentic Version Control -->
 ## AVC — Agentic Version Control
@@ -260,6 +265,7 @@ Do not assess whether the task is "simple enough" to skip a branch — that judg
 | Ready to review branch work | ` + "`avc_branch_diff`" + ` |
 | Ready to merge (with approval) | ` + "`avc_merge`" + ` |
 | Need to run tests or build | ` + "`avc_run_in_workspace`" + ` (approval required) |
+<!-- /AVC — Agentic Version Control -->
 `
 
 // ─── Claude Code global settings path ────────────────────────────────────────
@@ -848,6 +854,7 @@ avc_merge checks for conflicts automatically — no separate preview step needed
 
 **NEVER call avc_run_in_workspace** without first showing the user the exact command and receiving explicit approval.
 System package managers (brew, apt, choco, sudo) are blocked. Use pip install (no --user), npm install (no -g).
+<!-- /AVC — Agentic Version Control -->
 `
 
 // ─── Content: Generic agent instructions ─────────────────────────────────────

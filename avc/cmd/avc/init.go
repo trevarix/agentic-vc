@@ -1,10 +1,12 @@
 package avc
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/trevarix/agentic-vc/avc/internal/config"
 	"github.com/trevarix/agentic-vc/avc/internal/db"
@@ -12,7 +14,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var initSkills []string
+var (
+	initSkills []string
+	initYes    bool
+)
 
 var initCmd = &cobra.Command{
 	Use:   "init [project_path]",
@@ -21,6 +26,11 @@ var initCmd = &cobra.Command{
 default config, and .avcignore. Defaults to the current directory.
 Creates the directory if it does not exist. Safe to re-run — existing
 snapshots, branches, and config are left untouched.
+
+If no AVC project exists at the path yet, you'll be asked to confirm before
+one is created. Pass --yes to skip the prompt (e.g. in scripts or CI); --json
+mode also skips it, since machine consumers are expected to know what they
+asked for.
 
 Use --skills to wire up AVC as an MCP server for your agent framework.
 Accepts a comma-separated list of frameworks:
@@ -38,6 +48,23 @@ Supported frameworks: claude-code, claude-desktop, cursor, windsurf, generic`,
 func init() {
 	initCmd.Flags().StringSliceVar(&initSkills, "skills", nil,
 		"Comma-separated list of agent frameworks to configure (claude-code, claude-desktop, cursor, windsurf, generic)")
+	initCmd.Flags().BoolVarP(&initYes, "yes", "y", false,
+		"Skip the confirmation prompt when no AVC project exists at the path yet")
+}
+
+// confirmNewProject asks the user whether to create a new AVC project at path.
+// Declines (returns false) on any input error — e.g. no TTY attached — so an
+// unattended run never bootstraps a project the caller didn't explicitly want.
+func confirmNewProject(path string) bool {
+	fmt.Printf("%s %s\n", warn("⚠ No AVC project found at"), cyan(path))
+	fmt.Print("  Initialize a new AVC project here? [y/N] ")
+
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil {
+		return false
+	}
+	answer := strings.ToLower(strings.TrimSpace(line))
+	return answer == "y" || answer == "yes"
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
@@ -50,11 +77,23 @@ func runInit(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("invalid project path: %w", err)
 	}
+
+	alreadyInit := isAVCDir(absPath)
+
+	// Bootstrapping a brand-new project is consequential — it creates a
+	// directory, a database, and (with --skills) registers global agent
+	// configs. Confirm with the user unless they've opted out via --yes or
+	// --json (machine consumers are presumed to know what they're asking for).
+	if !alreadyInit && !initYes && !jsonOutput {
+		if !confirmNewProject(absPath) {
+			fmt.Println(dim("Aborted — no changes made."))
+			return nil
+		}
+	}
+
 	if err := os.MkdirAll(absPath, 0o755); err != nil {
 		return fmt.Errorf("could not create project directory: %w", err)
 	}
-
-	alreadyInit := isAVCDir(absPath)
 
 	project, err := db.InitProject(absPath)
 	if err != nil {
