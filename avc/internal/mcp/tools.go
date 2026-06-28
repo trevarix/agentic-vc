@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TREVARIX Corp.
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package mcp
 
 // Tool is a single MCP tool definition as returned by tools/list.

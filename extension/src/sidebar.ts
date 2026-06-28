@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2026 TREVARIX Corp.
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 import * as vscode from 'vscode';
 import { Snapshot, listSnapshots, listBranches, resolveProjectPath } from './cliProxy';
 import { formatBytes } from './webviewUtil';

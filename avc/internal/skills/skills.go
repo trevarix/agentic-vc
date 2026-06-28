@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TREVARIX Corp.
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package skills writes MCP server configs and agent instruction files
 // for the frameworks supported by `avc init --skills <framework>`.
 package skills

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TREVARIX Corp.
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package config manages the per-project AVC configuration file (.avc/config.toml).
 package config
 
