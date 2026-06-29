@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TREVARIX Corp.
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package mcp implements a Model Context Protocol (MCP) server over stdio.
 // The server exposes AVC operations as MCP tools so any MCP-capable agent
 // (Claude Code, Cursor, Cline, Windsurf, etc.) can snapshot, diff, and restore

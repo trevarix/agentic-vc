@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TREVARIX Corp.
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package statcache persists a mapping of file path → {mtime, size, hash} so
 // that subsequent snapshots can skip re-reading files that have not changed.
 package statcache
