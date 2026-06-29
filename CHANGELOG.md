@@ -7,6 +7,17 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-28
+
+### Fixed
+
+- `avc init` now asks for confirmation before bootstrapping a brand-new AVC project at a path that doesn't already have one, preventing accidental project creation.
+
+### Changed
+
+- AVC is now licensed under the GNU Affero General Public License v3.0 (AGPL-3.0), with Homebrew and Scoop package metadata updated to match.
+- Fixed release pipeline issues with GoReleaser hook paths and Homebrew tap references, and renamed the Scoop bucket to `scoop-bucket` to support multiple published tools going forward.
+
 ## [0.2.0] - 2026-05-31
 
 ### Added
