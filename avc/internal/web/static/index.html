@@ -11,18 +11,25 @@
     <div class="topbar-left">
       <span class="brand">AVC</span>
       <span class="project-name" id="project-name">…</span>
-      <span class="branch-badge" id="branch-badge">main</span>
+      <div class="branch-selector-wrap" id="branch-selector-wrap">
+        <span class="branch-icon">⎇</span>
+        <select id="branch-select" class="branch-select" title="Switch branch">
+          <option>main</option>
+        </select>
+      </div>
     </div>
     <div class="topbar-right">
       <a href="/docs.html" class="topbar-link">Docs</a>
-      <button id="btn-new-snapshot" class="btn btn-primary">+ New Snapshot</button>
-      <button id="btn-refresh" class="btn">↻ Refresh</button>
+      <button id="btn-status" class="btn">≋ Status</button>
+      <button id="btn-branches" class="btn">⎇ Branches</button>
+      <button id="btn-new-snapshot" class="btn btn-primary">+ Snapshot</button>
+      <button id="btn-refresh" class="btn">↻</button>
     </div>
   </header>
 
   <main class="layout">
     <aside class="sidebar" id="sidebar">
-      <div class="sidebar-header">Snapshots</div>
+      <div class="sidebar-header">Snapshots <span id="snapshot-count" class="sidebar-count"></span></div>
       <div id="snapshot-list" class="snapshot-list">
         <p class="muted">Loading…</p>
       </div>
@@ -30,7 +37,9 @@
 
     <section class="detail" id="detail">
       <div class="empty-state">
-        <p>Select a snapshot from the left to view details.</p>
+        <div class="empty-icon">◈</div>
+        <p class="empty-title">No snapshot selected</p>
+        <p class="empty-sub">Choose a snapshot from the sidebar to view its files, metadata, and diffs.</p>
       </div>
     </section>
   </main>
@@ -79,6 +88,66 @@
     </div>
   </div>
 
+  <!-- Modal: Branches -->
+  <div class="modal" id="modal-branches" hidden>
+    <div class="modal-card modal-card-medium">
+      <div class="modal-header">
+        <h3>Branches</h3>
+        <button class="icon-btn" data-close="modal-branches">✕</button>
+      </div>
+      <div id="branches-list" class="branches-list"><p class="muted">Loading…</p></div>
+      <hr class="divider"/>
+      <div class="branch-create-form">
+        <h4>New Branch</h4>
+        <div class="branch-create-row">
+          <input type="text" id="new-branch-name" placeholder="branch-name" />
+          <input type="text" id="new-branch-from" placeholder="from snapshot ID (optional)" />
+          <button class="btn btn-primary" id="btn-create-branch">Create</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Merge Preview -->
+  <div class="modal" id="modal-merge" hidden>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="merge-title">Merge Preview</h3>
+        <button class="icon-btn" data-close="modal-merge">✕</button>
+      </div>
+      <div id="merge-summary" class="merge-summary"></div>
+      <div id="merge-file-list" class="merge-file-list"></div>
+      <div class="modal-actions" id="merge-actions">
+        <button class="btn" data-close="modal-merge">Cancel</button>
+        <button class="btn btn-primary" id="btn-merge-confirm" disabled>Merge to main</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Status -->
+  <div class="modal" id="modal-status" hidden>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Working Tree Status</h3>
+        <button class="icon-btn" data-close="modal-status">✕</button>
+      </div>
+      <div id="status-body" class="status-body"><p class="muted">Loading…</p></div>
+    </div>
+  </div>
+
+  <!-- Modal: Branch Diff -->
+  <div class="modal modal-wide" id="modal-branch-diff" hidden>
+    <div class="modal-card modal-card-wide">
+      <div class="modal-header">
+        <h3 id="branch-diff-title">Branch Diff</h3>
+        <button class="icon-btn" data-close="modal-branch-diff">✕</button>
+      </div>
+      <div class="diff-summary" id="branch-diff-summary"></div>
+      <div id="branch-diff-body" class="diff-body"></div>
+    </div>
+  </div>
+
+  <div id="toast-container" class="toast-container"></div>
   <script src="/app.js"></script>
 </body>
 </html>

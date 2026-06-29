@@ -1,0 +1,94 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write       # create GitHub releases and upload assets
+  id-token: write       # required for cosign keyless signing via OIDC
+
+jobs:
+  release:
+    name: Build, sign, and release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # goreleaser needs full git history for changelog
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: avc/go.mod
+          cache-dependency-path: avc/go.sum
+
+      - name: Run tests
+        working-directory: avc
+        env:
+          CGO_ENABLED: "0"
+        run: go test ./... -count=1 -timeout=120s
+
+      # cosign is used by goreleaser to sign the checksums file against the
+      # GitHub OIDC token — no stored certificates or secrets required.
+      # Users can verify with: cosign verify-blob --certificate <file>.pem \
+      #   --signature <file>.sig checksums.txt
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Fine-grained PATs with "Contents: write" on the tap/bucket repos.
+          # Create at: Settings → Developer settings → Personal access tokens (fine-grained)
+          # Set in: Repository secrets → HOMEBREW_TAP_TOKEN, SCOOP_BUCKET_TOKEN
+          # Leave unset to skip tap/bucket updates (releases still work).
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          SCOOP_BUCKET_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+
+  # VSCode extension is built separately — it does not go through goreleaser.
+  build-extension:
+    name: Build VSCode extension
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extension
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+      - run: npm ci
+      - run: npm install -g @vscode/vsce
+      - run: vsce package --out avc-${{ github.ref_name }}.vsix
+      - uses: actions/upload-artifact@v4
+        with:
+          name: avc-extension
+          path: extension/avc-${{ github.ref_name }}.vsix
+
+  # Attach the .vsix to the release created by goreleaser above.
+  attach-extension:
+    name: Attach extension to release
+    needs: [release, build-extension]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: avc-extension
+          path: artifacts
+
+      - name: Upload .vsix to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.ref_name }}" artifacts/*.vsix \
+            --repo "${{ github.repository }}" --clobber

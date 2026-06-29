@@ -1,0 +1,204 @@
+# GoReleaser configuration for AVC (Agentic Version Control).
+# Run locally:  goreleaser release --snapshot --clean
+# CI:           triggered automatically on tag push via .github/workflows/release.yml
+version: 2
+
+project_name: avc
+
+before:
+  hooks:
+    - sh -c 'cd avc && go mod tidy'
+    # Extract the current version's section from CHANGELOG.md into a temp file.
+    # GoReleaser sets GORELEASER_CURRENT_TAG (e.g. "v1.0.0"); strip the leading "v"
+    # to match the Keep-a-Changelog heading format "## [1.0.0]".
+    - sh -c 'awk "/^## \[${GORELEASER_CURRENT_TAG#v}\]/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md > .goreleaser-release-notes.md'
+
+builds:
+  - id: avc
+    dir: avc
+    main: .
+    binary: avc
+    env:
+      - CGO_ENABLED=0   # modernc.org/sqlite is pure Go — no CGO required
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      # Windows arm64 is not yet a common target; skip to reduce build matrix.
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - id: avc-archive
+    builds:
+      - avc
+    name_template: >-
+      {{- .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- .Arch }}
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - README.md
+      - docs/cli-reference.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+# Sigstore/cosign provenance — signs the checksums file against the GitHub OIDC
+# token so users can verify the artifact came from this CI run.
+# No stored secrets needed. Install cosign: https://docs.sigstore.dev/cosign/system_config/installation
+# Verify: cosign verify-blob --certificate avc_<version>_checksums.txt.pem \
+#           --signature avc_<version>_checksums.txt.sig checksums.txt
+signs:
+  - cmd: cosign
+    env:
+      - COSIGN_EXPERIMENTAL=1
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-certificate=${certificate}"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+# Homebrew tap — macOS users can install without Gatekeeper friction:
+#   brew install trevarix/tap/avc
+# Requires a public GitHub repo named "homebrew-tap" under the trevarix org.
+brews:
+  - name: avc
+    repository:
+      owner: trevarix
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    commit_msg_template: "Brew formula update for {{ .ProjectName }} version {{ .Tag }}"
+    homepage: "https://github.com/trevarix/agentic-vc"
+    description: "Agentic Version Control — lightweight, agent-safe project snapshots"
+    license: "MIT"
+    install: |
+      bin.install "avc"
+    test: |
+      system "#{bin}/avc", "--version"
+
+# Scoop bucket — Windows users can install without SmartScreen friction:
+#   scoop bucket add trevarix https://github.com/trevarix/scoop-bucket
+#   scoop install avc
+# Requires a public GitHub repo named "scoop-bucket" under the trevarix org.
+scoops:
+  - repository:
+      owner: trevarix
+      name: scoop-bucket
+      branch: main
+      token: "{{ .Env.SCOOP_BUCKET_TOKEN }}"
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    homepage: "https://github.com/trevarix/agentic-vc"
+    description: "Agentic Version Control — lightweight, agent-safe project snapshots"
+    license: "MIT"
+
+# Auto-generated changelog is disabled — CHANGELOG.md is the source of truth.
+# The before hook extracts the current version's section into a temp file which
+# GoReleaser injects as the release body.
+changelog:
+  disable: true
+
+release:
+  github:
+    owner: trevarix
+    name: agentic-vc
+  name_template: "AVC {{.Version}}"
+  # Release body comes from .goreleaser-release-notes.md via --release-notes flag in CI.
+  draft: false
+  prerelease: auto
+  footer: |
+    ## Install
+
+    ### macOS
+    > Recommended — Homebrew handles PATH and removes the Gatekeeper prompt automatically.
+    ```bash
+    brew install trevarix/tap/avc
+    ```
+
+    ### Windows
+    > Recommended — Scoop handles PATH and bypasses the SmartScreen warning automatically.
+    > No admin rights required. `avc` is available in any terminal immediately after install.
+    ```powershell
+    scoop bucket add trevarix https://github.com/trevarix/scoop-bucket
+    scoop install avc
+    ```
+
+    ### Linux
+    ```bash
+    curl -sfL https://github.com/trevarix/agentic-vc/releases/download/{{.Tag}}/avc_{{.Version}}_linux_amd64.tar.gz | tar xz
+    sudo mv avc /usr/local/bin/
+    ```
+
+    ---
+
+    ### Direct download (without a package manager)
+
+    **macOS** — extract the archive, then:
+    ```bash
+    # Remove the Gatekeeper quarantine flag
+    xattr -rd com.apple.quarantine avc
+    chmod +x avc
+    sudo mv avc /usr/local/bin/
+    ```
+
+    **Windows** — extract the `.zip`, then either:
+    ```powershell
+    # Option A — move to an existing PATH location (no admin needed)
+    Move-Item avc.exe "$env:LOCALAPPDATA\Microsoft\WindowsApps\"
+
+    # Option B — create a personal bin directory and add it to your PATH
+    New-Item -ItemType Directory -Force "$env:USERPROFILE\bin"
+    Move-Item avc.exe "$env:USERPROFILE\bin\"
+    [Environment]::SetEnvironmentVariable(
+        "PATH",
+        "$env:USERPROFILE\bin;" + [Environment]::GetEnvironmentVariable("PATH","User"),
+        "User"
+    )
+    # Restart your terminal after running this
+    ```
+    > You can also right-click `avc.exe` → Properties → check **Unblock** → OK
+    > before moving it, to dismiss the SmartScreen warning on first run.
+
+    ### Verify the download (optional)
+    ```bash
+    cosign verify-blob \
+      --certificate checksums.txt.pem \
+      --signature checksums.txt.sig \
+      checksums.txt
+    ```
+
+    ---
+
+    ### After installing
+    ```bash
+    avc --version                     # confirm the installed version
+    avc init                          # initialize AVC in your project
+    avc init --skills claude-code     # configure Claude Code integration
+    ```

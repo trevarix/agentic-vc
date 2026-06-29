@@ -37,7 +37,10 @@ avc snapshot "After agent run" --agent "claude" --notes "Refactored auth"
 avc diff snap-abc123 snap-def456
 
 # Roll back if needed
-avc restore snap-abc123</code></pre>
+avc restore snap-abc123
+
+# Browse snapshots in the web UI
+avc ui</code></pre>
 
           <h2>Global flags</h2>
           <table>
@@ -64,15 +67,30 @@ avc restore snap-abc123</code></pre>
           <p class="lede">Initialize AVC in a project directory. Creates <code>.avc/</code> with a SQLite database, default config, and <code>.avcignore</code>.</p>
 
           <h2>Usage</h2>
-          <pre><code>avc init                         # initialize current directory
-avc init /path/to/project        # initialize a specific directory
-avc init --skills claude-code    # also write agent integration files</code></pre>
+          <pre><code>avc init                                    # initialize current directory
+avc init my-project                         # creates directory if needed, then init
+avc init --skills claude-code               # Claude Code (CLI + VSCode + desktop app)
+avc init --skills claude-desktop            # Claude Desktop standalone app
+avc init --skills claude-code,cursor        # multiple frameworks at once
+avc init --skills cursor,windsurf,generic   # all non-Claude frameworks</code></pre>
 
           <h2>Flags</h2>
           <table>
             <thead><tr><th>Flag</th><th>Description</th></tr></thead>
             <tbody>
-              <tr><td><code>--skills &lt;list&gt;</code> <span class="docs-tag optional">optional</span></td><td>Comma-separated agent frameworks to set up. Supported: <code>claude-code</code>, <code>cursor</code>, <code>windsurf</code>, <code>generic</code></td></tr>
+              <tr><td><code>--skills &lt;list&gt;</code> <span class="docs-tag optional">optional</span></td><td>Comma-separated agent frameworks to configure. See the table below for what each framework writes.</td></tr>
+            </tbody>
+          </table>
+
+          <h2>What each --skills framework writes</h2>
+          <table>
+            <thead><tr><th>Framework</th><th>What it writes</th></tr></thead>
+            <tbody>
+              <tr><td><code>claude-code</code></td><td>MCP entry in <code>~/.claude.json</code> (global, picked up by CLI, VSCode extension, and desktop app); <code>CLAUDE.md</code> block; skill files in <code>.claude/skills/</code></td></tr>
+              <tr><td><code>claude-desktop</code></td><td>MCP entry in the Claude Desktop config file with <code>AVC_PROJECT</code> env var set — required because Claude Desktop spawns the server without a project CWD</td></tr>
+              <tr><td><code>cursor</code></td><td>MCP entry in <code>~/.cursor/mcp.json</code>; rules file in <code>.cursor/rules/avc.mdc</code></td></tr>
+              <tr><td><code>windsurf</code></td><td>MCP entry in <code>~/.codeium/windsurf/mcp_config.json</code>; rules block appended to <code>.windsurfrules</code></td></tr>
+              <tr><td><code>generic</code></td><td>Writes <code>AGENT_INSTRUCTIONS.md</code> to the project root — framework-agnostic instructions for any MCP-capable agent</td></tr>
             </tbody>
           </table>
 
@@ -81,10 +99,12 @@ avc init --skills claude-code    # also write agent integration files</code></pr
   "id": "proj-a1b2c3",
   "path": "/path/to/project",
   "name": "project",
+  "already_initialized": false,
+  "skills": [],
   "success": true
 }</code></pre>
 
-          <p>Safe to run more than once — re-running on an already-initialized project is a no-op.</p>
+          <p>Safe to run more than once. Re-running on an already-initialized project reports <code>"already_initialized": true</code> and leaves all existing snapshots, branches, and config untouched. If the target directory does not exist, <code>avc init</code> creates it.</p>
         `,
       },
     ],
@@ -198,11 +218,37 @@ avc info snap-abc123 --json</code></pre>
         title: 'avc log',
         synopsis: 'Tree-style history of snapshots.',
         body: `
-          <p class="lede">Visual history of snapshots on the current branch.</p>
+          <p class="lede">Shows a tree-style history of every snapshot on the current branch, newest first, with metadata on each node.</p>
 
           <h2>Usage</h2>
           <pre><code>avc log
 avc log --json</code></pre>
+
+          <h2>Example output</h2>
+          <pre><code>  Snapshot history
+  ──────────────────────────────────────────────────
+
+  ◆  snap-def456  After agent run
+  │  2026-05-18 14:30:00  agent: claude  files: 42
+  │
+  ◆  snap-abc123  Baseline
+  │  2026-05-18 09:00:00  agent: —  files: 40
+  │
+  ◎  root</code></pre>
+
+          <h2>JSON output</h2>
+          <pre><code>[
+  {
+    "id": "snap-def456",
+    "label": "After agent run",
+    "timestamp": 1716042600,
+    "agent_name": "claude",
+    "notes": "Refactored auth",
+    "file_count": 42,
+    "total_size": 1048576,
+    "branch_id": "branch-main"
+  }
+]</code></pre>
         `,
       },
       {
@@ -210,13 +256,19 @@ avc log --json</code></pre>
         title: 'avc delete',
         synopsis: 'Delete a snapshot and unreferenced objects.',
         body: `
-          <p class="lede">Removes a snapshot and any object blobs that are no longer referenced by other snapshots.</p>
+          <p class="lede">Permanently removes a snapshot record and its associated file entries. Object blobs shared with other snapshots are preserved; only unreferenced blobs are removed.</p>
 
           <h2>Usage</h2>
           <pre><code>avc delete snap-abc123
 avc delete snap-abc123 --json</code></pre>
 
-          <blockquote>This is permanent. The snapshot cannot be recovered.</blockquote>
+          <h2>JSON output</h2>
+          <pre><code>{
+  "id": "snap-abc123",
+  "success": true
+}</code></pre>
+
+          <blockquote>This is permanent. The snapshot cannot be recovered. If you might need it, take a note of the ID first.</blockquote>
         `,
       },
     ],
@@ -273,13 +325,21 @@ avc diff-current snap-abc123 --json</code></pre>
         title: 'avc restore',
         synopsis: 'Roll back the project to a snapshot.',
         body: `
-          <p class="lede">Restores every file in the project to the state captured in the snapshot. Files not in the snapshot are left untouched.</p>
+          <p class="lede">Rolls the entire project back to the exact state captured in a snapshot. Every tracked file is overwritten with its snapshot version, and any files added after the snapshot are deleted.</p>
 
           <h2>Usage</h2>
           <pre><code>avc restore snap-abc123
 avc restore snap-abc123 --json</code></pre>
 
-          <blockquote>This overwrites current files. Take a snapshot first if you want to preserve work in progress.</blockquote>
+          <h2>JSON output</h2>
+          <pre><code>{
+  "id": "snap-abc123",
+  "restored_files": 42,
+  "restored_size": 1048576,
+  "success": true
+}</code></pre>
+
+          <blockquote>Files added after the snapshot are <strong>deleted</strong> during restore — not just untouched. Take a snapshot of the current state first if there is any work you want to keep.</blockquote>
         `,
       },
       {
@@ -299,12 +359,14 @@ avc restore-file snap-abc123 src/auth.go --json</code></pre>
         title: 'avc cat',
         synopsis: 'Print file contents from a snapshot.',
         body: `
-          <p class="lede">Outputs the raw bytes of a file as it was stored in a snapshot. Useful for piping into other tools.</p>
+          <p class="lede">Prints the contents of a file as stored in a snapshot. When run in a terminal, displays a formatted view with line numbers. When piped or redirected, outputs raw bytes — safe for binary files.</p>
 
           <h2>Usage</h2>
-          <pre><code>avc cat snap-abc123 src/auth.go
-avc cat snap-abc123 src/auth.go > old-auth.go
-avc cat snap-abc123 src/auth.go --json   # base64-encoded for binary safety</code></pre>
+          <pre><code>avc cat snap-abc123 src/auth.go           # formatted view in terminal
+avc cat snap-abc123 src/auth.go > out.go  # raw bytes (pipe-safe)
+avc cat snap-abc123 src/auth.go --json    # base64-encoded content</code></pre>
+
+          <p>The terminal view strips UTF-8, UTF-16 LE, and UTF-16 BE byte-order marks before display. The piped / redirected path always writes the original bytes unchanged.</p>
         `,
       },
       {
@@ -336,11 +398,46 @@ avc file-history src/auth.go --json</code></pre>
         title: 'avc annotate',
         synopsis: 'Show which snapshot introduced each line.',
         body: `
-          <p class="lede">Like <code>git blame</code> but for AVC snapshots. Traces every line in a file back to the snapshot that introduced it.</p>
+          <p class="lede">Like <code>git blame</code> but for AVC snapshots. Traces every line in a file back to the snapshot that first introduced it, using LCS diffing across the snapshot history.</p>
 
           <h2>Usage</h2>
           <pre><code>avc annotate src/auth.go
 avc annotate src/auth.go --json</code></pre>
+
+          <h2>Example output</h2>
+          <pre><code>src/auth.go  (12 lines)
+
+   1 │ initial commit
+   2 │ initial commit
+   3 │ add JWT support
+   4 │ add JWT support
+   5 │ initial commit</code></pre>
+
+          <p>Each row shows the line number, a separator, and the label of the snapshot that introduced that line. If an agent name was recorded, it appears beside the label.</p>
+
+          <h2>JSON output</h2>
+          <pre><code>{
+  "file_path": "src/auth.go",
+  "total_lines": 12,
+  "lines": [
+    {
+      "line": 1,
+      "snapshot_id": "snap-abc123",
+      "label": "initial commit",
+      "agent_name": "",
+      "timestamp": 1716000000
+    },
+    {
+      "line": 3,
+      "snapshot_id": "snap-def456",
+      "label": "add JWT support",
+      "agent_name": "claude",
+      "timestamp": 1716042600
+    }
+  ]
+}</code></pre>
+
+          <p>Lines not yet captured in any snapshot are attributed to <code>"(untracked)"</code>.</p>
         `,
       },
     ],
@@ -357,11 +454,21 @@ avc annotate src/auth.go --json</code></pre>
           <p class="lede">Branches isolate agent work in <code>.avc/workspaces/&lt;branch&gt;/</code> so experiments never touch your real project until you merge.</p>
 
           <h2>Subcommands</h2>
-          <pre><code>avc branch create &lt;name&gt;       # create a branch from the current snapshot
-avc branch list                  # list all branches
-avc branch switch &lt;name&gt;       # switch active branch
-avc branch delete &lt;name&gt;       # delete a branch and its workspace
-avc branch diff &lt;name&gt;         # cumulative diff from branch point to HEAD</code></pre>
+          <pre><code>avc branch create &lt;branch&gt;              # create from current HEAD of main
+avc branch create &lt;branch&gt; --from &lt;id&gt;  # create from a specific snapshot
+avc branch list                           # list all branches
+avc branch switch &lt;branch&gt;              # switch active branch
+avc branch delete &lt;branch&gt;              # delete a branch and its workspace
+avc branch diff [branch]                  # cumulative diff from branch point to HEAD
+                                          # omit branch to diff the active branch</code></pre>
+
+          <h2>branch create flags</h2>
+          <table>
+            <thead><tr><th>Flag</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>--from &lt;snapshot-id&gt;</code> <span class="docs-tag optional">optional</span></td><td>Base the new branch on a specific snapshot instead of the current HEAD of main</td></tr>
+            </tbody>
+          </table>
 
           <h2>Workflow example</h2>
           <pre><code># Start a new agent task on a branch
@@ -371,9 +478,14 @@ avc branch create feature/refactor-auth
 # Snapshot as usual — they land on the branch
 avc snapshot "WIP refactor"
 
-# Review and merge back when done
-avc merge feature/refactor-auth --preview
-avc merge feature/refactor-auth</code></pre>
+# Review cumulative changes
+avc branch diff feature/refactor-auth
+
+# Merge back when done (performs the merge directly; conflicts get markers)
+avc merge feature/refactor-auth
+
+# If the merge went wrong, abort restores main from the auto-snapshot
+avc merge --abort</code></pre>
         `,
       },
     ],
@@ -390,20 +502,274 @@ avc merge feature/refactor-auth</code></pre>
           <p class="lede">Three-way merge using the branch point, main HEAD, and branch HEAD. Clean changes auto-apply; conflicting files get standard <code>&lt;&lt;&lt; / === / &gt;&gt;&gt;</code> markers in the working tree.</p>
 
           <h2>Usage</h2>
-          <pre><code>avc merge feature/refactor-auth              # perform the merge
-avc merge feature/refactor-auth --preview    # dry-run, show counts only
-avc merge --abort                            # restore main from pre-merge snapshot</code></pre>
+          <pre><code>avc merge feature/refactor-auth    # perform the merge (conflicts get markers)
+avc merge --abort                  # restore main from the pre-merge safety snapshot</code></pre>
 
           <h2>Flags</h2>
           <table>
             <thead><tr><th>Flag</th><th>Description</th></tr></thead>
             <tbody>
-              <tr><td><code>--preview</code></td><td>Show counts (clean / conflict / skipped) without modifying files</td></tr>
               <tr><td><code>--abort</code></td><td>Restore main from the auto-snapshot taken before the last merge</td></tr>
             </tbody>
           </table>
 
-          <p>Before every merge, an automatic safety snapshot is taken so <code>--abort</code> can fully reverse a bad merge.</p>
+          <p>Before every merge, an automatic safety snapshot is taken so <code>--abort</code> can fully reverse a bad merge. To preview merge counts before committing, use the web UI's <strong>Merge Preview</strong> panel or call <code>GET /api/merge/preview?branch=&lt;name&gt;</code> directly.</p>
+        `,
+      },
+    ],
+  },
+  {
+    id: 'search-status',
+    section: 'Search & Status',
+    commands: [
+      {
+        id: 'search',
+        title: 'avc search',
+        synopsis: 'Search snapshot labels and notes.',
+        body: `
+          <p class="lede">Searches across all snapshot labels and notes on the active branch. An alias for <code>avc list --search &lt;query&gt;</code>.</p>
+
+          <h2>Usage</h2>
+          <pre><code>avc search "auth refactor"
+avc search "before deploy" --json</code></pre>
+
+          <h2>Arguments</h2>
+          <table>
+            <thead><tr><th>Argument</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>&lt;query&gt;</code> <span class="docs-tag required">required</span></td><td>Text to search in labels and notes (case-insensitive)</td></tr>
+            </tbody>
+          </table>
+
+          <h2>JSON output</h2>
+          <p>Same shape as <code>avc list --json</code> — an array of matching snapshot objects.</p>
+
+          <pre><code>[
+  {
+    "id": "snap-abc123",
+    "label": "Before auth refactor",
+    "timestamp": 1712275200,
+    "agent_name": "claude",
+    "files_changed": 8,
+    "total_size": 204800,
+    "notes": "stable baseline before rewriting auth module",
+    "branch_id": "br-main"
+  }
+]</code></pre>
+
+          <p>Returns an empty array when no snapshots match.</p>
+        `,
+      },
+      {
+        id: 'status',
+        title: 'avc status',
+        synopsis: 'Show working tree changes since the last snapshot.',
+        body: `
+          <p class="lede">Compares the current working tree against the last snapshot on the active branch. On an agent branch, compares the branch workspace rather than the real project root.</p>
+
+          <h2>Usage</h2>
+          <pre><code>avc status
+avc status --json</code></pre>
+
+          <h2>Example output</h2>
+          <pre><code>  Branch: main  ·  Since: Before refactor
+
+  M  src/auth.go          +12 -3
+  A  src/auth_test.go     +45
+  D  src/legacy.go        -120</code></pre>
+
+          <p>Output mirrors <code>git status</code> — one line per changed file with an <code>A</code> (added), <code>M</code> (modified), or <code>D</code> (deleted) prefix, followed by line counts.</p>
+
+          <h2>JSON output</h2>
+          <pre><code>{
+  "branch_name": "main",
+  "snapshot_id": "snap-abc123",
+  "snapshot_label": "Before refactor",
+  "files": [
+    { "path": "src/auth.go",      "type": "modified", "lines_added": 12, "lines_removed": 3 },
+    { "path": "src/auth_test.go", "type": "added",    "lines_added": 45, "lines_removed": 0 },
+    { "path": "src/legacy.go",    "type": "deleted",  "lines_added": 0,  "lines_removed": 120 }
+  ]
+}</code></pre>
+
+          <p>Returns an empty <code>files</code> array when the working tree is clean.</p>
+        `,
+      },
+    ],
+  },
+  {
+    id: 'portability',
+    section: 'Portability',
+    commands: [
+      {
+        id: 'export',
+        title: 'avc export',
+        synopsis: 'Export snapshots and objects to a portable bundle.',
+        body: `
+          <p class="lede">Packages the AVC database and all content-addressed blobs into a <code>.avc.tar.gz</code> bundle that can be imported on another machine with <code>avc import</code>.</p>
+
+          <h2>Usage</h2>
+          <pre><code>avc export                                    # export all branches
+avc export --branch feature-x                 # export one branch only
+avc export --output ./backups/project.avc.tar.gz   # custom output path
+avc export --json                             # machine-readable manifest</code></pre>
+
+          <h2>Flags</h2>
+          <table>
+            <thead><tr><th>Flag</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>--branch &lt;name&gt;</code></td><td>Export only this branch's snapshots and objects</td></tr>
+              <tr><td><code>--output &lt;path&gt;</code></td><td>Output path for the bundle (default: <code>&lt;project&gt;-&lt;timestamp&gt;.avc.tar.gz</code> in CWD)</td></tr>
+            </tbody>
+          </table>
+
+          <h2>Bundle contents</h2>
+          <ul>
+            <li><code>avc-export.json</code> — manifest with version, counts, and branch list</li>
+            <li><code>schema.sql</code> — database rows as <code>INSERT OR IGNORE</code> statements</li>
+            <li><code>objects/</code> — all referenced content-addressed blobs</li>
+          </ul>
+
+          <h2>JSON output</h2>
+          <pre><code>{
+  "version": "1",
+  "project_name": "my-project",
+  "exported_at": 1716042600,
+  "branches": ["main", "feature-x"],
+  "snapshot_count": 12,
+  "object_count": 384
+}</code></pre>
+        `,
+      },
+      {
+        id: 'import',
+        title: 'avc import',
+        synopsis: 'Import a bundle into the current project.',
+        body: `
+          <p class="lede">Merges snapshots, branches, and file objects from a bundle created by <code>avc export</code> into the current project. Safe to run repeatedly — existing snapshots and blobs are never overwritten.</p>
+
+          <h2>Usage</h2>
+          <pre><code>avc import --from ./project-20260524.avc.tar.gz
+avc import --from ./project-20260524.avc.tar.gz --json</code></pre>
+
+          <h2>Flags</h2>
+          <table>
+            <thead><tr><th>Flag</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>--from &lt;path&gt;</code> <span class="docs-tag required">required</span></td><td>Path to the <code>.avc.tar.gz</code> bundle</td></tr>
+            </tbody>
+          </table>
+
+          <h2>How it works</h2>
+          <ul>
+            <li>Blobs already present in <code>.avc/objects/</code> are silently skipped — no duplicate writes</li>
+            <li>Database rows use <code>INSERT OR IGNORE</code> — snapshots with the same ID are left unchanged</li>
+            <li>Foreign key constraints are deferred during replay so import order doesn't matter</li>
+            <li>Version mismatch between the bundle and the current AVC installation is detected and rejected</li>
+          </ul>
+
+          <h2>JSON output</h2>
+          <pre><code>{
+  "project_name": "my-project",
+  "bundle_path": "./project-20260524.avc.tar.gz",
+  "snapshot_count": 12,
+  "object_count": 384,
+  "skipped_rows": 3
+}</code></pre>
+
+          <p><code>skipped_rows</code> is the number of database rows that already existed and were left unchanged.</p>
+        `,
+      },
+    ],
+  },
+  {
+    id: 'maintenance',
+    section: 'Maintenance',
+    commands: [
+      {
+        id: 'gc',
+        title: 'avc gc',
+        synopsis: 'Find and remove orphaned blobs.',
+        body: `
+          <p class="lede">Scans <code>.avc/objects/</code> and identifies blobs no longer referenced by any snapshot. By default this is a dry run — it reports what would be deleted without removing anything.</p>
+
+          <h2>Usage</h2>
+          <pre><code>avc gc          # dry run — list orphaned blobs and total size
+avc gc --run    # actually delete them and reclaim disk space
+avc gc --json   # machine-readable output</code></pre>
+
+          <h2>Flags</h2>
+          <table>
+            <thead><tr><th>Flag</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>--run</code></td><td>Delete the orphaned blobs (default is dry run)</td></tr>
+            </tbody>
+          </table>
+
+          <h2>JSON output</h2>
+          <pre><code>{
+  "orphaned_count": 14,
+  "orphaned_bytes": 2097152,
+  "deleted": false
+}</code></pre>
+
+          <p>When <code>--run</code> is passed, <code>"deleted"</code> is <code>true</code> and <code>orphaned_count</code> reflects how many blobs were removed.</p>
+
+          <blockquote>Blobs become orphaned when a snapshot is deleted and the blobs it referenced aren't shared with any other snapshot. Run <code>avc gc</code> periodically to reclaim disk space after heavy snapshot churn.</blockquote>
+        `,
+      },
+      {
+        id: 'storage-cmd',
+        title: 'avc storage',
+        synopsis: 'Show disk usage breakdown for .avc/',
+        body: `
+          <p class="lede">Reports how much disk space AVC is using, broken down by component.</p>
+
+          <h2>Usage</h2>
+          <pre><code>avc storage
+avc storage --json</code></pre>
+
+          <h2>Example output</h2>
+          <pre><code>  AVC storage usage
+
+  Database      1.2 MB   .avc/avc.db
+  Objects      48.7 MB   .avc/objects/  (1,204 blobs)
+  Workspaces    3.1 MB   .avc/workspaces/
+  ─────────────────────
+  Total        53.0 MB</code></pre>
+
+          <h2>JSON output</h2>
+          <pre><code>{
+  "database_bytes": 1258291,
+  "object_bytes": 51068108,
+  "object_count": 1204,
+  "workspace_bytes": 3250380,
+  "total_bytes": 55576779
+}</code></pre>
+        `,
+      },
+      {
+        id: 'cache',
+        title: 'avc cache',
+        synopsis: 'Manage the diff cache.',
+        body: `
+          <p class="lede">AVC caches computed diffs in the database to speed up repeated queries. Use <code>avc cache stats</code> to see cache size, or <code>avc cache clear</code> to reset it.</p>
+
+          <h2>Usage</h2>
+          <pre><code>avc cache stats    # show cache entry count and size
+avc cache clear    # delete all cached diffs
+avc cache --json   # machine-readable stats</code></pre>
+
+          <h2>Subcommands</h2>
+          <table>
+            <thead><tr><th>Subcommand</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>stats</code></td><td>Show the number of cached diff entries and their total size</td></tr>
+              <tr><td><code>clear</code></td><td>Delete all cached diffs (the cache rebuilds automatically on next use)</td></tr>
+            </tbody>
+          </table>
+
+          <blockquote class="callout-tip">The cache is an optimization — clearing it is always safe. AVC will recompute diffs on the next request and re-populate the cache automatically.</blockquote>
         `,
       },
     ],
@@ -420,18 +786,94 @@ avc merge --abort                            # restore main from pre-merge snaps
           <p class="lede">Starts an MCP (Model Context Protocol) server over stdio, exposing AVC commands as tools that AI agents can call directly.</p>
 
           <h2>Usage</h2>
-          <pre><code>avc mcp serve              # default pretty-printed output
-avc mcp serve --compact    # compact JSON for token-sensitive contexts</code></pre>
+          <pre><code>avc mcp serve                      # standard tier (11 tools) — recommended default
+avc mcp serve --tools core         # 4 essential tools only (lowest token cost)
+avc mcp serve --tools standard     # 11 tools — snapshots, branches, merge, status
+avc mcp serve --tools full         # all 24 tools — includes advanced branch/merge/tag ops
+avc mcp serve --compact            # compact JSON output for token-sensitive contexts</code></pre>
 
-          <h2>Available tools (14)</h2>
+          <h2>Flags</h2>
+          <table>
+            <thead><tr><th>Flag</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>--tools &lt;tier&gt;</code></td><td>Tool tier to expose: <code>core</code>, <code>standard</code> (default), or <code>full</code></td></tr>
+              <tr><td><code>--compact</code></td><td>Emit compact JSON instead of pretty-printed (saves tokens)</td></tr>
+            </tbody>
+          </table>
+
+          <h2>Tool tiers</h2>
+          <table>
+            <thead><tr><th>Tier</th><th>Count</th><th>Best for</th></tr></thead>
+            <tbody>
+              <tr><td><code>core</code></td><td>4</td><td>Token-constrained agents — snapshot, list, diff, restore only</td></tr>
+              <tr><td><code>standard</code></td><td>11</td><td>Everyday agent use — core + branches, merge, status</td></tr>
+              <tr><td><code>full</code></td><td>24</td><td>Power users — adds rename, annotate, tagging, conflict resolution</td></tr>
+            </tbody>
+          </table>
+
+          <h2>Core tools (4)</h2>
           <ul>
-            <li><code>avc_snapshot</code>, <code>avc_list</code>, <code>avc_diff</code>, <code>avc_restore</code>, <code>avc_info</code>, <code>avc_delete</code></li>
+            <li><code>avc_snapshot</code>, <code>avc_list</code>, <code>avc_diff</code>, <code>avc_restore</code></li>
+          </ul>
+
+          <h2>Standard tools (11)</h2>
+          <ul>
+            <li><code>avc_snapshot</code>, <code>avc_list</code>, <code>avc_diff</code>, <code>avc_restore</code>, <code>avc_status</code></li>
             <li><code>avc_branch_create</code>, <code>avc_branch_list</code>, <code>avc_branch_switch</code>, <code>avc_branch_diff</code></li>
-            <li><code>avc_merge_preview</code>, <code>avc_merge</code>, <code>avc_merge_abort</code></li>
-            <li><code>avc_run_in_workspace</code></li>
+            <li><code>avc_merge</code>, <code>avc_merge_abort</code></li>
+          </ul>
+
+          <h2>Full tools (24)</h2>
+          <ul>
+            <li>All standard tools, plus:</li>
+            <li><code>avc_info</code>, <code>avc_delete</code>, <code>avc_restore_file</code>, <code>avc_annotate</code></li>
+            <li><code>avc_branch_rename</code>, <code>avc_branch_abandon</code>, <code>avc_branch_prune_merged</code></li>
+            <li><code>avc_merge_preview</code>, <code>avc_list_conflicts</code>, <code>avc_resolve_conflict</code></li>
+            <li><code>avc_tag_snapshot</code>, <code>avc_untag_snapshot</code>, <code>avc_run_in_workspace</code></li>
           </ul>
 
           <p>Agent integration files (<code>.claude/skills/</code>, <code>.cursor/rules/</code>, etc.) are written by <code>avc init --skills</code>.</p>
+        `,
+      },
+      {
+        id: 'run',
+        title: 'avc run',
+        synopsis: 'Run a command inside a branch workspace.',
+        body: `
+          <p class="lede">Executes a shell command inside the materialized workspace for a branch. The command runs with environment scrubbing, an execution timeout, and process-tree kill on timeout.</p>
+
+          <h2>Usage</h2>
+          <pre><code>avc run --branch feature-x "npm test"
+avc run --branch feature-x "go build ./..."
+avc run --branch feature-x --timeout 300 "pip install -r requirements.txt"</code></pre>
+
+          <h2>Flags</h2>
+          <table>
+            <thead><tr><th>Flag</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>--branch &lt;name&gt;</code> <span class="docs-tag required">required</span></td><td>Branch whose workspace to run the command in</td></tr>
+              <tr><td><code>--timeout &lt;seconds&gt;</code></td><td>Override the execution timeout (default and max are set in <code>.avc/config.toml</code>)</td></tr>
+            </tbody>
+          </table>
+
+          <h2>Sandbox rules</h2>
+          <ul>
+            <li>System package managers (<code>brew</code>, <code>apt</code>, <code>choco</code>, <code>sudo</code>) are blocked</li>
+            <li><strong>Python</strong> — <code>pip install</code> auto-redirects into a workspace-local venv. Never use <code>--user</code> or <code>--system</code></li>
+            <li><strong>Node</strong> — <code>npm install</code> installs into workspace <code>node_modules</code>. Never use <code>-g</code> or <code>--global</code></li>
+          </ul>
+
+          <blockquote class="callout-warn">Always show the user the exact command before running it. The MCP tool <code>avc_run_in_workspace</code> enforces this by requiring explicit approval before every call.</blockquote>
+
+          <h2>JSON output</h2>
+          <pre><code>{
+  "exit_code": 0,
+  "stdout": "ok  github.com/example/app\\n",
+  "stderr": "",
+  "workspace_path": ".avc/workspaces/feature-x"
+}</code></pre>
+
+          <p>The command's exit code is propagated to the shell. On timeout, the entire process tree is killed before the timeout error is returned.</p>
         `,
       },
     ],
@@ -470,6 +912,7 @@ avc ui --host 0.0.0.0              # bind all interfaces (LAN access)</code></pr
           <table>
             <thead><tr><th>Method</th><th>Route</th><th>Purpose</th></tr></thead>
             <tbody>
+              <tr><td colspan="3" style="background:var(--bg-2);font-size:.75rem;letter-spacing:.05em">SNAPSHOTS</td></tr>
               <tr><td>GET</td><td><code>/api/project</code></td><td>Project name, path, active branch</td></tr>
               <tr><td>GET</td><td><code>/api/snapshots</code></td><td>List snapshots on active branch</td></tr>
               <tr><td>POST</td><td><code>/api/snapshots/create</code></td><td>Create a snapshot</td></tr>
@@ -479,6 +922,19 @@ avc ui --host 0.0.0.0              # bind all interfaces (LAN access)</code></pr
               <tr><td>GET</td><td><code>/api/diff-current?id=</code></td><td>Diff snapshot vs working tree</td></tr>
               <tr><td>POST</td><td><code>/api/restore</code></td><td>Restore full snapshot</td></tr>
               <tr><td>POST</td><td><code>/api/restore-file</code></td><td>Restore single file</td></tr>
+              <tr><td colspan="3" style="background:var(--bg-2);font-size:.75rem;letter-spacing:.05em">BRANCHES</td></tr>
+              <tr><td>GET</td><td><code>/api/branches</code></td><td>List all branches with active branch name</td></tr>
+              <tr><td>POST</td><td><code>/api/branches</code></td><td>Create a new branch</td></tr>
+              <tr><td>POST</td><td><code>/api/branches/switch</code></td><td>Switch active branch</td></tr>
+              <tr><td>DELETE</td><td><code>/api/branches/&lt;name&gt;</code></td><td>Delete a branch</td></tr>
+              <tr><td>GET</td><td><code>/api/branches/&lt;name&gt;/diff</code></td><td>Cumulative diff from branch point to HEAD</td></tr>
+              <tr><td colspan="3" style="background:var(--bg-2);font-size:.75rem;letter-spacing:.05em">MERGE</td></tr>
+              <tr><td>GET</td><td><code>/api/merge/preview?branch=</code></td><td>Merge dry-run — returns clean/conflict/skipped counts</td></tr>
+              <tr><td>POST</td><td><code>/api/merge</code></td><td>Execute the merge</td></tr>
+              <tr><td>POST</td><td><code>/api/merge/abort</code></td><td>Restore main from pre-merge safety snapshot</td></tr>
+              <tr><td colspan="3" style="background:var(--bg-2);font-size:.75rem;letter-spacing:.05em">STATUS &amp; STORAGE</td></tr>
+              <tr><td>GET</td><td><code>/api/status</code></td><td>Working tree changes since last snapshot</td></tr>
+              <tr><td>GET</td><td><code>/api/storage</code></td><td>Disk usage breakdown for <code>.avc/</code></td></tr>
             </tbody>
           </table>
         `,
@@ -827,26 +1283,52 @@ build/
 // ── Sidebar rendering ──────────────────────────────────────────────────────
 function renderSidebar() {
   const sidebar = document.getElementById('docs-sidebar');
-  sidebar.innerHTML = CATALOG.map(group => `
-    <div class="docs-section" data-id="${group.id}">
-      <div class="docs-section-header">
-        <span class="docs-section-chevron">▼</span>
-        <span>${group.section}</span>
-      </div>
-      <div class="docs-section-items">
-        ${group.commands.map(cmd => `
-          <a class="docs-link" href="#${cmd.id}" data-id="${cmd.id}">${cmd.title}</a>
-        `).join('')}
-      </div>
+  sidebar.innerHTML = `
+    <div class="docs-search-wrap">
+      <input type="text" id="docs-search" class="docs-search"
+             placeholder="Filter… (press /)" autocomplete="off" spellcheck="false">
     </div>
-  `).join('');
+    ${CATALOG.map(group => `
+      <div class="docs-section" data-id="${group.id}">
+        <div class="docs-section-header">
+          <span class="docs-section-chevron">▼</span>
+          <span>${group.section}</span>
+          <span class="docs-section-count">${group.commands.length}</span>
+        </div>
+        <div class="docs-section-items">
+          ${group.commands.map(cmd => `
+            <a class="docs-link" href="#${cmd.id}" data-id="${cmd.id}">${cmd.title}</a>
+          `).join('')}
+        </div>
+      </div>
+    `).join('')}
+  `;
 
   sidebar.querySelectorAll('.docs-section-header').forEach(header => {
     header.onclick = () => header.parentElement.classList.toggle('collapsed');
   });
+
+  document.getElementById('docs-search').addEventListener('input', (e) => {
+    const q = e.target.value.toLowerCase().trim();
+    document.querySelectorAll('.docs-link').forEach(link => {
+      link.style.display = q === '' || link.textContent.toLowerCase().includes(q) ? '' : 'none';
+    });
+    document.querySelectorAll('.docs-section').forEach(section => {
+      const hasVisible = [...section.querySelectorAll('.docs-link')].some(l => l.style.display !== 'none');
+      if (q !== '') {
+        section.classList.toggle('collapsed', !hasVisible);
+      } else {
+        section.classList.remove('collapsed');
+      }
+    });
+  });
 }
 
 // ── Content rendering ──────────────────────────────────────────────────────
+function getAllCommands() {
+  return CATALOG.flatMap(g => g.commands);
+}
+
 function findCommand(id) {
   for (const group of CATALOG) {
     for (const cmd of group.commands) {
@@ -866,10 +1348,27 @@ function renderCommand(id) {
   }
 
   const { cmd, group } = found;
+
+  // Prev / next within the flat command list.
+  const all = getAllCommands();
+  const idx = all.findIndex(c => c.id === id);
+  const prev = idx > 0 ? all[idx - 1] : null;
+  const next = idx < all.length - 1 ? all[idx + 1] : null;
+  const pager = `
+    <div class="docs-pager">
+      <div class="docs-pager-side">
+        ${prev ? `<a href="#${prev.id}" class="docs-pager-btn">← ${escapeHtml(prev.title)}</a>` : ''}
+      </div>
+      <div class="docs-pager-side right">
+        ${next ? `<a href="#${next.id}" class="docs-pager-btn">${escapeHtml(next.title)} →</a>` : ''}
+      </div>
+    </div>`;
+
+  // Render: title → body (body already opens with its own lede paragraph).
   content.innerHTML = `
     <h1>${escapeHtml(cmd.title)}</h1>
-    <p class="lede">${escapeHtml(cmd.synopsis)}</p>
     ${cmd.body}
+    ${pager}
   `;
 
   // Highlight active link, expand parent section.
@@ -903,4 +1402,20 @@ window.addEventListener('hashchange', routeFromHash);
 window.addEventListener('DOMContentLoaded', () => {
   renderSidebar();
   routeFromHash();
+
+  // Press / to focus the search box.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '/' && e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+      e.preventDefault();
+      document.getElementById('docs-search').focus();
+    }
+    if (e.key === 'Escape') {
+      const search = document.getElementById('docs-search');
+      if (document.activeElement === search) {
+        search.value = '';
+        search.dispatchEvent(new Event('input'));
+        search.blur();
+      }
+    }
+  });
 });

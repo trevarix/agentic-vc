@@ -23,6 +23,77 @@ type Property struct {
 	Description string `json:"description"`
 }
 
+// ProjectlessTools returns the tool set advertised when no AVC project is
+// detected. Empty — no AVC tools are exposed so the agent cannot misuse them
+// on an uninitialized directory. The user must run `avc init` from a terminal
+// and restart Claude Code to enable AVC.
+func ProjectlessTools() []Tool {
+	return []Tool{}
+}
+
+// ToolsForTier returns the tool set for the named tier.
+//
+//	core     — 4 tools: snapshot, list, diff, restore
+//	standard — 10 tools: core + branch_create/list/switch/diff + merge + merge_abort  (default)
+//	full     — all tools (~24)
+//
+// An unrecognised tier name falls back to "standard".
+func ToolsForTier(tier string) []Tool {
+	switch tier {
+	case "core":
+		return CoreTools()
+	case "full":
+		return AllTools()
+	default: // "standard" and anything unrecognised
+		return StandardTools()
+	}
+}
+
+// CoreTools returns the minimal 4-tool set: snapshot, list, diff, restore.
+// Suitable for agents with small context windows that only need basic operations.
+func CoreTools() []Tool {
+	all := AllTools()
+	coreNames := map[string]bool{
+		"avc_snapshot": true,
+		"avc_list":     true,
+		"avc_diff":     true,
+		"avc_restore":  true,
+	}
+	var out []Tool
+	for _, t := range all {
+		if coreNames[t.Name] {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// StandardTools returns the 10-tool default set: core + branch create/list/switch/diff
+// + merge + merge_abort. Covers the full agent workflow without advanced tools.
+func StandardTools() []Tool {
+	all := AllTools()
+	standardNames := map[string]bool{
+		"avc_snapshot":       true,
+		"avc_list":           true,
+		"avc_diff":           true,
+		"avc_restore":        true,
+		"avc_status":         true,
+		"avc_branch_create":  true,
+		"avc_branch_list":    true,
+		"avc_branch_switch":  true,
+		"avc_branch_diff":    true,
+		"avc_merge":          true,
+		"avc_merge_abort":    true,
+	}
+	var out []Tool
+	for _, t := range all {
+		if standardNames[t.Name] {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 // AllTools returns the full list of AVC MCP tools.
 func AllTools() []Tool {
 	return []Tool{
@@ -45,9 +116,23 @@ func AllTools() []Tool {
 			},
 		},
 		{
-			Name:        "avc_list",
-			Description: "List all snapshots on the active branch, newest first.",
-			InputSchema: InputSchema{Type: "object"},
+			Name: "avc_list",
+			Description: "List snapshots on the active branch, newest first. " +
+				"Supports optional filters: tag (only snapshots with that tag), " +
+				"search (full-text on label/notes), agent (filter by agent name), " +
+				"changed (only snapshots that tracked a specific file path), " +
+				"limit (max results; default 50, -1 = unlimited).",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"tag":     {Type: "string", Description: "Only snapshots with this tag (e.g. 'stable', 'v1.0.0')"},
+					"search":  {Type: "string", Description: "Full-text search on label and notes"},
+					"agent":   {Type: "string", Description: "Filter by agent name (substring match)"},
+					"changed": {Type: "string", Description: "Only snapshots that tracked this relative file path"},
+					"limit":   {Type: "integer", Description: "Max results (default 50; -1 = unlimited)"},
+					"all":     {Type: "boolean", Description: "Show snapshots from all branches (default: active branch only)"},
+				},
+			},
 		},
 		{
 			Name: "avc_diff",
@@ -144,6 +229,37 @@ func AllTools() []Tool {
 			},
 		},
 		{
+			Name: "avc_branch_rename",
+			Description: "Rename a branch. Updates the DB record, workspace directory, and active branch reference. " +
+				"Cannot rename 'main'.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"old_name": {Type: "string", Description: "Current branch name"},
+					"new_name": {Type: "string", Description: "New branch name"},
+				},
+				Required: []string{"old_name", "new_name"},
+			},
+		},
+		{
+			Name: "avc_branch_abandon",
+			Description: "Mark a branch as abandoned. No data is removed — snapshots and workspace remain. " +
+				"The branch is excluded from the default listing. Use when a line of work is no longer needed.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"name": {Type: "string", Description: "Branch name to abandon"},
+				},
+				Required: []string{"name"},
+			},
+		},
+		{
+			Name: "avc_branch_prune_merged",
+			Description: "Remove workspace directories for all branches with status 'merged'. " +
+				"DB records and snapshots are preserved. Frees disk space after a clean merge workflow.",
+			InputSchema: InputSchema{Type: "object"},
+		},
+		{
 			Name: "avc_merge_preview",
 			Description: "Optional dry-run preview of what a merge would do — " +
 				"which files would be applied cleanly, which would conflict, and how many are unchanged. " +
@@ -183,6 +299,8 @@ func AllTools() []Tool {
 				"Python pip installs are redirected into a workspace-local venv automatically. " +
 				"Node packages install into the workspace node_modules. " +
 				"System package managers (brew, apt, choco, sudo) are blocked. " +
+				"\n\nREQUIRES [run] enabled = true in .avc/config.toml — this must be set " +
+				"manually by a human. Agents cannot enable it. " +
 				"\n\nIMPORTANT: Always present the full command to the user and obtain " +
 				"explicit approval before calling this tool. Never call it autonomously.",
 			InputSchema: InputSchema{
@@ -193,6 +311,100 @@ func AllTools() []Tool {
 					"timeout_seconds": {Type: "integer", Description: "Timeout in seconds (default 180, max 600). Overrides config."},
 				},
 				Required: []string{"branch", "command"},
+			},
+		},
+		{
+			Name: "avc_status",
+			Description: "Show files changed since the last snapshot on the active branch. " +
+				"Use this before avc_snapshot to confirm which files will be captured. " +
+				"Returns an empty list when the working tree matches the last snapshot exactly. " +
+				"On an agent branch this compares the workspace against its last snapshot.",
+			InputSchema: InputSchema{Type: "object"},
+		},
+		{
+			Name: "avc_restore_file",
+			Description: "Restore a single file from a snapshot without affecting any other files. " +
+				"On an agent branch this writes to the workspace only — the real project root is untouched. " +
+				"Use this instead of avc_restore when you only need to undo one file's changes.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"snapshot_id": {Type: "string", Description: "Snapshot to restore the file from"},
+					"path":        {Type: "string", Description: "Relative file path (e.g. 'src/auth.go')"},
+				},
+				Required: []string{"snapshot_id", "path"},
+			},
+		},
+		{
+			Name: "avc_annotate",
+			Description: "Show which snapshot introduced each line of a file. " +
+				"Returns [{line, snapshot_id, label, agent_name, timestamp}] ordered by line number. " +
+				"Lines modified on disk but not yet snapshotted show the most recent snapshot. " +
+				"Useful for tracing when a regression was introduced: " +
+				"'Which snapshot added line 42 of auth.go?'",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"path": {Type: "string", Description: "Relative file path (e.g. 'src/auth.go')"},
+				},
+				Required: []string{"path"},
+			},
+		},
+		{
+			Name: "avc_tag_snapshot",
+			Description: "Apply a tag to a snapshot. Tags are machine-readable milestone markers " +
+				"(e.g. 'stable', 'v1.2.0', 'pre-release'). Applying the same tag twice is a no-op. " +
+				"Use avc_list with tag= to retrieve tagged snapshots.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"snapshot_id": {Type: "string", Description: "Snapshot ID to tag"},
+					"tag":         {Type: "string", Description: "Tag string (e.g. 'stable', 'v1.0.0')"},
+				},
+				Required: []string{"snapshot_id", "tag"},
+			},
+		},
+		{
+			Name: "avc_untag_snapshot",
+			Description: "Remove a tag from a snapshot. No-op if the tag was not set.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"snapshot_id": {Type: "string", Description: "Snapshot ID to untag"},
+					"tag":         {Type: "string", Description: "Tag string to remove"},
+				},
+				Required: []string{"snapshot_id", "tag"},
+			},
+		},
+		{
+			Name: "avc_list_conflicts",
+			Description: "List all files with unresolved merge conflict markers in the project root. " +
+				"Call after avc_merge reports conflicts to see exactly which files need resolution. " +
+				"Returns a list of relative file paths that still contain <<<<<<< markers. " +
+				"Use avc_resolve_conflict to resolve each one, then call avc_merge again.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"branch": {Type: "string", Description: "Branch name whose merge produced the conflicts"},
+				},
+				Required: []string{"branch"},
+			},
+		},
+		{
+			Name: "avc_resolve_conflict",
+			Description: "Resolve a conflict in one file by choosing a version or providing resolved content. " +
+				"After resolving all conflicts, call avc_snapshot to record the resolution, " +
+				"then call avc_merge again to complete the merge. " +
+				"resolution must be 'ours' (keep main), 'theirs' (keep branch), or 'content' (provide text).",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"branch":     {Type: "string", Description: "Branch name whose merge produced the conflict"},
+					"path":       {Type: "string", Description: "Relative file path to resolve (e.g. 'src/auth.go')"},
+					"resolution": {Type: "string", Description: "'ours' (keep main), 'theirs' (keep branch), or 'content' (provide resolved text)"},
+					"content":    {Type: "string", Description: "Resolved file content — only used when resolution is 'content'"},
+				},
+				Required: []string{"branch", "path", "resolution"},
 			},
 		},
 	}

@@ -11,7 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	workspacepkg "github.com/SkillMythOrg/agentic-vc/avc/internal/workspace"
+	workspacepkg "github.com/trevarix/agentic-vc/avc/internal/workspace"
 )
 
 var runBranch string

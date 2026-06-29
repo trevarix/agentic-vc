@@ -9,9 +9,9 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/branch"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/restore"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/snapshot"
+	"github.com/trevarix/agentic-vc/avc/internal/branch"
+	"github.com/trevarix/agentic-vc/avc/internal/restore"
+	"github.com/trevarix/agentic-vc/avc/internal/snapshot"
 )
 
 // TestWorkspace_MaterializeCreatesFiles verifies that branch create populates
@@ -194,7 +194,7 @@ func TestWorkspace_DeleteRemovesWorkspace(t *testing.T) {
 		t.Fatal("workspace directory should exist after branch create")
 	}
 
-	if err := branch.Delete(projectRoot, b.Name); err != nil {
+	if err := branch.Delete(projectRoot, b.Name, false); err != nil {
 		t.Fatalf("delete branch: %v", err)
 	}
 

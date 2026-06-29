@@ -6,7 +6,7 @@ package snapshot
 import (
 	"path/filepath"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
+	"github.com/trevarix/agentic-vc/avc/internal/db"
 )
 
 // FileHistoryEntry describes one snapshot that contains a particular file.
@@ -32,7 +32,7 @@ func FileHistory(projectRoot, filePath string) ([]*FileHistoryEntry, error) {
 		return nil, err
 	}
 
-	normalized := filepath.ToSlash(filePath)
+	normalized := filepath.ToSlash(filepath.Clean(filePath))
 	var history []*FileHistoryEntry
 
 	for _, snap := range snapshots {

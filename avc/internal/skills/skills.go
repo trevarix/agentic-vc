@@ -222,6 +222,11 @@ func fileAction(rel, action string) FileAction {
 
 const claudeMDMarker = "<!-- AVC — Agentic Version Control -->"
 
+// avcBlockEndMarker closes both the CLAUDE.md block and the Windsurf rules
+// block, delimiting the AVC section so it can be located precisely in files
+// that may contain other content.
+const avcBlockEndMarker = "<!-- /AVC — Agentic Version Control -->"
+
 const claudeMDBlock = `
 <!-- AVC — Agentic Version Control -->
 ## AVC — Agentic Version Control
@@ -263,6 +268,7 @@ Do not assess whether the task is "simple enough" to skip a branch — that judg
 | Ready to review branch work | ` + "`avc_branch_diff`" + ` |
 | Ready to merge (with approval) | ` + "`avc_merge`" + ` |
 | Need to run tests or build | ` + "`avc_run_in_workspace`" + ` (approval required) |
+<!-- /AVC — Agentic Version Control -->
 `
 
 // ─── Claude Code global settings path ────────────────────────────────────────
@@ -369,7 +375,8 @@ func mergeMCPConfig(path, serverKey string, r *WriteResult) (string, error) {
 
 	entry := map[string]any{
 		"command": binaryPath,
-		"args":    []string{"mcp", "serve"},
+		// --tools standard is the default; change to "core" or "full" as needed.
+		"args": []string{"mcp", "serve", "--tools", "standard"},
 	}
 
 	var root map[string]any
@@ -443,8 +450,9 @@ func mergeMCPConfigWithEnv(path, serverKey, projectRoot string, r *WriteResult) 
 
 	entry := map[string]any{
 		"command": binaryPath,
-		"args":    []string{"mcp", "serve"},
-		"env":     map[string]any{"AVC_PROJECT": projectRoot},
+		// --tools standard is the default; change to "core" or "full" as needed.
+		"args": []string{"mcp", "serve", "--tools", "standard"},
+		"env":  map[string]any{"AVC_PROJECT": projectRoot},
 	}
 
 	var root map[string]any
@@ -705,6 +713,10 @@ Do not assess whether the task is "simple enough" to skip a branch — that judg
 
 ## MUST call when
 
+- You are about to create, edit, or delete any file
+- The task involves more than one file or more than one step
+- The user asks you to implement, refactor, fix, or add anything
+
 ## Steps
 
 1. Create the branch:
@@ -725,8 +737,8 @@ Do not assess whether the task is "simple enough" to skip a branch — that judg
 ## NEVER
 
 - Edit files outside the workspace path while on a branch
-- Merge without calling **avc_merge_preview** first
-- Merge without explicit user approval
+- Call **avc_merge** without explicit user approval — show the diff first and wait for yes
+- Retry a failed merge without calling **avc_merge_abort** first
 `,
 
 	"avc-merge": `---
@@ -845,6 +857,7 @@ avc_merge checks for conflicts automatically — no separate preview step needed
 
 **NEVER call avc_run_in_workspace** without first showing the user the exact command and receiving explicit approval.
 System package managers (brew, apt, choco, sudo) are blocked. Use pip install (no --user), npm install (no -g).
+<!-- /AVC — Agentic Version Control -->
 `
 
 // ─── Content: Generic agent instructions ─────────────────────────────────────

@@ -8,13 +8,22 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/fileutil"
+	"github.com/trevarix/agentic-vc/avc/internal/db"
+	"github.com/trevarix/agentic-vc/avc/internal/fileutil"
 )
 
 // CompareWithCurrent computes the diff between a snapshot and the current
-// working tree on disk.
+// working tree on disk. sourceDir is the directory to walk (pass "" to use
+// projectRoot, which is the default for main; pass the workspace path for
+// agent branches so the diff reflects the workspace, not the project root).
 func CompareWithCurrent(projectRoot, snapshotID string) (*Result, error) {
+	return CompareWithCurrentDir(projectRoot, projectRoot, snapshotID)
+}
+
+// CompareWithCurrentDir is the workspace-aware variant of CompareWithCurrent.
+// sourceDir is walked for the current file state; projectRoot provides the
+// object store and ignore rules. On main, pass projectRoot for both.
+func CompareWithCurrentDir(projectRoot, sourceDir, snapshotID string) (*Result, error) {
 	store, err := db.Open(projectRoot)
 	if err != nil {
 		return nil, err
@@ -38,7 +47,7 @@ func CompareWithCurrent(projectRoot, snapshotID string) (*Result, error) {
 		return nil, fmt.Errorf("load ignore rules: %w", err)
 	}
 
-	currentPaths, err := fileutil.WalkProject(projectRoot, ignore)
+	currentPaths, err := fileutil.WalkProject(sourceDir, ignore)
 	if err != nil {
 		return nil, fmt.Errorf("walk project: %w", err)
 	}
@@ -50,7 +59,7 @@ func CompareWithCurrent(projectRoot, snapshotID string) (*Result, error) {
 	}
 	currentMap := make(map[string]*currentFile, len(currentPaths))
 	for _, absPath := range currentPaths {
-		rel, err := filepath.Rel(projectRoot, absPath)
+		rel, err := filepath.Rel(sourceDir, absPath)
 		if err != nil {
 			continue
 		}

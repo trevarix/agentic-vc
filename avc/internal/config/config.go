@@ -6,8 +6,10 @@ package config
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -16,17 +18,50 @@ const configFile = ".avc/config.toml"
 
 // Config holds all runtime configuration for an AVC project.
 type Config struct {
-	Project ProjectConfig `toml:"project"`
-	Ignore  IgnoreConfig  `toml:"ignore"`
-	Branch  BranchConfig  `toml:"branch"`
-	Run     RunConfig     `toml:"run"`
+	Project   ProjectConfig   `toml:"project"`
+	Ignore    IgnoreConfig    `toml:"ignore"`
+	Branch    BranchConfig    `toml:"branch"`
+	Run       RunConfig       `toml:"run"`
+	Retention RetentionConfig `toml:"retention"`
+	Hooks     HooksConfig     `toml:"hooks"`
+}
+
+// HooksConfig defines shell commands to run before/after snapshots and restores.
+// Pre-hooks abort the operation on non-zero exit; post-hooks are non-fatal.
+type HooksConfig struct {
+	// PreSnapshot runs before a snapshot is created. Non-zero exit aborts the snapshot.
+	PreSnapshot string `toml:"pre_snapshot"`
+	// PostSnapshot runs after a successful snapshot. AVC_SNAPSHOT_ID is set in the environment.
+	PostSnapshot string `toml:"post_snapshot"`
+	// PreRestore runs before a restore. Non-zero exit aborts the restore.
+	PreRestore string `toml:"pre_restore"`
+	// PostRestore runs after a successful restore. AVC_SNAPSHOT_ID is set in the environment.
+	PostRestore string `toml:"post_restore"`
+}
+
+// RetentionConfig controls automatic snapshot pruning per branch.
+type RetentionConfig struct {
+	// MaxSnapshotsPerBranch is the maximum number of snapshots to keep per
+	// branch. When exceeded, the oldest snapshots are deleted. 0 = unlimited.
+	MaxSnapshotsPerBranch int `toml:"max_snapshots_per_branch"`
+
+	// MaxAgeDays deletes snapshots older than N days. 0 = unlimited.
+	MaxAgeDays int `toml:"max_age_days"`
+
+	// AutoGC runs garbage collection automatically after pruning.
+	// Defaults to true when a pruning policy is active.
+	AutoGC bool `toml:"auto_gc"`
 }
 
 // RunConfig holds workspace command runner settings.
 type RunConfig struct {
-	DefaultTimeoutSeconds int `toml:"default_timeout_seconds"`
-	MaxTimeoutSeconds     int `toml:"max_timeout_seconds"`
-	MaxOutputKB           int `toml:"max_output_kb"`
+	// Enabled gates the avc_run_in_workspace MCP tool. Default false.
+	// Must be set to true by a human in .avc/config.toml — agents cannot
+	// enable it themselves.
+	Enabled               bool `toml:"enabled"`
+	DefaultTimeoutSeconds int  `toml:"default_timeout_seconds"`
+	MaxTimeoutSeconds     int  `toml:"max_timeout_seconds"`
+	MaxOutputKB           int  `toml:"max_output_kb"`
 }
 
 // ProjectConfig holds project-level settings.
@@ -84,8 +119,17 @@ func Save(projectRoot string, cfg *Config) error {
 	return os.WriteFile(filepath.Join(projectRoot, configFile), buf.Bytes(), 0644)
 }
 
-// SetActiveBranch updates only the active branch name in the config file.
+// SetActiveBranch atomically updates the active branch name in the config file.
+// A spin-lock file serialises concurrent writers so that simultaneous
+// branch-switch calls (e.g. from two agents) do not corrupt config.toml.
 func SetActiveBranch(projectRoot, name string) error {
+	lockPath := filepath.Join(projectRoot, ".avc", "config.lock")
+	unlock, err := acquireLock(lockPath)
+	if err != nil {
+		return fmt.Errorf("acquire config lock: %w", err)
+	}
+	defer unlock()
+
 	cfg, err := Load(projectRoot)
 	if err != nil {
 		c := defaultConfig
@@ -93,6 +137,50 @@ func SetActiveBranch(projectRoot, name string) error {
 	}
 	cfg.Branch.Active = name
 	return Save(projectRoot, cfg)
+}
+
+// acquireLock creates a lock file at lockPath, spinning with 10 ms retries
+// for up to 500 ms. Returns a release function that removes the lock file.
+//
+// Stale lock files (older than 30 s — left by a crashed process) are silently
+// removed so callers are never permanently blocked by a dead writer.
+func acquireLock(lockPath string) (func(), error) {
+	const (
+		maxWait    = 500 * time.Millisecond
+		retryDelay = 10 * time.Millisecond
+		staleAfter = 30 * time.Second
+	)
+
+	deadline := time.Now().Add(maxWait)
+	for {
+		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if err == nil {
+			// Lock acquired.
+			f.Close()
+			return func() { os.Remove(lockPath) }, nil //nolint:errcheck
+		}
+
+		if !os.IsExist(err) {
+			// Unexpected error (permissions, full disk, etc.).
+			return nil, err
+		}
+
+		// Lock file exists — check whether it is stale (from a crashed process).
+		if info, statErr := os.Stat(lockPath); statErr == nil {
+			if time.Since(info.ModTime()) > staleAfter {
+				os.Remove(lockPath) //nolint:errcheck  — best effort, retry on next loop
+				continue
+			}
+		}
+
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf(
+				"timeout waiting for config lock after %s (stale lock at %s?)",
+				maxWait, lockPath,
+			)
+		}
+		time.Sleep(retryDelay)
+	}
 }
 
 // WriteDefault writes the default config.toml to the project's .avc/ directory,
@@ -191,6 +279,10 @@ const defaultTOML = `# AVC configuration file
 active = "main"
 
 [run]
+# Allow avc_run_in_workspace to execute commands in agent workspaces.
+# Must be set to true by a human — agents cannot enable this themselves.
+# enabled = false
+
 # Maximum time a workspace command can run before being killed.
 default_timeout_seconds = 180
 max_timeout_seconds     = 600
@@ -198,6 +290,27 @@ max_timeout_seconds     = 600
 # Maximum output captured per stream (stdout/stderr) before truncation.
 # Increase for projects with verbose test suites.
 max_output_kb = 512
+
+[retention]
+# Maximum snapshots to keep per branch (oldest pruned first). 0 = unlimited.
+# max_snapshots_per_branch = 100
+
+# Delete snapshots older than N days. 0 = unlimited.
+# max_age_days = 90
+
+# Run gc automatically after pruning. Default: true.
+# auto_gc = true
+
+[hooks]
+# Shell commands run around snapshots and restores.
+# Pre-hooks: non-zero exit aborts the operation.
+# Post-hooks: non-zero exit is logged to stderr but does not fail the operation.
+# Environment: AVC_PROJECT_ROOT, AVC_SNAPSHOT_ID, AVC_BRANCH are always set.
+
+# pre_snapshot  = "npm test -- --silent"
+# post_snapshot = ""
+# pre_restore   = ""
+# post_restore  = ""
 `
 
 const defaultAVCIgnore = `# AVC ignore rules — patterns listed here are excluded from all snapshots.

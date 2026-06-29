@@ -7,8 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"unicode/utf8"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/annotate"
+	"github.com/trevarix/agentic-vc/avc/internal/annotate"
 	"github.com/spf13/cobra"
 )
 
@@ -40,17 +41,26 @@ func runAnnotate(cmd *cobra.Command, args []string) error {
 		return json.NewEncoder(os.Stdout).Encode(result)
 	}
 
-	fmt.Printf("%s (%d lines)\n\n", bold(result.FilePath), result.TotalLines)
+	fmt.Printf("%s  %s\n\n", accent(result.FilePath), dim(fmt.Sprintf("(%d lines)", result.TotalLines)))
 	for _, line := range result.Lines {
-		label := line.Label
-		if len(label) > 24 {
-			label = label[:21] + "..."
+		lbl := line.Label
+		if utf8.RuneCountInString(lbl) > 24 {
+			lbl = string([]rune(lbl)[:21]) + "..."
 		}
 		agent := ""
 		if line.AgentName != "" {
-			agent = fmt.Sprintf(" (%s)", line.AgentName)
+			agent = "  " + blue(line.AgentName)
 		}
-		fmt.Printf("%4d │ %-24s%s\n", line.Line, label, agent)
+		labelColor := cyan
+		if lbl == "(untracked)" {
+			labelColor = dim
+		}
+		fmt.Printf("%s %s %s%s\n",
+			dim(fmt.Sprintf("%4d", line.Line)),
+			dim("│"),
+			labelColor(fmt.Sprintf("%-24s", lbl)),
+			agent,
+		)
 	}
 	return nil
 }

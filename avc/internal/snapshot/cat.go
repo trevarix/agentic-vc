@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/restore"
+	"github.com/trevarix/agentic-vc/avc/internal/db"
+	"github.com/trevarix/agentic-vc/avc/internal/restore"
 )
 
 // CatFile returns the raw bytes of filePath as stored in snapshotID.
@@ -29,7 +29,7 @@ func CatFile(projectRoot, snapshotID, filePath string) ([]byte, error) {
 		return nil, err
 	}
 
-	normalized := filepath.ToSlash(filePath)
+	normalized := filepath.ToSlash(filepath.Clean(filePath))
 	for _, f := range files {
 		if f.RelativePath == normalized {
 			return restore.ReadObject(projectRoot, f.FileHash)

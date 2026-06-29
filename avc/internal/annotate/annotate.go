@@ -8,11 +8,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/diff"
+	"github.com/trevarix/agentic-vc/avc/internal/db"
+	"github.com/trevarix/agentic-vc/avc/internal/diff"
 )
 
 // LineAnnotation describes which snapshot introduced a specific line.
@@ -33,84 +31,74 @@ type AnnotateResult struct {
 
 // Annotate traces line origins for filePath across all snapshots.
 // filePath must be a slash-separated relative path within the project.
+//
+// Previously this fired one GetSnapshotFiles query per snapshot (O(N) queries).
+// It now fires exactly one GetFileVersions query that joins files + snapshots,
+// then fetches snapshot metadata (label, agent_name) in a single ListSnapshots
+// call — total: 2 queries regardless of history length.
 func Annotate(projectRoot, filePath string) (*AnnotateResult, error) {
+	filePath = filepath.ToSlash(filepath.Clean(filePath))
+
 	store, err := db.Open(projectRoot)
 	if err != nil {
 		return nil, err
 	}
 	defer store.Close()
 
-	snapshots, err := store.ListSnapshots()
+	// One query: all (snapshot_id, hash, timestamp) pairs for this file, oldest-first.
+	versions, err := store.GetFileVersions(filePath)
 	if err != nil {
 		return nil, err
 	}
 
-	if len(snapshots) == 0 {
-		return &AnnotateResult{FilePath: filePath}, nil
-	}
-
-	// Sort snapshots oldest-first for forward traversal.
-	sort.Slice(snapshots, func(i, j int) bool {
-		return snapshots[i].Timestamp < snapshots[j].Timestamp
-	})
-
-	// Collect (snapshot, hash) pairs for the file across history.
-	type fileVersion struct {
-		snap *db.Snapshot
-		hash string
-	}
-
-	var versions []fileVersion
-	for _, snap := range snapshots {
-		files, err := store.GetSnapshotFiles(snap.ID)
-		if err != nil {
-			return nil, err
-		}
-		for _, f := range files {
-			if f.RelativePath == filePath {
-				versions = append(versions, fileVersion{snap: snap, hash: f.FileHash})
-				break
-			}
-		}
-	}
-
 	if len(versions) == 0 {
-		// File was never tracked. Try to annotate from current disk.
+		// File was never tracked. Try to annotate from current disk content.
 		return annotateCurrentOnly(projectRoot, filePath)
 	}
 
-	// Start with the first version: all lines belong to the first snapshot.
-	firstData := diff.ReadObjectSafe(projectRoot, versions[0].hash)
-	firstLines := diff.SplitLines(firstData)
-
-	// origins[i] tracks which snapshot introduced line i of the current version.
-	origins := make([]*db.Snapshot, len(firstLines))
-	for i := range origins {
-		origins[i] = versions[0].snap
+	// Fetch snapshot metadata (label, agent_name) keyed by snapshot ID.
+	// One query for all snapshots — avoids per-version lookups.
+	allSnaps, err := store.ListSnapshots()
+	if err != nil {
+		return nil, err
+	}
+	snapMeta := make(map[string]*db.Snapshot, len(allSnaps))
+	for _, s := range allSnaps {
+		snapMeta[s.ID] = s
 	}
 
-	// Walk forward through versions, updating origins when the file changed.
+	// ── Forward walk: track which snapshot introduced each line ──────────────
+
+	// Start with the first version: all lines attributed to the first snapshot.
+	firstData := diff.ReadObjectSafe(projectRoot, versions[0].FileHash)
+	firstLines := diff.SplitLines(firstData)
+
+	origins := make([]string, len(firstLines)) // origins[i] = snapshot ID for line i
+	for i := range origins {
+		origins[i] = versions[0].SnapshotID
+	}
+
 	for v := 1; v < len(versions); v++ {
-		if versions[v].hash == versions[v-1].hash {
-			continue // identical content, skip
+		if versions[v].FileHash == versions[v-1].FileHash {
+			continue // content unchanged — skip
 		}
 
-		oldData := diff.ReadObjectSafe(projectRoot, versions[v-1].hash)
-		newData := diff.ReadObjectSafe(projectRoot, versions[v].hash)
+		oldData := diff.ReadObjectSafe(projectRoot, versions[v-1].FileHash)
+		newData := diff.ReadObjectSafe(projectRoot, versions[v].FileHash)
 		oldLines := diff.SplitLines(oldData)
 		newLines := diff.SplitLines(newData)
 
 		edits := diff.ComputeEdits(oldLines, newLines)
 		if edits == nil {
-			// File too large for LCS. Attribute all lines to this snapshot.
-			origins = make([]*db.Snapshot, len(newLines))
+			// File too large for LCS — attribute all lines to this snapshot.
+			origins = make([]string, len(newLines))
 			for i := range origins {
-				origins[i] = versions[v].snap
+				origins[i] = versions[v].SnapshotID
 			}
 			continue
 		}
 
-		newOrigins := make([]*db.Snapshot, 0, len(newLines))
+		newOrigins := make([]string, 0, len(newLines))
 		oldIdx := 0
 		for _, e := range edits {
 			switch e.Op {
@@ -118,11 +106,11 @@ func Annotate(projectRoot, filePath string) (*AnnotateResult, error) {
 				if oldIdx < len(origins) {
 					newOrigins = append(newOrigins, origins[oldIdx])
 				} else {
-					newOrigins = append(newOrigins, versions[v].snap)
+					newOrigins = append(newOrigins, versions[v].SnapshotID)
 				}
 				oldIdx++
 			case diff.EditAdd:
-				newOrigins = append(newOrigins, versions[v].snap)
+				newOrigins = append(newOrigins, versions[v].SnapshotID)
 			case diff.EditDelete:
 				oldIdx++
 			}
@@ -130,8 +118,10 @@ func Annotate(projectRoot, filePath string) (*AnnotateResult, error) {
 		origins = newOrigins
 	}
 
-	// Optionally compare latest snapshot with current disk file.
-	latestHash := versions[len(versions)-1].hash
+	// ── Optionally compare latest snapshot with current disk file ─────────────
+
+	latestHash := versions[len(versions)-1].FileHash
+	latestSnapID := versions[len(versions)-1].SnapshotID
 	absPath := filepath.Join(projectRoot, filepath.FromSlash(filePath))
 	currentData, err := os.ReadFile(absPath)
 	if err == nil {
@@ -142,21 +132,19 @@ func Annotate(projectRoot, filePath string) (*AnnotateResult, error) {
 		if !linesEqual(storedLines, currentLines) {
 			edits := diff.ComputeEdits(storedLines, currentLines)
 			if edits != nil {
-				newOrigins := make([]*db.Snapshot, 0, len(currentLines))
+				newOrigins := make([]string, 0, len(currentLines))
 				oldIdx := 0
-				// Use the latest snapshot as the "current" attribution.
-				latestSnap := versions[len(versions)-1].snap
 				for _, e := range edits {
 					switch e.Op {
 					case diff.EditKeep:
 						if oldIdx < len(origins) {
 							newOrigins = append(newOrigins, origins[oldIdx])
 						} else {
-							newOrigins = append(newOrigins, latestSnap)
+							newOrigins = append(newOrigins, latestSnapID)
 						}
 						oldIdx++
 					case diff.EditAdd:
-						newOrigins = append(newOrigins, latestSnap)
+						newOrigins = append(newOrigins, latestSnapID)
 					case diff.EditDelete:
 						oldIdx++
 					}
@@ -166,20 +154,24 @@ func Annotate(projectRoot, filePath string) (*AnnotateResult, error) {
 		}
 	}
 
-	// Build result.
+	// ── Build result ─────────────────────────────────────────────────────────
+
 	result := &AnnotateResult{
 		FilePath:   filePath,
 		TotalLines: len(origins),
 		Lines:      make([]*LineAnnotation, len(origins)),
 	}
-	for i, snap := range origins {
-		result.Lines[i] = &LineAnnotation{
+	for i, snapID := range origins {
+		ann := &LineAnnotation{
 			Line:       i + 1,
-			SnapshotID: snap.ID,
-			Label:      snap.Label,
-			AgentName:  snap.AgentName,
-			Timestamp:  snap.Timestamp,
+			SnapshotID: snapID,
 		}
+		if meta, ok := snapMeta[snapID]; ok {
+			ann.Label = meta.Label
+			ann.AgentName = meta.AgentName
+			ann.Timestamp = meta.Timestamp
+		}
+		result.Lines[i] = ann
 	}
 
 	return result, nil
@@ -193,7 +185,7 @@ func annotateCurrentOnly(projectRoot, filePath string) (*AnnotateResult, error) 
 	if err != nil {
 		return nil, fmt.Errorf("file '%s' not found on disk or in any snapshot", filePath)
 	}
-	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	lines := diff.SplitLines(data)
 
 	result := &AnnotateResult{
 		FilePath:   filePath,

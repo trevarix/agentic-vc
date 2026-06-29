@@ -82,6 +82,18 @@ avc branch delete feature/my-task
 avc merge feature/my-task --preview   # dry-run: shows clean/conflict/skipped counts
 avc merge feature/my-task             # apply: auto-snapshots main first
 avc merge --abort                     # undo: restores main from pre-merge snapshot
+
+# File inspection
+avc annotate <file>                   # show which snapshot introduced each line
+avc cat <snapshot-id> <file>          # print file content from a snapshot
+avc diff-current <snapshot-id>        # diff a snapshot against the current working tree
+avc file-history <file>               # list all snapshots that contain a file
+
+# Surgical restore
+avc restore-file <snapshot-id> <file> # restore a single file from a snapshot
+
+# Workspace execution
+avc run --branch <name> <command>     # run a command inside a branch workspace
 ```
 
 All commands support `--json` for machine-readable output:
@@ -131,6 +143,7 @@ Running `--skills` multiple times is safe — existing files are never overwritt
 | `avc_merge_preview` | Preview a merge without writing |
 | `avc_merge` | Perform three-way merge |
 | `avc_merge_abort` | Abort merge and restore main |
+| `avc_run_in_workspace` | Run a sandboxed command inside a branch workspace |
 
 ---
 
@@ -170,12 +183,34 @@ If `avc` is not on `PATH` in the dev host, set it explicitly:
 
 ### Features
 
+**Snapshots**
 - Snapshot list in sidebar (newest first, per active branch)
-- Save / restore / delete snapshots from the UI
+- Save, restore, and delete snapshots from the UI
+- Filter snapshots by label, agent name, or date
+- Compare any two snapshots side-by-side (not just adjacent ones)
+- Detailed snapshot info viewer (file list, metadata)
+- Auto-snapshot on file save (configurable, debounced)
+
+**Working tree awareness**
+- Status bar change indicator showing `+added ~modified -deleted` since last snapshot — click to view diff
+- Diff any snapshot against the current working tree
+- Quick diff: latest snapshot vs. working tree (one click from status bar)
+- Gutter annotations — blame-style overlay showing which snapshot introduced each line; toggle on/off
+
+**File-level operations**
+- Restore a single file from a snapshot without affecting the rest of the project
+- Open any file from any snapshot in a read-only editor tab
+- Diff a single file between a snapshot and the current working tree
+- File history viewer — see every snapshot that touched a given file
+
+**Branches**
 - Branch status bar item — click to switch branches
 - Create branch, switch branch, delete branch commands
+- Open a branch workspace folder in a new VSCode window
 - Merge branch to main with preview modal and abort support
-- Diff viewer for comparing snapshots
+
+**SCM integration**
+- AVC appears as a source control provider in the SCM panel alongside Git
 
 ---
 

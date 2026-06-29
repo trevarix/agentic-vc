@@ -9,7 +9,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/snapshot"
+	"github.com/trevarix/agentic-vc/avc/internal/snapshot"
 	"github.com/spf13/cobra"
 )
 

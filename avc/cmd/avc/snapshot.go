@@ -7,13 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
-	branchpkg "github.com/SkillMythOrg/agentic-vc/avc/internal/branch"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/snapshot"
+	branchpkg "github.com/trevarix/agentic-vc/avc/internal/branch"
+	"github.com/trevarix/agentic-vc/avc/internal/db"
+	"github.com/trevarix/agentic-vc/avc/internal/snapshot"
 	"github.com/spf13/cobra"
 )
-
-
 
 var (
 	snapshotAgent string
@@ -30,9 +30,27 @@ The snapshot is associated with the currently active branch.`,
 	RunE: runSnapshot,
 }
 
+var snapshotTagCmd = &cobra.Command{
+	Use:   "tag <snapshot-id> <tag>",
+	Short: "Apply a tag to a snapshot",
+	Long: `Tags a snapshot with a machine-readable label (e.g. "stable", "v1.2.0").
+Tags are searchable via avc list --tag <tag>.
+Applying the same tag twice is a no-op.`,
+	Args: cobra.ExactArgs(2),
+	RunE: runSnapshotTag,
+}
+
+var snapshotUntagCmd = &cobra.Command{
+	Use:   "untag <snapshot-id> <tag>",
+	Short: "Remove a tag from a snapshot",
+	Args:  cobra.ExactArgs(2),
+	RunE:  runSnapshotUntag,
+}
+
 func init() {
 	snapshotCmd.Flags().StringVar(&snapshotAgent, "agent", "", "Name of the agent creating this snapshot")
 	snapshotCmd.Flags().StringVar(&snapshotNotes, "notes", "", "Optional notes for this snapshot")
+	snapshotCmd.AddCommand(snapshotTagCmd, snapshotUntagCmd)
 }
 
 func runSnapshot(cmd *cobra.Command, args []string) error {
@@ -72,10 +90,100 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 		})
 	}
 
-	fmt.Printf("%s %s\n", bold("Snapshot created:"), cyan(snap.ID))
-	fmt.Printf("  Label:    %s\n", bold(snap.Label))
-	fmt.Printf("  Branch:   %s\n", green(branchpkg.GetActiveBranchName(projectPath)))
-	fmt.Printf("  Files:    %s\n", yellow(fmt.Sprintf("%d", snap.FileCount)))
-	fmt.Printf("  Size:     %s\n", dim(fmt.Sprintf("%d bytes", snap.TotalSize)))
+	fmt.Printf("%s %s\n", success("✓ Snapshot created:"), cyan(snap.ID))
+	fmt.Printf("  %s %s\n", prop("Label:  "), bold(snap.Label))
+	fmt.Printf("  %s %s\n", prop("Branch: "), green(branchpkg.GetActiveBranchName(projectPath)))
+	fmt.Printf("  %s %s\n", prop("Files:  "), yellow(fmt.Sprintf("%d", snap.FileCount)))
+	fmt.Printf("  %s %s\n", prop("Size:   "), dim(fmt.Sprintf("%d bytes", snap.TotalSize)))
 	return nil
+}
+
+func runSnapshotTag(cmd *cobra.Command, args []string) error {
+	snapID, tag := args[0], args[1]
+	if tag == "" {
+		return fmt.Errorf("tag cannot be empty")
+	}
+
+	projectPath, err := requireInitializedProject()
+	if err != nil {
+		return err
+	}
+
+	store, err := db.Open(projectPath)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	// Verify the snapshot exists.
+	if _, err := store.GetSnapshot(snapID); err != nil {
+		return fmt.Errorf("snapshot %q not found", snapID)
+	}
+
+	if err := store.TagSnapshot(snapID, tag); err != nil {
+		return fmt.Errorf("tag: %w", err)
+	}
+
+	if jsonOutput {
+		return json.NewEncoder(os.Stdout).Encode(map[string]any{
+			"snapshot_id": snapID,
+			"tag":         tag,
+			"success":     true,
+		})
+	}
+
+	fmt.Printf("%s %s %s %s\n",
+		success("✓ Tagged snapshot"), cyan(shortID(snapID)),
+		dim("with"), bold(tag),
+	)
+	return nil
+}
+
+func runSnapshotUntag(cmd *cobra.Command, args []string) error {
+	snapID, tag := args[0], args[1]
+
+	projectPath, err := requireInitializedProject()
+	if err != nil {
+		return err
+	}
+
+	store, err := db.Open(projectPath)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	if err := store.UntagSnapshot(snapID, tag); err != nil {
+		return fmt.Errorf("untag: %w", err)
+	}
+
+	if jsonOutput {
+		return json.NewEncoder(os.Stdout).Encode(map[string]any{
+			"snapshot_id": snapID,
+			"tag":         tag,
+			"success":     true,
+		})
+	}
+
+	fmt.Printf("%s %s %s %s\n",
+		success("✓ Removed tag"), bold(tag),
+		dim("from"), cyan(shortID(snapID)),
+	)
+	return nil
+}
+
+// shortID returns the first 12 chars of a snapshot ID followed by "…".
+func shortID(id string) string {
+	if len(id) <= 12 {
+		return id
+	}
+	return id[:12] + "…"
+}
+
+// formatTags renders a tag slice as a compact bracket-separated string.
+func formatTags(tags []string) string {
+	if len(tags) == 0 {
+		return ""
+	}
+	return "[" + strings.Join(tags, ", ") + "]"
 }

@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
+	"github.com/trevarix/agentic-vc/avc/internal/db"
 	"github.com/spf13/cobra"
 )
 
@@ -49,6 +49,6 @@ func runDelete(cmd *cobra.Command, args []string) error {
 		})
 	}
 
-	fmt.Printf("Deleted snapshot %s\n", snapshotID)
+	fmt.Printf("%s %s\n", success("✓ Deleted snapshot:"), dim(snapshotID))
 	return nil
 }

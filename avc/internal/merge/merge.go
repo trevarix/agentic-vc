@@ -13,11 +13,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/db"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/fileutil"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/restore"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/snapshot"
-	"github.com/SkillMythOrg/agentic-vc/avc/internal/statcache"
+	"github.com/trevarix/agentic-vc/avc/internal/branch"
+	"github.com/trevarix/agentic-vc/avc/internal/db"
+	"github.com/trevarix/agentic-vc/avc/internal/fileutil"
+	"github.com/trevarix/agentic-vc/avc/internal/restore"
+	"github.com/trevarix/agentic-vc/avc/internal/snapshot"
+	"github.com/trevarix/agentic-vc/avc/internal/statcache"
 )
 
 // FileResult holds the three-way merge decision for a single file.
@@ -31,12 +32,13 @@ type FileResult struct {
 
 // Result is returned by Preview and Merge.
 type Result struct {
-	MergeID    string
-	BranchName string
-	Files      []FileResult
-	Conflicts  int
-	Clean      int
-	Skipped    int
+	MergeID             string
+	BranchName          string
+	Files               []FileResult
+	Conflicts           int
+	Clean               int
+	Skipped             int
+	PostMergeSnapshotID string // set after a clean merge; empty on conflicts or preview
 }
 
 // Preview computes the merge plan without writing any files or recording a merge.
@@ -140,7 +142,6 @@ func Merge(projectRoot, branchName string) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer store2.Close()
 
 	dbFiles := make([]*db.MergeFile, len(files))
 	for i, f := range files {
@@ -165,8 +166,36 @@ func Merge(projectRoot, branchName string) (*Result, error) {
 	if err := store2.UpdateMergeStatus(mergeID, finalStatus, time.Now().Unix()); err != nil {
 		return nil, fmt.Errorf("update merge status: %w", err)
 	}
+	store2.Close()
 
 	result := summarise(mergeID, agentBranch, mainBranch, files)
+
+	// Post-merge auto-snapshot: capture the merged state as the new HEAD on main.
+	// Only created on a clean merge — conflicts must be resolved first.
+	if !hasConflicts {
+		postSnap, postErr := snapshot.Create(
+			projectRoot,
+			fmt.Sprintf("post-merge: merged branch '%s'", branchName),
+			"avc-merge",
+			fmt.Sprintf("automatic snapshot after clean merge of '%s'", branchName),
+			mainBranch.ID,
+			"", // main always uses the project root as source directory
+		)
+		if postErr != nil {
+			// Non-fatal: merge succeeded; snapshot failure is logged but doesn't fail the merge.
+			fmt.Fprintf(os.Stderr, "[avc] warning: post-merge snapshot failed: %v\n", postErr)
+		} else {
+			result.PostMergeSnapshotID = postSnap.ID
+		}
+
+		// Mark the agent branch as merged and remove its workspace (non-fatal).
+		if store3, err3 := db.Open(projectRoot); err3 == nil {
+			_ = store3.SetBranchStatus(agentBranch.ID, "merged")
+			store3.Close()
+		}
+		_ = branch.RemoveWorkspace(projectRoot, agentBranch.Name)
+	}
+
 	return result, nil
 }
 
@@ -344,36 +373,58 @@ func fileMap(files []*db.File) map[string]string {
 	return m
 }
 
-// writeConflict writes a file with conflict markers showing main vs branch content.
+// writeConflict writes a file with diff3-style conflict markers, showing all
+// three versions: main (ours), the common base ancestor, and branch (theirs).
+//
+// Format:
+//
+//	<<<<<<< main (ours)
+//	<main content>
+//	||||||| base (common ancestor)
+//	<original content before either side changed it>
+//	=======
+//	<branch content>
+//	>>>>>>> branch (theirs)
+//
+// Showing the base lets the user understand what each side changed from,
+// which is the most important context for resolving a conflict manually.
 func writeConflict(projectRoot, dest string, f FileResult) error {
-	var mainContent, branchContent []byte
-
-	if f.MainHash != "" {
-		data, err := restore.ReadObject(projectRoot, f.MainHash)
-		if err != nil {
-			return err
+	readObject := func(hash string) ([]byte, error) {
+		if hash == "" {
+			return nil, nil
 		}
-		mainContent = data
+		return restore.ReadObject(projectRoot, hash)
 	}
-	if f.BranchHash != "" {
-		data, err := restore.ReadObject(projectRoot, f.BranchHash)
-		if err != nil {
-			return err
+
+	mainContent, err := readObject(f.MainHash)
+	if err != nil {
+		return fmt.Errorf("read main object for conflict: %w", err)
+	}
+	baseContent, err := readObject(f.BaseHash)
+	if err != nil {
+		return fmt.Errorf("read base object for conflict: %w", err)
+	}
+	branchContent, err := readObject(f.BranchHash)
+	if err != nil {
+		return fmt.Errorf("read branch object for conflict: %w", err)
+	}
+
+	// ensureNewline appends a newline if the content is non-empty and does not
+	// already end with one, so markers always start on their own line.
+	ensureNewline := func(b []byte) []byte {
+		if len(b) > 0 && b[len(b)-1] != '\n' {
+			return append(b, '\n')
 		}
-		branchContent = data
+		return b
 	}
 
 	var sb strings.Builder
 	sb.WriteString("<<<<<<< main (ours)\n")
-	sb.Write(mainContent)
-	if len(mainContent) > 0 && mainContent[len(mainContent)-1] != '\n' {
-		sb.WriteByte('\n')
-	}
+	sb.Write(ensureNewline(mainContent))
+	sb.WriteString("||||||| base (common ancestor)\n")
+	sb.Write(ensureNewline(baseContent))
 	sb.WriteString("=======\n")
-	sb.Write(branchContent)
-	if len(branchContent) > 0 && branchContent[len(branchContent)-1] != '\n' {
-		sb.WriteByte('\n')
-	}
+	sb.Write(ensureNewline(branchContent))
 	sb.WriteString(">>>>>>> branch (theirs)\n")
 
 	return fileutil.WriteFile(dest, []byte(sb.String()))
