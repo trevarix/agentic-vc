@@ -96,7 +96,7 @@ brews:
     commit_msg_template: "Brew formula update for {{ .ProjectName }} version {{ .Tag }}"
     homepage: "https://github.com/trevarix/agentic-vc"
     description: "Agentic Version Control — lightweight, agent-safe project snapshots"
-    license: "MIT"
+    license: "AGPL-3.0-only"
     install: |
       bin.install "avc"
     test: |
@@ -117,7 +117,7 @@ scoops:
       email: bot@goreleaser.com
     homepage: "https://github.com/trevarix/agentic-vc"
     description: "Agentic Version Control — lightweight, agent-safe project snapshots"
-    license: "MIT"
+    license: "AGPL-3.0-only"
 
 # Auto-generated changelog is disabled — CHANGELOG.md is the source of truth.
 # The before hook extracts the current version's section into a temp file which

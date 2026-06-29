@@ -1,3 +1,6 @@
+// Copyright (c) 2026 TREVARIX Corp.
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 // Package annotate traces line origins across snapshots for a single file.
 package annotate
 

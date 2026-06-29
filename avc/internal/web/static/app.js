@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2026 TREVARIX Corp.
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 /* AVC web UI — vanilla JS app. */
 'use strict';
 
