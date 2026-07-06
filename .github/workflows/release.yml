@@ -38,6 +38,13 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
+      - name: Extract changelog section for release notes
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk "/^## \[$VERSION\]/{f=1;next} f && /^## /{f=0} f" CHANGELOG.md > .goreleaser-release-notes.md
+          echo "--- Release notes preview ---"
+          cat .goreleaser-release-notes.md
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:

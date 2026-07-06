@@ -8,10 +8,6 @@ project_name: avc
 before:
   hooks:
     - sh -c 'cd avc && go mod tidy'
-    # Extract the current version's section from CHANGELOG.md into a temp file.
-    # GoReleaser sets GORELEASER_CURRENT_TAG (e.g. "v1.0.0"); strip the leading "v"
-    # to match the Keep-a-Changelog heading format "## [1.0.0]".
-    - sh -c 'awk "/^## \[${GORELEASER_CURRENT_TAG#v}\]/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md > .goreleaser-release-notes.md'
 
 builds:
   - id: avc
