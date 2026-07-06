@@ -50,7 +50,7 @@ jobs:
         with:
           distribution: goreleaser
           version: '~> v2'
-          args: release --clean --release-notes=.goreleaser-release-notes.md
+          args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Fine-grained PATs with "Contents: write" on the tap/bucket repos.
@@ -59,6 +59,16 @@ jobs:
           # Leave unset to skip tap/bucket updates (releases still work).
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           SCOOP_BUCKET_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+
+      # goreleaser sets the release body to the footer only (changelog.disable: true).
+      # Prepend the extracted changelog section so the full notes read: changelog + install.
+      - name: Prepend changelog to release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          existing=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json body -q .body)
+          { cat .goreleaser-release-notes.md; echo; echo "$existing"; } > /tmp/release-body.md
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --notes-file /tmp/release-body.md
 
   # VSCode extension is built separately — it does not go through goreleaser.
   build-extension:
