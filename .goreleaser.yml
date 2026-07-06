@@ -139,7 +139,7 @@ release:
     ```
 
     ### Windows
-    > Recommended — Scoop handles PATH and bypasses the SmartScreen warning automatically.
+    > Recommended — [Scoop](https://scoop.sh/) handles PATH and bypasses the SmartScreen warning automatically.
     > No admin rights required. `avc` is available in any terminal immediately after install.
     ```powershell
     scoop bucket add trevarix https://github.com/trevarix/scoop-bucket
