@@ -166,11 +166,8 @@ func Create(projectRoot, label, agentName, notes, branchID, sourceDir string) (*
 		BranchID:  branchID,
 	}
 
-	if err := store.InsertSnapshot(snap); err != nil {
+	if err := store.InsertSnapshotWithFiles(snap, files); err != nil {
 		return nil, fmt.Errorf("insert snapshot: %w", err)
-	}
-	if err := store.InsertFilesBatch(files); err != nil {
-		return nil, fmt.Errorf("insert files: %w", err)
 	}
 
 	// Persist updated cache — best-effort.

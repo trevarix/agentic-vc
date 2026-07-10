@@ -1,18 +1,17 @@
 package branch
 
-// copyFileOptimized copies src to dst, trying platform-optimised methods first.
-// It tries (in order):
-//  1. Hardlink — zero extra disk until one side mutates; fails across devices
-//  2. Regular byte-copy — always works
+// copyFileOptimized copies src to dst. Hardlinks are deliberately NOT used:
+// workspace files must never share inodes with project-root files, because
+// an in-place write in the workspace (append, sed -i, an editor's save) would
+// then mutate the original file instead of just the copy — silently breaking
+// workspace isolation.
 //
-// Reflink (copy-on-write) is listed in the plan but requires platform-specific
-// syscalls (FICLONE on Linux, clonefile on macOS, FSCTL_DUPLICATE_EXTENTS on
-// Windows ReFS) and a supported filesystem. The fallback to a byte-copy is
-// transparent and correct. Reflink support can be added per-platform as a
-// build-tag file without changing this function's signature.
+// Reflink (true copy-on-write) is safe and can be added per-platform later as
+// a build-tag file without changing this function's signature: it requires
+// platform-specific syscalls (FICLONE on Linux, clonefile on macOS,
+// FSCTL_DUPLICATE_EXTENTS on Windows ReFS) and a supported filesystem, and the
+// OS breaks the share on first write — unlike a hardlink, a written-to reflink
+// never mutates its source.
 func copyFileOptimized(src, dst string) error {
-	if err := tryHardlink(src, dst); err == nil {
-		return nil
-	}
 	return regularCopy(src, dst)
 }

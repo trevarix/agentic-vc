@@ -171,6 +171,8 @@ avc restore snap-abc123 --json
   "id": "snap-abc123",
   "restored_files": 12,
   "restored_size": 524288,
+  "quarantined_files": 1,
+  "trash_op_id": "2026-07-09T15-04-05-restore-af2202",
   "success": true,
   "message": "Successfully restored snapshot snap-abc123"
 }
@@ -178,7 +180,7 @@ avc restore snap-abc123 --json
 
 > **Warning:** This overwrites current files. Take a snapshot first if you want to preserve the current state before restoring.
 
-Files that were not tracked in the snapshot are left untouched.
+Files matched by `.avcignore` (e.g. `.env`, `node_modules/`) are never touched by restore — they are not part of any snapshot, so deleting them would be permanent data loss. Any other file present on disk but absent from the target snapshot is moved to `.avc/trash/` instead of being deleted, so a restore can never destroy data irrecoverably. See [`avc trash`](#avc-trash) to inspect or reclaim quarantined files.
 
 ---
 
@@ -207,6 +209,48 @@ avc info snap-abc123 --json
   ]
 }
 ```
+
+---
+
+## `avc trash`
+
+Inspect or reclaim files quarantined by `avc restore`. AVC never permanently
+deletes an untracked file during a restore — it moves it to `.avc/trash/<opID>/`
+instead, so nothing a restore removes is unrecoverable until you explicitly
+empty the trash.
+
+### `avc trash list`
+
+```bash
+avc trash list
+avc trash list --json
+```
+
+**JSON output:**
+```json
+[
+  {
+    "op_id": "2026-07-09T15-04-05-restore-af2202",
+    "kind": "restore",
+    "created_at": "2026-07-09T15:04:05-04:00",
+    "files": ["untracked.txt"]
+  }
+]
+```
+
+### `avc trash empty`
+
+Permanently deletes quarantined entries. Defaults to removing everything;
+pass `--older-than` to only remove entries older than a given duration.
+
+```bash
+avc trash empty                    # remove all entries
+avc trash empty --older-than 24h   # remove entries older than 24 hours
+avc trash empty --json
+```
+
+Every restore also opportunistically clears trash entries older than 7 days
+on its own (best-effort — never blocks the restore it runs alongside).
 
 ---
 

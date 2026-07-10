@@ -56,16 +56,12 @@ func MaterializeWorkspace(projectRoot string, b *db.Branch) error {
 // copyToWorkspace copies all tracked files from projectRoot into ws and writes
 // a warm stat cache so the first snapshot on the branch skips re-hashing.
 //
-// It uses copyFileOptimized which tries (in order): hardlink → regular copy.
-// Hardlinks are zero-cost until a file is mutated, making branch creation on
-// the same filesystem nearly instant for large projects.
-// If hardlinking fails (cross-device, unsupported FS), it falls back to a
-// byte-for-byte copy transparently.
-//
-// Note: when a file is hardlinked, writes in the workspace will mutate the
-// source file too until the OS breaks the link on write (copy-on-write
-// semantics). Because AVC workspaces are written by avc_restore (which always
-// creates a new file), this is safe in practice.
+// It uses copyFileOptimized, a byte-for-byte copy. Hardlinks are deliberately
+// not used here: agents write to workspace files with ordinary tools (editors,
+// in-place appends, sed -i), and a hardlinked file shares its inode with the
+// project-root original, so such a write would silently mutate the real
+// project root too. A future reflink (copy-on-write) optimisation is safe
+// because the OS breaks the share on first write, unlike a hardlink.
 func copyToWorkspace(projectRoot, ws, branchName string) error {
 	ignore, err := fileutil.LoadIgnoreRules(projectRoot)
 	if err != nil {
