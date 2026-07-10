@@ -5,9 +5,11 @@
 package diff
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/trevarix/agentic-vc/avc/internal/db"
@@ -25,13 +27,15 @@ const (
 
 // FileDiff describes the change to a single file.
 type FileDiff struct {
-	Path         string
-	Type         ChangeType
-	OldHash      string
-	NewHash      string
-	LinesAdded   int
-	LinesRemoved int
-	DiffPreview  string // unified diff excerpt
+	Path            string
+	Type            ChangeType
+	OldHash         string
+	NewHash         string
+	LinesAdded      int
+	LinesRemoved    int
+	DiffPreview     string // unified diff excerpt
+	Binary          bool   // true if either side looks like binary content — no line counts or preview
+	CountsEstimated bool   // true if either file exceeded maxDiffFileLines — counts are an upper-bound estimate, not exact
 }
 
 // Result is the full diff between two snapshots.
@@ -127,10 +131,27 @@ func enrichWithLineCounts(projectRoot string, fd *FileDiff) {
 	oldData := ReadObjectSafe(projectRoot, fd.OldHash)
 	newData := ReadObjectSafe(projectRoot, fd.NewHash)
 
-	added, removed, preview := computeUnifiedDiff(SplitLines(oldData), SplitLines(newData))
+	if isBinary(oldData) || isBinary(newData) {
+		fd.Binary = true
+		return
+	}
+
+	added, removed, preview, estimated := computeUnifiedDiff(SplitLines(oldData), SplitLines(newData))
 	fd.LinesAdded = added
 	fd.LinesRemoved = removed
 	fd.DiffPreview = preview
+	fd.CountsEstimated = estimated
+}
+
+// isBinary reports whether data looks like binary content — the same
+// heuristic git uses: a NUL byte anywhere in the first 8 KB. Binary files
+// are never diffed as text; a "line count" for them is meaningless.
+func isBinary(data []byte) bool {
+	n := len(data)
+	if n > 8192 {
+		n = 8192
+	}
+	return bytes.IndexByte(data[:n], 0) != -1
 }
 
 // ReadObjectSafe reads a stored object by hash, returning nil on any error.
@@ -189,12 +210,20 @@ type EditLine struct {
 
 // computeUnifiedDiff returns accurate added/removed line counts and a proper
 // unified diff preview with hunk headers and context lines.
-func computeUnifiedDiff(oldLines, newLines []string) (added, removed int, preview string) {
+func computeUnifiedDiff(oldLines, newLines []string) (added, removed int, preview string, estimated bool) {
+	// lcsLength is O(m*n) — two 300k-line files would be ~9x10^10
+	// comparisons. buildUnifiedDiff already declines to render a preview
+	// beyond maxDiffFileLines; the same cap must gate the count path, or
+	// avc diff/status simply hangs on a large file. Report an upper-bound
+	// estimate instead of a hang.
+	if len(oldLines) > maxDiffFileLines || len(newLines) > maxDiffFileLines {
+		return len(newLines), len(oldLines), "", true
+	}
 	lcs := lcsLength(oldLines, newLines)
 	added = len(newLines) - lcs
 	removed = len(oldLines) - lcs
 	preview = buildUnifiedDiff(oldLines, newLines)
-	return
+	return added, removed, preview, false
 }
 
 // lcsLength computes the length of the Longest Common Subsequence using a
@@ -378,12 +407,11 @@ func buildUnifiedDiff(oldLines, newLines []string) string {
 
 func sortDiffs(diffs []*FileDiff) {
 	order := map[ChangeType]int{Added: 0, Modified: 1, Deleted: 2}
-	for i := 1; i < len(diffs); i++ {
-		for j := i; j > 0; j-- {
-			a, b := diffs[j-1], diffs[j]
-			if order[a.Type] > order[b.Type] || (order[a.Type] == order[b.Type] && a.Path > b.Path) {
-				diffs[j-1], diffs[j] = diffs[j], diffs[j-1]
-			}
+	sort.Slice(diffs, func(i, j int) bool {
+		a, b := diffs[i], diffs[j]
+		if order[a.Type] != order[b.Type] {
+			return order[a.Type] < order[b.Type]
 		}
-	}
+		return a.Path < b.Path
+	})
 }

@@ -215,18 +215,26 @@ The runner's blocklist inspects only the first command token, `PATH` allowlistin
 
 ## Exit criteria
 
-- [ ] Retention never deletes branch bases, tagged snapshots, or last-merge references (tests for each)
-- [ ] `avc delete` refuses protected snapshots without `--force`; MCP delete has no force path
-- [ ] GC skips objects younger than the grace window; `--grace` flag documented
-- [ ] Binary files report `binary: true`; >2,000-line files return estimated counts instantly
-- [ ] Branch delete refuses the DB-active branch
-- [ ] `**` and `!` work in `.avcignore` with table-driven tests
-- [ ] Exec bits survive snapshot→restore on Unix; symlink behavior documented
-- [ ] Files > threshold skipped with warning, listed in JSON
-- [ ] Web `/api/` requires bearer token and passes Origin/Host checks (401/403 tests)
-- [ ] MCP survives an oversized line with a JSON-RPC error instead of exiting
-- [ ] No `.exe` files tracked in git
-- [ ] Migration failures other than duplicate-column propagate
-- [ ] Runner: over-cap output returns promptly with the real exit code and a truncation note (no timeout-kill)
-- [ ] `avc_run_in_workspace` description and runner docs state the policy-not-containment limits explicitly
-- [ ] `go test ./...` green; docs updated
+- [x] Retention never deletes branch bases, tagged snapshots, or last-merge references (tests for each)
+- [x] `avc delete` refuses protected snapshots without `--force`; MCP delete has no force path
+- [x] GC skips objects younger than the grace window; `--grace` flag documented
+- [x] Binary files report `binary: true`; >2,000-line files return estimated counts instantly
+- [x] Branch delete refuses the DB-active branch
+- [x] `**` and `!` work in `.avcignore` with table-driven tests
+- [x] Exec bits survive snapshot→restore on Unix; symlink behavior documented
+- [x] Files > threshold skipped with warning, listed in JSON
+- [x] Web `/api/` requires bearer token and passes Origin/Host checks (401/403 tests)
+- [x] MCP survives an oversized line with a JSON-RPC error instead of exiting
+- [x] No `.exe` files tracked in git
+- [x] Migration failures other than duplicate-column propagate
+- [x] Runner: over-cap output returns promptly with the real exit code and a truncation note (no timeout-kill)
+- [x] `avc_run_in_workspace` description and runner docs state the policy-not-containment limits explicitly
+- [x] `go test ./...` green; docs updated
+
+### Implementation notes (deviations and scope decisions)
+
+- **5h (repo hygiene) was a non-issue.** `git ls-files` confirmed `avc/avc_test.exe` and `avc/avc_test_bin.exe` were never actually tracked — they exist only as local build artifacts already correctly matched by the top-level `*.exe` gitignore rule. The original review's claim was inaccurate; no action was needed.
+- **Symlinks are explicitly out of scope for this pass.** They are currently dereferenced and copied as regular files on both snapshot and restore (via `os.Stat`/`os.ReadFile`, which follow symlinks) — a pre-existing limitation, not a regression introduced here. Proper symlink preservation (storing the link target as content with a mode bit, `os.Lstat`/`os.Symlink` on restore) is meaningful additional surface area, especially on Windows where symlink creation needs elevated privileges or Developer Mode; given the effort/risk tradeoff for this already-large plan, it was deferred rather than half-implemented. What *did* ship: Unix executable-bit preservation (`files.file_mode` column, applied via `os.Chmod` on restore) and empty-directory cleanup after a restore's quarantine sweep.
+- **Web auth token delivery uses a cookie, not a URL parameter.** The plan sketched `?token=` in the opened URL; the shipped design instead sets a `SameSite=Strict` cookie on first page load (readable by the frontend JS, attached as `Authorization: Bearer` on every `/api/` call) so `avc ui`'s printed URL and browser-open behavior needed no changes. The server still accepts `?token=` as a fallback for scripted/curl access. Origin validation was added exactly as planned.
+- **GC's default grace period required updating five existing tests** (`storage_test.go`, `data_safety_test.go`) that asserted immediate deletion of freshly-created objects — they now call `gc.RunWithGrace(..., 0)` explicitly to keep testing exact-count behavior, since production code correctly no longer collects objects younger than 15 minutes by default.
+- **The `binary`/`counts_estimated` diff fields required touching six separate JSON call sites** (`cmd/avc/diff.go`, `diff_current.go`, `status.go`, `branch.go`, two spots in `internal/mcp/handlers.go`, two in `internal/web/server.go`) since each surface hand-rolls its own `fileDiffJSON`-shaped struct or map rather than sharing one — mechanical but broad; a future cleanup could consolidate these into one exported type in package `diff`.

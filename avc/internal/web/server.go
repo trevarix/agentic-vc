@@ -24,38 +24,44 @@ import (
 func Serve(addr, projectPath string) error {
 	mux := http.NewServeMux()
 
-	// Static assets (embedded into the binary).
+	token := newSessionToken()
+	// auth wraps a /api/ handler with the session-token + Origin check (see auth.go).
+	auth := func(h http.HandlerFunc) http.HandlerFunc { return withAuth(token, addr, h) }
+
+	// Static assets (embedded into the binary). The session cookie is set
+	// here so the frontend picks it up on first load with no change to how
+	// the server's URL is opened.
 	sub, err := fs.Sub(staticFS, "static")
 	if err != nil {
 		return fmt.Errorf("static FS: %w", err)
 	}
-	mux.Handle("/", http.FileServer(http.FS(sub)))
+	mux.Handle("/", withSessionCookie(token, http.FileServer(http.FS(sub))))
 
 	// API endpoints — snapshots.
-	mux.HandleFunc("/api/project", projectInfoHandler(projectPath))
-	mux.HandleFunc("/api/snapshots", listSnapshotsHandler(projectPath))
-	mux.HandleFunc("/api/snapshots/create", createSnapshotHandler(projectPath))
-	mux.HandleFunc("/api/snapshots/", snapshotByIDHandler(projectPath))
-	mux.HandleFunc("/api/diff", diffHandler(projectPath))
-	mux.HandleFunc("/api/diff-current", diffCurrentHandler(projectPath))
-	mux.HandleFunc("/api/restore", restoreHandler(projectPath))
-	mux.HandleFunc("/api/restore-file", restoreFileHandler(projectPath))
+	mux.HandleFunc("/api/project", auth(projectInfoHandler(projectPath)))
+	mux.HandleFunc("/api/snapshots", auth(listSnapshotsHandler(projectPath)))
+	mux.HandleFunc("/api/snapshots/create", auth(createSnapshotHandler(projectPath)))
+	mux.HandleFunc("/api/snapshots/", auth(snapshotByIDHandler(projectPath)))
+	mux.HandleFunc("/api/diff", auth(diffHandler(projectPath)))
+	mux.HandleFunc("/api/diff-current", auth(diffCurrentHandler(projectPath)))
+	mux.HandleFunc("/api/restore", auth(restoreHandler(projectPath)))
+	mux.HandleFunc("/api/restore-file", auth(restoreFileHandler(projectPath)))
 
 	// API endpoints — branches.
 	// Note: /api/branches/switch must be registered before /api/branches/ so the
 	// more-specific pattern wins in Go's default mux.
-	mux.HandleFunc("/api/branches/switch", branchSwitchHandler(projectPath))
-	mux.HandleFunc("/api/branches/", branchByNameHandler(projectPath))
-	mux.HandleFunc("/api/branches", branchesHandler(projectPath))
+	mux.HandleFunc("/api/branches/switch", auth(branchSwitchHandler(projectPath)))
+	mux.HandleFunc("/api/branches/", auth(branchByNameHandler(projectPath)))
+	mux.HandleFunc("/api/branches", auth(branchesHandler(projectPath)))
 
 	// API endpoints — merge.
-	mux.HandleFunc("/api/merge/preview", mergePreviewHandler(projectPath))
-	mux.HandleFunc("/api/merge/abort", mergeAbortHandler(projectPath))
-	mux.HandleFunc("/api/merge", mergeHandler(projectPath))
+	mux.HandleFunc("/api/merge/preview", auth(mergePreviewHandler(projectPath)))
+	mux.HandleFunc("/api/merge/abort", auth(mergeAbortHandler(projectPath)))
+	mux.HandleFunc("/api/merge", auth(mergeHandler(projectPath)))
 
 	// API endpoints — status & storage.
-	mux.HandleFunc("/api/status", statusHandler(projectPath))
-	mux.HandleFunc("/api/storage", storageHandler(projectPath))
+	mux.HandleFunc("/api/status", auth(statusHandler(projectPath)))
+	mux.HandleFunc("/api/storage", auth(storageHandler(projectPath)))
 
 	srv := &http.Server{Addr: addr, Handler: mux}
 	return srv.ListenAndServe()
@@ -104,13 +110,15 @@ func diffFilesToMap(files []*diff.FileDiff) []map[string]any {
 	out := make([]map[string]any, len(files))
 	for i, f := range files {
 		out[i] = map[string]any{
-			"path":          f.Path,
-			"type":          string(f.Type),
-			"old_hash":      f.OldHash,
-			"new_hash":      f.NewHash,
-			"lines_added":   f.LinesAdded,
-			"lines_removed": f.LinesRemoved,
-			"diff_preview":  f.DiffPreview,
+			"path":             f.Path,
+			"type":             string(f.Type),
+			"old_hash":         f.OldHash,
+			"new_hash":         f.NewHash,
+			"lines_added":      f.LinesAdded,
+			"lines_removed":    f.LinesRemoved,
+			"diff_preview":     f.DiffPreview,
+			"binary":           f.Binary,
+			"counts_estimated": f.CountsEstimated,
 		}
 	}
 	return out
@@ -230,6 +238,7 @@ func createSnapshotHandler(projectPath string) http.HandlerFunc {
 			"total_size":    snap.TotalSize,
 			"notes":         snap.Notes,
 			"branch_id":     snap.BranchID,
+			"skipped_large": snap.SkippedLarge,
 			"success":       true,
 		})
 	}
@@ -627,10 +636,12 @@ func statusHandler(projectPath string) http.HandlerFunc {
 		files := make([]map[string]any, len(result.Files))
 		for i, f := range result.Files {
 			files[i] = map[string]any{
-				"path":          f.Path,
-				"type":          string(f.Type),
-				"lines_added":   f.LinesAdded,
-				"lines_removed": f.LinesRemoved,
+				"path":             f.Path,
+				"type":             string(f.Type),
+				"lines_added":      f.LinesAdded,
+				"lines_removed":    f.LinesRemoved,
+				"binary":           f.Binary,
+				"counts_estimated": f.CountsEstimated,
 			}
 		}
 		writeJSON(w, http.StatusOK, map[string]any{

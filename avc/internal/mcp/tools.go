@@ -301,6 +301,11 @@ func AllTools() []Tool {
 				"Python pip installs are redirected into a workspace-local venv automatically. " +
 				"Node packages install into the workspace node_modules. " +
 				"System package managers (brew, apt, choco, sudo) are blocked. " +
+				"\n\nThis is a hygiene layer, not a security sandbox: the command still runs with " +
+				"the invoking user's full filesystem and network access, and the blocklist only " +
+				"inspects the first token of the command (it does not stop shell tricks like " +
+				"`env sudo ...` or `bash -c \"...\"`). Do not use it to run untrusted or " +
+				"unreviewed code. " +
 				"\n\nREQUIRES [run] enabled = true in .avc/config.toml — this must be set " +
 				"manually by a human. Agents cannot enable it. " +
 				"\n\nIMPORTANT: Always present the full command to the user and obtain " +

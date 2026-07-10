@@ -127,8 +127,14 @@ func enrichWithLineCountsDisk(projectRoot string, fd *FileDiff, currentFilePath 
 	oldData := ReadObjectSafe(projectRoot, fd.OldHash)
 	newData, _ := os.ReadFile(currentFilePath)
 
-	added, removed, preview := computeUnifiedDiff(SplitLines(oldData), SplitLines(newData))
+	if isBinary(oldData) || isBinary(newData) {
+		fd.Binary = true
+		return
+	}
+
+	added, removed, preview, estimated := computeUnifiedDiff(SplitLines(oldData), SplitLines(newData))
 	fd.LinesAdded = added
 	fd.LinesRemoved = removed
 	fd.DiffPreview = preview
+	fd.CountsEstimated = estimated
 }

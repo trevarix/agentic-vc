@@ -229,11 +229,11 @@ func Delete(projectRoot, name string, keepHistory bool) error {
 		return fmt.Errorf("cannot delete the main branch")
 	}
 
-	cfg, err := config.Load(projectRoot)
-	if err != nil {
-		return err
-	}
-	if cfg.Branch.Active == name {
+	// GetActiveBranchName is authoritative (project_state in the DB, since
+	// Phase 7.3) — reading config.toml directly here could delete the truly
+	// active branch and its workspace out from under a running agent if the
+	// two sources of truth ever disagree.
+	if GetActiveBranchName(projectRoot) == name {
 		return fmt.Errorf("cannot delete the active branch; switch to another branch first")
 	}
 

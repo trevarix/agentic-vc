@@ -59,18 +59,22 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 	if jsonOutput {
 		type fileDiffJSON struct {
-			Path         string `json:"path"`
-			Type         string `json:"type"`
-			LinesAdded   int    `json:"lines_added"`
-			LinesRemoved int    `json:"lines_removed"`
+			Path            string `json:"path"`
+			Type            string `json:"type"`
+			LinesAdded      int    `json:"lines_added"`
+			LinesRemoved    int    `json:"lines_removed"`
+			Binary          bool   `json:"binary,omitempty"`
+			CountsEstimated bool   `json:"counts_estimated,omitempty"`
 		}
 		files := make([]fileDiffJSON, len(result.Files))
 		for i, f := range result.Files {
 			files[i] = fileDiffJSON{
-				Path:         f.Path,
-				Type:         string(f.Type),
-				LinesAdded:   f.LinesAdded,
-				LinesRemoved: f.LinesRemoved,
+				Path:            f.Path,
+				Type:            string(f.Type),
+				LinesAdded:      f.LinesAdded,
+				LinesRemoved:    f.LinesRemoved,
+				Binary:          f.Binary,
+				CountsEstimated: f.CountsEstimated,
 			}
 		}
 		return json.NewEncoder(os.Stdout).Encode(map[string]any{
@@ -99,6 +103,10 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 	for _, f := range result.Files {
 		sym := symbols[string(f.Type)]
+		if f.Binary {
+			fmt.Printf("  %s  %-40s  %s\n", sym, f.Path, dim("binary file"))
+			continue
+		}
 		fmt.Printf("  %s  %-40s  %s %s\n",
 			sym, f.Path,
 			green(fmt.Sprintf("+%d", f.LinesAdded)),

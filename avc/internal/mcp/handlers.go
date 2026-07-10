@@ -122,15 +122,16 @@ func toolSnapshot(projectRoot string, args map[string]any) (any, error) {
 		return nil, err
 	}
 	return map[string]any{
-		"id":         snap.ID,
-		"label":      snap.Label,
-		"timestamp":  snap.Timestamp,
-		"agent_name": snap.AgentName,
-		"file_count": snap.FileCount,
-		"total_size": snap.TotalSize,
-		"notes":      snap.Notes,
-		"branch_id":  snap.BranchID,
-		"success":    true,
+		"id":            snap.ID,
+		"label":         snap.Label,
+		"timestamp":     snap.Timestamp,
+		"agent_name":    snap.AgentName,
+		"file_count":    snap.FileCount,
+		"total_size":    snap.TotalSize,
+		"notes":         snap.Notes,
+		"branch_id":     snap.BranchID,
+		"skipped_large": snap.SkippedLarge,
+		"success":       true,
 	}, nil
 }
 
@@ -194,24 +195,28 @@ func toolDiff(projectRoot string, args map[string]any) (any, error) {
 	}
 
 	type fileDiffJSON struct {
-		Path         string `json:"path"`
-		Type         string `json:"type"`
-		OldHash      string `json:"old_hash,omitempty"`
-		NewHash      string `json:"new_hash,omitempty"`
-		LinesAdded   int    `json:"lines_added"`
-		LinesRemoved int    `json:"lines_removed"`
-		DiffPreview  string `json:"diff_preview,omitempty"`
+		Path            string `json:"path"`
+		Type            string `json:"type"`
+		OldHash         string `json:"old_hash,omitempty"`
+		NewHash         string `json:"new_hash,omitempty"`
+		LinesAdded      int    `json:"lines_added"`
+		LinesRemoved    int    `json:"lines_removed"`
+		DiffPreview     string `json:"diff_preview,omitempty"`
+		Binary          bool   `json:"binary,omitempty"`
+		CountsEstimated bool   `json:"counts_estimated,omitempty"`
 	}
 	files := make([]fileDiffJSON, len(result.Files))
 	for i, f := range result.Files {
 		files[i] = fileDiffJSON{
-			Path:         f.Path,
-			Type:         string(f.Type),
-			OldHash:      f.OldHash,
-			NewHash:      f.NewHash,
-			LinesAdded:   f.LinesAdded,
-			LinesRemoved: f.LinesRemoved,
-			DiffPreview:  f.DiffPreview,
+			Path:            f.Path,
+			Type:            string(f.Type),
+			OldHash:         f.OldHash,
+			NewHash:         f.NewHash,
+			LinesAdded:      f.LinesAdded,
+			LinesRemoved:    f.LinesRemoved,
+			DiffPreview:     f.DiffPreview,
+			Binary:          f.Binary,
+			CountsEstimated: f.CountsEstimated,
 		}
 	}
 	return map[string]any{
@@ -321,6 +326,28 @@ func toolDelete(projectRoot string, args map[string]any) (any, error) {
 		return nil, err
 	}
 	defer store.Close()
+
+	if _, err := store.GetSnapshot(id); err != nil {
+		return nil, fmt.Errorf("snapshot '%s' not found", id)
+	}
+
+	proj, err := store.GetProject(projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	// Unlike the CLI, MCP has no --force override: an agent must never be
+	// able to delete a branch base, a tagged snapshot, or part of the last
+	// merge record on its own judgment.
+	protected, err := store.IsSnapshotProtected(proj.ID, id)
+	if err != nil {
+		return nil, err
+	}
+	if protected {
+		return nil, fmt.Errorf(
+			"snapshot '%s' is protected (a branch base, tagged, or part of the last merge record) and cannot be deleted via this tool; "+
+				"ask the user to run `avc delete %s --force` if this is intentional", id, id,
+		)
+	}
 
 	if err := store.DeleteSnapshot(id); err != nil {
 		return nil, err
@@ -746,18 +773,22 @@ func toolStatus(projectRoot string) (any, error) {
 	}
 
 	type fileDiffJSON struct {
-		Path         string `json:"path"`
-		Type         string `json:"type"`
-		LinesAdded   int    `json:"lines_added"`
-		LinesRemoved int    `json:"lines_removed"`
+		Path            string `json:"path"`
+		Type            string `json:"type"`
+		LinesAdded      int    `json:"lines_added"`
+		LinesRemoved    int    `json:"lines_removed"`
+		Binary          bool   `json:"binary,omitempty"`
+		CountsEstimated bool   `json:"counts_estimated,omitempty"`
 	}
 	files := make([]fileDiffJSON, len(result.Files))
 	for i, f := range result.Files {
 		files[i] = fileDiffJSON{
-			Path:         f.Path,
-			Type:         string(f.Type),
-			LinesAdded:   f.LinesAdded,
-			LinesRemoved: f.LinesRemoved,
+			Path:            f.Path,
+			Type:            string(f.Type),
+			LinesAdded:      f.LinesAdded,
+			LinesRemoved:    f.LinesRemoved,
+			Binary:          f.Binary,
+			CountsEstimated: f.CountsEstimated,
 		}
 	}
 	return map[string]any{

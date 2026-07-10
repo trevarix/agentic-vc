@@ -303,6 +303,59 @@ on its own (best-effort — never blocks the restore it runs alongside).
 
 ---
 
+## `avc delete <snapshot_id>`
+
+Delete a snapshot and its stored file objects.
+
+```bash
+avc delete snap-abc123
+avc delete snap-abc123 --force   # required for a protected snapshot
+```
+
+A snapshot is **protected** — refused without `--force` — if it is:
+- the base snapshot of an active branch,
+- carrying a tag (`avc snapshot tag`), or
+- part of the most recent merge record for its branch.
+
+This prevents pruning or a stray `avc delete` from corrupting an active
+branch's merge base or silently untagging a milestone. The same protection
+applies to automatic retention pruning (`[retention]` in config.toml) and to
+the MCP `avc_delete` tool, which has no `--force` equivalent — an agent can
+never delete a protected snapshot on its own judgment; ask the user to run
+`avc delete --force` if that's genuinely intended.
+
+---
+
+## `avc gc`
+
+Scan `.avc/objects/` and remove blobs no longer referenced by any snapshot.
+
+```bash
+avc gc                  # dry run (default) — reports what would be removed
+avc gc --run             # actually delete and reclaim disk space
+avc gc --grace 0         # disable the grace period (see below)
+```
+
+**JSON output:**
+```json
+{
+  "scanned_objects": 42,
+  "deleted_objects": 3,
+  "bytes_reclaimed": 15360,
+  "skipped_recent": 1,
+  "dry_run": true
+}
+```
+
+Objects (and stray temp files from an interrupted write) younger than
+`--grace` (default `15m`) are always kept, even with `--run`. A snapshot
+writes its objects to disk *before* its database row exists, so an object
+that looks unreferenced for that brief window might belong to a snapshot
+still being created concurrently — the grace period prevents GC from racing
+that write and deleting a blob the snapshot is about to reference.
+
+---
+
 ## Exit codes
 
 | Code | Meaning |
@@ -314,7 +367,17 @@ on its own (best-effort — never blocks the restore it runs alongside).
 
 ## `.avcignore`
 
-Place a `.avcignore` file in the project root to exclude files and directories from all snapshots. Syntax is identical to `.gitignore`.
+Place a `.avcignore` file in the project root to exclude files and directories from all snapshots. Syntax follows `.gitignore`:
+
+- A pattern with no `/` (other than an optional trailing one) matches at **any depth** — `node_modules/` excludes `node_modules` wherever it appears, not just at the project root.
+- `**` matches zero or more path segments — `**/*.log` matches `app.log` and `logs/deep/nested/app.log` alike; `src/**/generated` matches any `generated` directory under `src/`.
+- A trailing `/` restricts the pattern to directories only.
+- A leading `!` un-ignores a path an earlier, broader pattern excluded — patterns are applied in file order and the **last** match wins, so put exceptions after the rule they narrow:
+  ```
+  *.log
+  !keep.log
+  ```
+- On a branch, if the workspace has its own `.avcignore` (e.g. an agent added one as part of its task), snapshots taken from that workspace honor the workspace's copy, not the project root's.
 
 **Default patterns (written by `avc init`):**
 ```
@@ -327,3 +390,10 @@ build/
 ```
 
 The `.avc/` directory is always excluded regardless of `.avcignore` contents.
+
+### Large files
+
+Files larger than `[snapshot] max_file_size_mb` in `.avc/config.toml` (default
+100 MB) are skipped — not read, hashed, or stored — with a warning printed to
+stderr and listed in the snapshot's `skipped_large` field. This protects
+against an out-of-memory read on an accidentally-tracked large binary.
