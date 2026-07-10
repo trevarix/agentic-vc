@@ -69,16 +69,22 @@ func runRestore(cmd *cobra.Command, args []string) error {
 
 	if jsonOutput {
 		return json.NewEncoder(os.Stdout).Encode(map[string]any{
-			"id":             result.SnapshotID,
-			"restored_files": result.RestoredFiles,
-			"restored_size":  result.RestoredSize,
-			"success":        true,
-			"message":        fmt.Sprintf("Successfully restored snapshot %s", result.SnapshotID),
+			"id":                result.SnapshotID,
+			"restored_files":    result.RestoredFiles,
+			"restored_size":     result.RestoredSize,
+			"quarantined_files": result.QuarantinedFiles,
+			"trash_op_id":       result.TrashOpID,
+			"success":           true,
+			"message":           fmt.Sprintf("Successfully restored snapshot %s", result.SnapshotID),
 		})
 	}
 
 	fmt.Printf("%s %s\n", success("✓ Restored:"), cyan(result.SnapshotID))
 	fmt.Printf("  %s %s\n", prop("Files restored:"), green(fmt.Sprintf("%d", result.RestoredFiles)))
 	fmt.Printf("  %s %s\n", prop("Total size:    "), dim(fmt.Sprintf("%d bytes", result.RestoredSize)))
+	if result.QuarantinedFiles > 0 {
+		fmt.Printf("  %s %s\n", prop("Quarantined:   "),
+			yellow(fmt.Sprintf("%d untracked file(s) moved to trash (avc trash list)", result.QuarantinedFiles)))
+	}
 	return nil
 }

@@ -239,11 +239,13 @@ func toolRestore(projectRoot string, args map[string]any) (any, error) {
 		return nil, err
 	}
 	return map[string]any{
-		"id":             result.SnapshotID,
-		"restored_files": result.RestoredFiles,
-		"restored_size":  result.RestoredSize,
-		"target_dir":     targetDir,
-		"success":        true,
+		"id":                result.SnapshotID,
+		"restored_files":    result.RestoredFiles,
+		"restored_size":     result.RestoredSize,
+		"quarantined_files": result.QuarantinedFiles,
+		"trash_op_id":       result.TrashOpID,
+		"target_dir":        targetDir,
+		"success":           true,
 	}, nil
 }
 

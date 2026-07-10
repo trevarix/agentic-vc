@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/trevarix/agentic-vc/avc/internal/db"
 )
@@ -50,8 +51,24 @@ func Run(projectRoot string, dryRun bool) (*Result, error) {
 			return nil
 		}
 
-		shard := filepath.Base(filepath.Dir(path))
 		name := filepath.Base(path)
+		if strings.HasSuffix(name, ".tmp") {
+			// Stray temp file from an interrupted StoreObject write — never
+			// referenced by any snapshot, always safe to remove.
+			info, statErr := d.Info()
+			if statErr == nil {
+				result.BytesReclaimed += info.Size()
+			}
+			result.DeletedObjects++
+			if !dryRun {
+				if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+					return err
+				}
+			}
+			return nil
+		}
+
+		shard := filepath.Base(filepath.Dir(path))
 		hash := shard + name
 
 		result.ScannedObjects++

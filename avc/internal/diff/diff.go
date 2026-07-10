@@ -135,7 +135,7 @@ func enrichWithLineCounts(projectRoot string, fd *FileDiff) {
 
 // ReadObjectSafe reads a stored object by hash, returning nil on any error.
 func ReadObjectSafe(projectRoot, hash string) []byte {
-	if hash == "" {
+	if len(hash) < 3 {
 		return nil
 	}
 	path := filepath.Join(projectRoot, ".avc", "objects", hash[:2], hash[2:])

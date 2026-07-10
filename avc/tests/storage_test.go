@@ -378,7 +378,7 @@ func TestRetention_PrunesOldSnapshots(t *testing.T) {
 		FileCount: 0,
 		TotalSize: 0,
 	}
-	if err := store.InsertSnapshot(oldSnap); err != nil {
+	if err := store.InsertSnapshotWithFiles(oldSnap, nil); err != nil {
 		store.Close()
 		t.Fatalf("insert old snapshot: %v", err)
 	}

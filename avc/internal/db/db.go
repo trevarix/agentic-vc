@@ -118,11 +118,15 @@ func Open(projectRoot string) (*Store, error) {
 	}
 
 	// Apply pragmas before migrations so every subsequent query benefits from them.
+	// busy_timeout MUST be set first: switching journal_mode itself briefly
+	// needs exclusive access, and without a timeout already in effect that
+	// very first pragma can fail with "database is locked" under contention.
 	pragmas := []string{
-		"PRAGMA journal_mode=WAL",  // concurrent readers during writes
+		"PRAGMA busy_timeout=5000",  // writers wait up to 5s instead of failing on SQLITE_BUSY
+		"PRAGMA journal_mode=WAL",   // concurrent readers during writes
 		"PRAGMA synchronous=NORMAL", // safe + faster than FULL
 		"PRAGMA cache_size=-65536",  // 64 MB page cache
-		"PRAGMA foreign_keys=ON",   // enforce FK constraints
+		"PRAGMA foreign_keys=ON",    // enforce FK constraints
 	}
 	for _, p := range pragmas {
 		if _, err := db.Exec(p); err != nil {
@@ -569,16 +573,44 @@ func (s *Store) EnsureMainBranch(projectID string) (*Branch, error) {
 
 // ─── Snapshot ────────────────────────────────────────────────────────────────
 
-// InsertSnapshot persists a new snapshot record.
-func (s *Store) InsertSnapshot(snap *Snapshot) error {
-	_, err := s.db.Exec(
+// InsertSnapshotWithFiles persists the snapshot row and all of its file rows
+// in a single transaction, so a crash between the two writes can never leave
+// a snapshot with zero file rows (which a later restore would interpret as
+// "delete every tracked file").
+func (s *Store) InsertSnapshotWithFiles(snap *Snapshot, files []*File) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(
 		`INSERT INTO snapshots
 		 (id, project_id, timestamp, label, agent_name, notes, file_count, total_size, branch_id)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''))`,
 		snap.ID, snap.ProjectID, snap.Timestamp, snap.Label,
 		snap.AgentName, snap.Notes, snap.FileCount, snap.TotalSize, snap.BranchID,
+	); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("insert snapshot: %w", err)
+	}
+
+	stmt, err := tx.Prepare(
+		`INSERT INTO files (id, snapshot_id, relative_path, file_hash, file_size) VALUES (?, ?, ?, ?, ?)`,
 	)
-	return err
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	for _, f := range files {
+		if _, err := stmt.Exec(f.ID, f.SnapshotID, f.RelativePath, f.FileHash, f.FileSize); err != nil {
+			stmt.Close()
+			tx.Rollback()
+			return fmt.Errorf("insert file %s: %w", f.RelativePath, err)
+		}
+	}
+	stmt.Close()
+
+	return tx.Commit()
 }
 
 const snapshotSelectCols = `id, project_id, timestamp, label, agent_name, notes, file_count, total_size,
@@ -885,39 +917,6 @@ func (s *Store) GetFileVersions(relPath string) ([]FileVersion, error) {
 }
 
 // ─── File ────────────────────────────────────────────────────────────────────
-
-// InsertFile persists a file record belonging to a snapshot.
-func (s *Store) InsertFile(f *File) error {
-	_, err := s.db.Exec(
-		`INSERT INTO files (id, snapshot_id, relative_path, file_hash, file_size) VALUES (?, ?, ?, ?, ?)`,
-		f.ID, f.SnapshotID, f.RelativePath, f.FileHash, f.FileSize,
-	)
-	return err
-}
-
-// InsertFilesBatch persists all file records in a single transaction,
-// reducing SQLite fsyncs from one-per-file to one for the entire batch.
-func (s *Store) InsertFilesBatch(files []*File) error {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	stmt, err := tx.Prepare(
-		`INSERT INTO files (id, snapshot_id, relative_path, file_hash, file_size) VALUES (?, ?, ?, ?, ?)`,
-	)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	defer stmt.Close()
-	for _, f := range files {
-		if _, err := stmt.Exec(f.ID, f.SnapshotID, f.RelativePath, f.FileHash, f.FileSize); err != nil {
-			tx.Rollback()
-			return err
-		}
-	}
-	return tx.Commit()
-}
 
 // GetSnapshotFiles returns all file records for a snapshot.
 func (s *Store) GetSnapshotFiles(snapshotID string) ([]*File, error) {
