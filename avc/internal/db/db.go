@@ -197,9 +197,23 @@ func InitProject(projectRoot string) (*Project, error) {
 	return store.GetProject(normed)
 }
 
+// schemaVersion stamps a fully migrated database (PRAGMA user_version) so
+// migrate can skip its ~15 DDL statements — each an fsynced write
+// transaction — on every subsequent Open. db.Open runs on every CLI command
+// and hundreds of times per test run, so this fast path matters.
+//
+// BUMP THIS whenever migrate() gains or changes a statement, or existing
+// databases will silently skip the new migration.
+const schemaVersion = 1
+
 // migrate creates all tables if absent and applies incremental schema changes
-// idempotently. Safe to call on every Open.
+// idempotently. Safe to call on every Open; already-migrated databases
+// (user_version == schemaVersion) return immediately.
 func (s *Store) migrate() error {
+	var v int
+	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&v); err == nil && v == schemaVersion {
+		return nil
+	}
 	schema := `
 	CREATE TABLE IF NOT EXISTS projects (
 		id         TEXT PRIMARY KEY,
@@ -367,6 +381,13 @@ func (s *Store) migrate() error {
 		if _, err := s.db.Exec(idx); err != nil {
 			return fmt.Errorf("create index: %w", err)
 		}
+	}
+
+	// Stamp the schema version last, only after every statement above
+	// succeeded — a partially migrated database must re-run migrate (all
+	// statements are idempotent) rather than fast-path past the remainder.
+	if _, err := s.db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion)); err != nil {
+		return fmt.Errorf("set schema version: %w", err)
 	}
 	return nil
 }
