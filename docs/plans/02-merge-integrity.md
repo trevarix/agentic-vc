@@ -171,12 +171,19 @@ Restore an older snapshot → a `pre-restore:` snapshot exists at previous HEAD;
 
 ## Exit criteria
 
-- [ ] Review §1.2 repro passes as a regression test: deletion merge completes, file removed from main, no panic
-- [ ] `delete` decisions appear in merge JSON, `merge_files` rows, CLI and web output
-- [ ] Delete-vs-edit conflicts are produced, rendered with labeled empty sides, and resolvable both ways
-- [ ] `avc merge --abort` succeeds after conflicts **and** after an injected apply failure; main restored byte-identical to pre-merge snapshot
-- [ ] No code path can exit `Merge` leaving status `in_progress`
-- [ ] `TestMerge_Abort_AfterConflict` asserts success (quarantine comments removed)
-- [ ] Dirty workspace is auto-snapshotted before merge; `auto_snapshot_id` surfaced
-- [ ] Every restore of a dirty tree creates a `pre-restore:` snapshot and returns `undo_snapshot_id`
-- [ ] `go test ./...` green; `docs/cli-reference.md` updated (merge statuses, undo hint)
+- [x] Review §1.2 repro passes as a regression test: deletion merge completes, file removed from main, no panic
+- [x] `delete` decisions appear in merge JSON, `merge_files` rows, CLI and web output
+- [x] Delete-vs-edit conflicts are produced, rendered with labeled empty sides, and resolvable both ways
+- [x] `avc merge --abort` succeeds after conflicts **and** after an injected apply failure; main restored byte-identical to pre-merge snapshot
+- [x] No code path can exit `Merge` leaving status `in_progress`
+- [x] `TestMerge_Abort_AfterConflict` asserts success (quarantine comments removed)
+- [x] Dirty workspace is auto-snapshotted before merge; `auto_snapshot_id` surfaced
+- [x] Every restore of a dirty tree creates a `pre-restore:` snapshot and returns `undo_snapshot_id`
+- [x] `go test ./...` green; `docs/cli-reference.md` updated (merge statuses, undo hint)
+
+### Implementation notes (deviations from the original plan)
+
+- **Import-cycle constraint on item 4.** `internal/restore` cannot import `internal/snapshot` (snapshot already imports restore for `StoreObject`). The pre-restore safety snapshot is therefore implemented as a shared helper, `snapshot.CreateBeforeRestore` (new file `internal/snapshot/dirty.go`), called from each restore call site (`cmd/avc/restore.go`, `internal/mcp/handlers.go`, `internal/web/server.go`) rather than inside `restore.go` itself. This also satisfies the plan's own ask to factor the shared logic into one helper — `CreateIfDirty` is the low-level primitive, `CreateBeforeRestore` is the restore-specific wrapper, and both `merge.autoSnapshotDirtyWorkspace` (item 3) and all three restore surfaces (item 4) call into the same code.
+- **Preview does not auto-snapshot.** The plan's item 3 says "and Preview, so the preview matches what would merge" — but `Preview`'s documented contract is "no writes, no recorded merge," and creating a snapshot as a side effect of a dry run would violate that. Preview instead reports `WorkspaceDirtyFiles` (read-only diff, no snapshot) so callers know the preview may be incomplete, without mutating anything.
+- **Un-snapshotted branches now merge instead of erroring.** A pre-existing test (`TestMerge_ErrorWhenBranchHasNoSnapshots`) asserted that merging a branch with zero snapshots was an error. The item 3 dirty-workspace guard captures that branch's materialized-but-never-snapshotted state automatically instead (the same "always dirty when there's no history" rule `CreateIfDirty` documents), so the merge now succeeds. Replaced with `TestMerge_AutoSnapshotsUnsnapshottedBranchBeforeMerging`, asserting the new (safer) behavior.
+- **Web restore hardening included.** Though not in the plan's stated file list, `internal/web/server.go`'s `restoreHandler` was also wired to `CreateBeforeRestore` for consistency — otherwise the web UI would be the one restore surface without the safety net. Its pre-existing lack of branch-awareness (it always restores to `projectRoot` regardless of active branch) was left as-is; that's a separate, unrelated gap.

@@ -173,14 +173,63 @@ avc restore snap-abc123 --json
   "restored_size": 524288,
   "quarantined_files": 1,
   "trash_op_id": "2026-07-09T15-04-05-restore-af2202",
+  "undo_snapshot_id": "snap-def456",
   "success": true,
   "message": "Successfully restored snapshot snap-abc123"
 }
 ```
 
-> **Warning:** This overwrites current files. Take a snapshot first if you want to preserve the current state before restoring.
+> **Warning:** This overwrites current files. AVC protects you automatically — see below — but a snapshot of your own before restoring is always a good habit.
 
 Files matched by `.avcignore` (e.g. `.env`, `node_modules/`) are never touched by restore — they are not part of any snapshot, so deleting them would be permanent data loss. Any other file present on disk but absent from the target snapshot is moved to `.avc/trash/` instead of being deleted, so a restore can never destroy data irrecoverably. See [`avc trash`](#avc-trash) to inspect or reclaim quarantined files.
+
+**Automatic safety snapshot:** if the working tree has changed since its last snapshot, AVC captures that state first, before overwriting anything. `undo_snapshot_id` is empty when the tree was already clean (nothing needed capturing); otherwise it names the snapshot to restore if you want to undo this restore itself:
+
+```bash
+avc restore snap-def456   # undoes the restore above
+```
+
+---
+
+## `avc merge <branch>`
+
+Perform a three-way merge of an agent branch into main. Always auto-snapshots
+main first, so a merge is never a one-way door — see `--abort` below.
+
+```bash
+avc merge feat/my-branch             # merge
+avc merge feat/my-branch --preview   # dry run — no writes, no recorded merge
+avc merge --abort                    # roll back the last in-progress/conflicted/failed merge
+```
+
+**Decisions per file:**
+
+| Decision | Meaning |
+|----------|---------|
+| `clean`    | Only the branch changed (or added a new file) — applied automatically |
+| `delete`   | The branch deleted a file main left unchanged — removed from main |
+| `conflict` | Both main and branch changed the same file — written with conflict markers |
+| `skip`     | No net change relative to the merge base — left untouched |
+
+**JSON output:**
+```json
+{
+  "merge_id": "merge-abc123",
+  "branch": "feat/my-branch",
+  "preview": false,
+  "clean": 3,
+  "deleted": 1,
+  "conflicts": 0,
+  "skipped": 12,
+  "files": [{ "path": "src/auth.go", "decision": "clean" }],
+  "post_merge_snapshot_id": "snap-def456",
+  "auto_snapshot_id": "snap-ghi789"
+}
+```
+
+- `auto_snapshot_id` appears when the branch's workspace had changes since its last snapshot — those changes are captured automatically before the merge runs, so un-snapshotted work is never silently dropped. `--preview` never creates this snapshot (it has no side effects); instead its output includes `workspace_dirty_files` as a warning that the preview does not yet reflect those changes.
+- A conflict between an edit and a deletion is written with a labeled diff3 marker (e.g. `>>>>>>> branch (theirs) — file deleted on branch`) so it's clear which side removed the file.
+- Merge status values: `in_progress` → `completed` | `conflicts` | `failed` | `aborted`. A merge that fails partway through applying its plan is marked `failed` (not left stuck at `in_progress`), so `avc merge --abort` can always find and roll back the last attempt regardless of how it ended.
 
 ---
 

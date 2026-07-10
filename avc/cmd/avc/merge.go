@@ -90,12 +90,19 @@ func printMergeResult(result *mergepkg.Result, preview bool) {
 			"branch":    result.BranchName,
 			"preview":   preview,
 			"clean":     result.Clean,
+			"deleted":   result.Deleted,
 			"conflicts": result.Conflicts,
 			"skipped":   result.Skipped,
 			"files":     files,
 		}
 		if result.PostMergeSnapshotID != "" {
 			m["post_merge_snapshot_id"] = result.PostMergeSnapshotID
+		}
+		if result.AutoSnapshotID != "" {
+			m["auto_snapshot_id"] = result.AutoSnapshotID
+		}
+		if preview && result.WorkspaceDirtyFiles > 0 {
+			m["workspace_dirty_files"] = result.WorkspaceDirtyFiles
 		}
 		out, _ := json.MarshalIndent(m, "", "  ")
 		fmt.Println(string(out))
@@ -112,8 +119,26 @@ func printMergeResult(result *mergepkg.Result, preview bool) {
 	conflictStr := failure(fmt.Sprintf("%d", result.Conflicts))
 	skippedStr := dim(fmt.Sprintf("%d", result.Skipped))
 	fmt.Printf("  %s %s %s\n", prop("Clean:    "), cleanStr, dim("file(s) applied automatically"))
+	if result.Deleted > 0 {
+		fmt.Printf("  %s %s %s\n", prop("Deleted:  "), yellow(fmt.Sprintf("%d", result.Deleted)), dim("file(s) removed (deleted on branch)"))
+	}
 	fmt.Printf("  %s %s %s\n", prop("Conflicts:"), conflictStr, dim("file(s) need manual resolution"))
 	fmt.Printf("  %s %s %s\n", prop("Skipped:  "), skippedStr, dim("file(s) unchanged"))
+
+	if preview && result.WorkspaceDirtyFiles > 0 {
+		fmt.Printf("\n  %s\n", warn(fmt.Sprintf(
+			"⚠ %d file(s) in the workspace changed since the last snapshot and are NOT reflected in this preview.",
+			result.WorkspaceDirtyFiles,
+		)))
+		fmt.Printf("  %s\n", dim("Run `avc snapshot` first if you want them included."))
+	}
+
+	if result.AutoSnapshotID != "" {
+		fmt.Printf("\n  %s %s\n",
+			success("✓ Captured un-snapshotted workspace changes:"),
+			dim(result.AutoSnapshotID[:12]+"…"),
+		)
+	}
 
 	if result.Conflicts > 0 && !preview {
 		fmt.Printf("\n  %s\n", warn("⚠ Conflicts written with markers (<<<<<<< / ======= / >>>>>>>)."))
@@ -129,15 +154,17 @@ func printMergeResult(result *mergepkg.Result, preview bool) {
 		fmt.Printf("  %s\n", dim("Main is now at the merged state. Run `avc list` to confirm."))
 	}
 
-	if result.Clean > 0 || result.Conflicts > 0 {
+	if result.Clean > 0 || result.Deleted > 0 || result.Conflicts > 0 {
 		fmt.Printf("\n%s\n", ruler(50))
 		for _, f := range result.Files {
-			if f.Decision == "skip" {
+			switch f.Decision {
+			case "skip":
 				continue
-			}
-			if f.Decision == "conflict" {
+			case "conflict":
 				fmt.Printf("  %s  %s  %s\n", failure("!"), red(f.Path), dim("conflict"))
-			} else {
+			case "delete":
+				fmt.Printf("  %s  %s  %s\n", yellow("-"), yellow(f.Path), dim("deleted"))
+			default:
 				fmt.Printf("  %s  %s  %s\n", success("✓"), green(f.Path), dim("applied"))
 			}
 		}

@@ -234,9 +234,26 @@ func toolRestore(projectRoot string, args map[string]any) (any, error) {
 		targetDir = ws
 	}
 
+	activeBranchID, err := branchpkg.GetActiveBranchID(projectRoot)
+	if err != nil {
+		return nil, fmt.Errorf("could not determine active branch: %w", err)
+	}
+
+	// Safety net: capture un-snapshotted changes before they are overwritten.
+	// A failure here aborts the restore rather than risking silent data loss.
+	preSnap, err := snapshot.CreateBeforeRestore(projectRoot, targetDir, activeBranchID, id)
+	if err != nil {
+		return nil, fmt.Errorf("pre-restore safety snapshot failed (restore aborted to avoid data loss): %w", err)
+	}
+
 	result, err := restore.RestoreToDir(projectRoot, id, targetDir)
 	if err != nil {
 		return nil, err
+	}
+
+	undoID := ""
+	if preSnap != nil {
+		undoID = preSnap.ID
 	}
 	return map[string]any{
 		"id":                result.SnapshotID,
@@ -244,6 +261,7 @@ func toolRestore(projectRoot string, args map[string]any) (any, error) {
 		"restored_size":     result.RestoredSize,
 		"quarantined_files": result.QuarantinedFiles,
 		"trash_op_id":       result.TrashOpID,
+		"undo_snapshot_id":  undoID,
 		"target_dir":        targetDir,
 		"success":           true,
 	}, nil
@@ -550,7 +568,7 @@ func mergeResultToMap(result *mergepkg.Result, preview bool) map[string]any {
 		Path     string `json:"path"`
 		Decision string `json:"decision"`
 	}
-	// Only include files that require attention (clean or conflict).
+	// Only include files that require attention (clean, delete, or conflict).
 	// Skipped files (unchanged since branch base) are omitted — listing all
 	// 200+ unchanged files adds noise without useful information.
 	var files []fileJSON
@@ -567,12 +585,23 @@ func mergeResultToMap(result *mergepkg.Result, preview bool) map[string]any {
 		"branch":    result.BranchName,
 		"preview":   preview,
 		"clean":     result.Clean,
+		"deleted":   result.Deleted,
 		"conflicts": result.Conflicts,
 		"skipped":   result.Skipped,
 		"files":     files,
 	}
 	if result.PostMergeSnapshotID != "" {
 		m["post_merge_snapshot_id"] = result.PostMergeSnapshotID
+	}
+	if result.AutoSnapshotID != "" {
+		m["auto_snapshot_id"] = result.AutoSnapshotID
+	}
+	if preview && result.WorkspaceDirtyFiles > 0 {
+		m["workspace_dirty_files"] = result.WorkspaceDirtyFiles
+		m["warning"] = fmt.Sprintf(
+			"%d file(s) in the workspace have changed since the last snapshot on this branch and are NOT reflected in this preview. Call avc_snapshot first if you want them included.",
+			result.WorkspaceDirtyFiles,
+		)
 	}
 	return m
 }

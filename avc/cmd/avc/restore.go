@@ -11,6 +11,7 @@ import (
 	branchpkg "github.com/trevarix/agentic-vc/avc/internal/branch"
 	"github.com/trevarix/agentic-vc/avc/internal/db"
 	"github.com/trevarix/agentic-vc/avc/internal/restore"
+	"github.com/trevarix/agentic-vc/avc/internal/snapshot"
 	"github.com/spf13/cobra"
 )
 
@@ -62,9 +63,28 @@ func runRestore(cmd *cobra.Command, args []string) error {
 		targetDir = ws
 	}
 
+	activeBranchID, err := branchpkg.GetActiveBranchID(projectPath)
+	if err != nil {
+		return fmt.Errorf("could not determine active branch: %w", err)
+	}
+
+	// Safety net: if the working tree has changed since its last snapshot,
+	// capture it first. A restore that discards un-snapshotted work with no
+	// way back defeats the entire purpose of a version-control tool — this
+	// must run before RestoreToDir, and a failure here aborts the restore.
+	preSnap, err := snapshot.CreateBeforeRestore(projectPath, targetDir, activeBranchID, snapshotID)
+	if err != nil {
+		return fmt.Errorf("pre-restore safety snapshot failed (restore aborted to avoid data loss): %w", err)
+	}
+
 	result, err := restore.RestoreToDir(projectPath, snapshotID, targetDir)
 	if err != nil {
 		return fmt.Errorf("restore failed: %w", err)
+	}
+
+	undoID := ""
+	if preSnap != nil {
+		undoID = preSnap.ID
 	}
 
 	if jsonOutput {
@@ -74,6 +94,7 @@ func runRestore(cmd *cobra.Command, args []string) error {
 			"restored_size":     result.RestoredSize,
 			"quarantined_files": result.QuarantinedFiles,
 			"trash_op_id":       result.TrashOpID,
+			"undo_snapshot_id":  undoID,
 			"success":           true,
 			"message":           fmt.Sprintf("Successfully restored snapshot %s", result.SnapshotID),
 		})
@@ -85,6 +106,9 @@ func runRestore(cmd *cobra.Command, args []string) error {
 	if result.QuarantinedFiles > 0 {
 		fmt.Printf("  %s %s\n", prop("Quarantined:   "),
 			yellow(fmt.Sprintf("%d untracked file(s) moved to trash (avc trash list)", result.QuarantinedFiles)))
+	}
+	if undoID != "" {
+		fmt.Printf("  %s %s\n", prop("Undo with:     "), dim(fmt.Sprintf("avc restore %s", undoID)))
 	}
 	return nil
 }

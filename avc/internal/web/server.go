@@ -17,6 +17,7 @@ import (
 	"github.com/trevarix/agentic-vc/avc/internal/diff"
 	mergepkg "github.com/trevarix/agentic-vc/avc/internal/merge"
 	"github.com/trevarix/agentic-vc/avc/internal/restore"
+	"github.com/trevarix/agentic-vc/avc/internal/snapshot"
 )
 
 // Serve starts the HTTP server. Blocks until the server stops.
@@ -334,16 +335,37 @@ func restoreHandler(projectPath string) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "id is required")
 			return
 		}
+
+		activeBranchID, err := branchpkg.GetActiveBranchID(projectPath)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		// Safety net: capture un-snapshotted changes before they are
+		// overwritten. A failure here aborts the restore.
+		preSnap, err := snapshot.CreateBeforeRestore(projectPath, projectPath, activeBranchID, req.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "pre-restore safety snapshot failed: "+err.Error())
+			return
+		}
+
 		result, err := restore.Restore(projectPath, req.ID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		undoID := ""
+		if preSnap != nil {
+			undoID = preSnap.ID
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"id":             result.SnapshotID,
-			"restored_files": result.RestoredFiles,
-			"restored_size":  result.RestoredSize,
-			"success":        true,
+			"id":                result.SnapshotID,
+			"restored_files":    result.RestoredFiles,
+			"restored_size":     result.RestoredSize,
+			"quarantined_files": result.QuarantinedFiles,
+			"trash_op_id":       result.TrashOpID,
+			"undo_snapshot_id":  undoID,
+			"success":           true,
 		})
 	}
 }
