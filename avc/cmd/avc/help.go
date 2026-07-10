@@ -43,6 +43,7 @@ func printRootHelp() {
 	helpEntry("list", "List snapshots on the active branch")
 	helpEntry("log", "Show snapshot history as a tree")
 	helpEntry("restore <snapshot-id>", "Restore the project to a snapshot")
+	helpEntry("undo", "Reverse the most recent restore or merge")
 	helpEntry("diff <snapshot-id> <snapshot-id>", "Compare two snapshots")
 	helpEntry("info <snapshot-id>", "Snapshot details and file list")
 	helpEntry("delete <snapshot-id>", "Delete a snapshot")
@@ -83,6 +84,8 @@ func printRootHelp() {
 	fmt.Println()
 
 	helpSection("MAINTENANCE")
+	helpEntry("verify [--repair]", "Check stored history is intact")
+	helpEntry("trash list|restore|empty", "Manage files quarantined by restore")
 	helpEntry("gc [--run]", "Find (and optionally delete) orphaned blobs")
 	helpEntry("storage", "Show disk usage breakdown for .avc/")
 	helpEntry("cache stats|clear", "Manage the diff cache")

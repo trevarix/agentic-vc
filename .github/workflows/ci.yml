@@ -27,7 +27,10 @@ jobs:
       - name: Test
         env:
           CGO_ENABLED: "0"
-        run: go test ./... -count=1 -timeout=120s
+        # The integration suite has grown substantially (Plans 01-04 added
+        # ~100 tests) and Windows runners fsync SQLite WAL writes slowly —
+        # give the suite real headroom rather than racing a tight budget.
+        run: go test ./... -count=1 -timeout=600s
 
   extension:
     name: AVC Extension

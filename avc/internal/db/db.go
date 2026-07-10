@@ -98,6 +98,20 @@ type MergeFile struct {
 	BranchHash   string
 }
 
+// Operation is one entry in the operations log: a destructive operation
+// (restore, merge, or an undo itself) paired with the safety snapshot that
+// reverses it. This is what lets `avc undo` work with zero arguments —
+// and lets undoing an undo behave as redo.
+type Operation struct {
+	ID             string
+	ProjectID      string
+	BranchID       string // branch the operation ran on (agent branch for merges)
+	Kind           string // "restore" | "merge" | "undo"
+	UndoSnapshotID string // restoring this snapshot reverses the operation
+	Details        string // human-readable summary, e.g. "restored snap-abc123"
+	CreatedAt      int64
+}
+
 // DiffCache represents a row in the diffs table.
 type DiffCache struct {
 	ID             string
@@ -183,9 +197,23 @@ func InitProject(projectRoot string) (*Project, error) {
 	return store.GetProject(normed)
 }
 
+// schemaVersion stamps a fully migrated database (PRAGMA user_version) so
+// migrate can skip its ~15 DDL statements — each an fsynced write
+// transaction — on every subsequent Open. db.Open runs on every CLI command
+// and hundreds of times per test run, so this fast path matters.
+//
+// BUMP THIS whenever migrate() gains or changes a statement, or existing
+// databases will silently skip the new migration.
+const schemaVersion = 1
+
 // migrate creates all tables if absent and applies incremental schema changes
-// idempotently. Safe to call on every Open.
+// idempotently. Safe to call on every Open; already-migrated databases
+// (user_version == schemaVersion) return immediately.
 func (s *Store) migrate() error {
+	var v int
+	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&v); err == nil && v == schemaVersion {
+		return nil
+	}
 	schema := `
 	CREATE TABLE IF NOT EXISTS projects (
 		id         TEXT PRIMARY KEY,
@@ -285,6 +313,23 @@ func (s *Store) migrate() error {
 		return fmt.Errorf("add files.file_mode: %w", err)
 	}
 
+	// Trust primitives: the operations log records every destructive
+	// operation together with the safety snapshot that can reverse it, so
+	// `avc undo` works with zero arguments.
+	if _, err := s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS operations (
+			id               TEXT PRIMARY KEY,
+			project_id       TEXT NOT NULL,
+			branch_id        TEXT NOT NULL DEFAULT '',
+			kind             TEXT NOT NULL,
+			undo_snapshot_id TEXT NOT NULL,
+			details          TEXT NOT NULL DEFAULT '',
+			created_at       INTEGER NOT NULL,
+			FOREIGN KEY (project_id) REFERENCES projects(id)
+		)`); err != nil {
+		return fmt.Errorf("create operations table: %w", err)
+	}
+
 	// Phase 7.3: project_state — stores the active branch name inside the DB
 	// (eliminates the config.toml race condition for concurrent writers).
 	if _, err := s.db.Exec(`
@@ -336,6 +381,13 @@ func (s *Store) migrate() error {
 		if _, err := s.db.Exec(idx); err != nil {
 			return fmt.Errorf("create index: %w", err)
 		}
+	}
+
+	// Stamp the schema version last, only after every statement above
+	// succeeded — a partially migrated database must re-run migrate (all
+	// statements are idempotent) rather than fast-path past the remainder.
+	if _, err := s.db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion)); err != nil {
+		return fmt.Errorf("set schema version: %w", err)
 	}
 	return nil
 }
@@ -390,6 +442,18 @@ func (s *Store) InsertBranch(b *Branch) error {
 		b.ID, b.Name, b.ProjectID, b.BaseSnapshotID, b.CreatedAt, status,
 	)
 	return err
+}
+
+// GetBranchByID returns a branch by its primary key.
+func (s *Store) GetBranchByID(id string) (*Branch, error) {
+	row := s.db.QueryRow(
+		`SELECT `+branchSelectCols+` FROM branches WHERE id = ?`, id,
+	)
+	b, err := scanBranch(row)
+	if err != nil {
+		return nil, fmt.Errorf("branch '%s' not found", id)
+	}
+	return b, nil
 }
 
 // GetBranchByName returns a branch by project and name.
@@ -542,6 +606,31 @@ func (s *Store) SetActiveBranch(projectID, name string) error {
 		projectID, name, nowUnix(),
 	)
 	return err
+}
+
+// SnapshotsReferencingHash returns the distinct snapshot IDs whose file
+// records reference the given content hash, newest first. Used by fsck to
+// report which snapshots a corrupt blob damages.
+func (s *Store) SnapshotsReferencingHash(hash string) ([]string, error) {
+	rows, err := s.db.Query(
+		`SELECT DISTINCT f.snapshot_id FROM files f
+		 JOIN snapshots s ON s.id = f.snapshot_id
+		 WHERE f.file_hash = ? ORDER BY s.timestamp DESC`,
+		hash,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 // LiveHashes returns the set of all file_hash values currently referenced by
@@ -838,6 +927,69 @@ func (s *Store) GetSnapshotTags(snapshotID string) ([]string, error) {
 // ListSnapshotsByTag returns all snapshots carrying the given tag, newest first.
 func (s *Store) ListSnapshotsByTag(tag string) ([]*Snapshot, error) {
 	return s.ListSnapshotsFiltered(SnapshotFilter{Tag: tag, Limit: -1})
+}
+
+// ─── Operations log ───────────────────────────────────────────────────────────
+
+// InsertOperation appends one entry to the operations log.
+func (s *Store) InsertOperation(op *Operation) error {
+	_, err := s.db.Exec(
+		`INSERT INTO operations (id, project_id, branch_id, kind, undo_snapshot_id, details, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		op.ID, op.ProjectID, op.BranchID, op.Kind, op.UndoSnapshotID, op.Details, op.CreatedAt,
+	)
+	return err
+}
+
+const operationSelectCols = `id, project_id, branch_id, kind, undo_snapshot_id, details, created_at`
+
+func scanOperation(row interface{ Scan(...any) error }) (*Operation, error) {
+	op := &Operation{}
+	err := row.Scan(&op.ID, &op.ProjectID, &op.BranchID, &op.Kind,
+		&op.UndoSnapshotID, &op.Details, &op.CreatedAt)
+	return op, err
+}
+
+// ListOperations returns the newest operations for a project, most recent
+// first. limit <= 0 means the default of 20.
+func (s *Store) ListOperations(projectID string, limit int) ([]*Operation, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := s.db.Query(
+		`SELECT `+operationSelectCols+` FROM operations
+		 WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?`,
+		projectID, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ops []*Operation
+	for rows.Next() {
+		op, err := scanOperation(rows)
+		if err != nil {
+			return nil, err
+		}
+		ops = append(ops, op)
+	}
+	return ops, rows.Err()
+}
+
+// GetLastOperation returns the most recent operation for a project, or an
+// error when the log is empty.
+func (s *Store) GetLastOperation(projectID string) (*Operation, error) {
+	row := s.db.QueryRow(
+		`SELECT `+operationSelectCols+` FROM operations
+		 WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+		projectID,
+	)
+	op, err := scanOperation(row)
+	if err != nil {
+		return nil, fmt.Errorf("no operations recorded yet")
+	}
+	return op, nil
 }
 
 // ─── Diff cache management ────────────────────────────────────────────────────

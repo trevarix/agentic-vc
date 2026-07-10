@@ -16,6 +16,7 @@ import (
 	"github.com/trevarix/agentic-vc/avc/internal/db"
 	"github.com/trevarix/agentic-vc/avc/internal/diff"
 	mergepkg "github.com/trevarix/agentic-vc/avc/internal/merge"
+	"github.com/trevarix/agentic-vc/avc/internal/oplog"
 	"github.com/trevarix/agentic-vc/avc/internal/restore"
 	"github.com/trevarix/agentic-vc/avc/internal/snapshot"
 )
@@ -367,6 +368,9 @@ func restoreHandler(projectPath string) http.HandlerFunc {
 		if preSnap != nil {
 			undoID = preSnap.ID
 		}
+		// Record in the operations log so avc undo can reverse this restore.
+		_ = oplog.Record(projectPath, activeBranchID, oplog.KindRestore, undoID,
+			fmt.Sprintf("restored snapshot %s", req.ID))
 		writeJSON(w, http.StatusOK, map[string]any{
 			"id":                result.SnapshotID,
 			"restored_files":    result.RestoredFiles,

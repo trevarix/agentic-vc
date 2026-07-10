@@ -127,7 +127,7 @@ func enrichWithLineCountsDisk(projectRoot string, fd *FileDiff, currentFilePath 
 	oldData := ReadObjectSafe(projectRoot, fd.OldHash)
 	newData, _ := os.ReadFile(currentFilePath)
 
-	if isBinary(oldData) || isBinary(newData) {
+	if IsBinary(oldData) || IsBinary(newData) {
 		fd.Binary = true
 		return
 	}

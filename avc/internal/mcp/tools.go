@@ -73,17 +73,18 @@ func CoreTools() []Tool {
 func StandardTools() []Tool {
 	all := AllTools()
 	standardNames := map[string]bool{
-		"avc_snapshot":       true,
-		"avc_list":           true,
-		"avc_diff":           true,
-		"avc_restore":        true,
-		"avc_status":         true,
-		"avc_branch_create":  true,
-		"avc_branch_list":    true,
-		"avc_branch_switch":  true,
-		"avc_branch_diff":    true,
-		"avc_merge":          true,
-		"avc_merge_abort":    true,
+		"avc_snapshot":      true,
+		"avc_list":          true,
+		"avc_diff":          true,
+		"avc_restore":       true,
+		"avc_status":        true,
+		"avc_undo":          true,
+		"avc_branch_create": true,
+		"avc_branch_list":   true,
+		"avc_branch_switch": true,
+		"avc_branch_diff":   true,
+		"avc_merge":         true,
+		"avc_merge_abort":   true,
 	}
 	var out []Tool
 	for _, t := range all {
@@ -326,6 +327,15 @@ func AllTools() []Tool {
 				"Use this before avc_snapshot to confirm which files will be captured. " +
 				"Returns an empty list when the working tree matches the last snapshot exactly. " +
 				"On an agent branch this compares the workspace against its last snapshot.",
+			InputSchema: InputSchema{Type: "object"},
+		},
+		{
+			Name: "avc_undo",
+			Description: "Reverse the most recent restore or merge with zero arguments — the one obvious " +
+				"recovery verb when something went wrong. Restores the safety snapshot AVC took before that " +
+				"operation; undoing a merge also reactivates the merged branch and rebuilds its workspace. " +
+				"Calling avc_undo again reverses the undo (redo). " +
+				"Prefer this over guessing snapshot IDs for avc_restore after a mistake.",
 			InputSchema: InputSchema{Type: "object"},
 		},
 		{

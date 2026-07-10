@@ -207,9 +207,16 @@ avc merge --abort                    # roll back the last in-progress/conflicted
 | Decision | Meaning |
 |----------|---------|
 | `clean`    | Only the branch changed (or added a new file) — applied automatically |
+| `merged`   | Both sides changed **different regions** of the file — combined line-by-line automatically |
 | `delete`   | The branch deleted a file main left unchanged — removed from main |
-| `conflict` | Both main and branch changed the same file — written with conflict markers |
+| `conflict` | Both sides changed the **same region** — only those hunks get conflict markers; the rest of the file merges. (Whole-file markers still apply to binary files, files over the diff size cap, and delete-vs-edit.) |
 | `skip`     | No net change relative to the merge base — left untouched |
+
+**Protected paths:** if `[protect]` is configured (see below), a merge that
+would change a protected path is refused in `block` mode. A human can
+override with `--allow-protected`; the MCP merge tool has no equivalent, so
+agents cannot. Refusals happen before anything is written — no snapshot, no
+merge record.
 
 **JSON output:**
 ```json
@@ -218,12 +225,15 @@ avc merge --abort                    # roll back the last in-progress/conflicted
   "branch": "feat/my-branch",
   "preview": false,
   "clean": 3,
+  "merged": 1,
   "deleted": 1,
   "conflicts": 0,
   "skipped": 12,
   "files": [{ "path": "src/auth.go", "decision": "clean" }],
   "post_merge_snapshot_id": "snap-def456",
-  "auto_snapshot_id": "snap-ghi789"
+  "auto_snapshot_id": "snap-ghi789",
+  "protected_changes": ["secrets/token.txt"],
+  "protected_mode": "warn"
 }
 ```
 
@@ -287,6 +297,18 @@ avc trash list --json
 ]
 ```
 
+### `avc trash restore <op_id> [path]`
+
+Moves quarantined files back to their original location (recorded when they
+were quarantined — project root or a branch workspace). Pass a relative path
+to restore one file, or omit it for the whole entry. Files that already
+exist at the destination are skipped, never overwritten.
+
+```bash
+avc trash restore 2026-07-09T15-04-05-restore-af2202              # everything
+avc trash restore 2026-07-09T15-04-05-restore-af2202 notes.txt   # one file
+```
+
 ### `avc trash empty`
 
 Permanently deletes quarantined entries. Defaults to removing everything;
@@ -300,6 +322,53 @@ avc trash empty --json
 
 Every restore also opportunistically clears trash entries older than 7 days
 on its own (best-effort — never blocks the restore it runs alongside).
+
+---
+
+## `avc undo`
+
+Reverses the most recent restore or merge with zero arguments — the safety
+snapshot AVC took before that operation is restored. Undoing a merge also
+reactivates the merged branch and rebuilds its workspace. Every undo records
+itself into the same operations log, so running `avc undo` twice acts as redo.
+
+```bash
+avc undo           # reverse the newest operation
+avc undo --list    # show recent operations and what undo would reverse
+avc undo --json
+```
+
+**JSON output:**
+```json
+{
+  "undone_kind": "merge",
+  "undone_details": "merged branch 'feat/x' into main",
+  "restored_snapshot_id": "snap-abc123",
+  "redo_snapshot_id": "snap-def456",
+  "branch": "main",
+  "reactivated_branch": "feat/x",
+  "success": true
+}
+```
+
+---
+
+## `avc verify`
+
+Re-hashes every object in the store and reports any whose content no longer
+matches its content-addressed filename. The hot read path deliberately skips
+this check (it would double restore cost) — verify is the explicit audit.
+`avc fsck` works as an alias for git/unix muscle memory.
+
+```bash
+avc verify             # exits non-zero if corruption is found
+avc verify --repair    # quarantine corrupt objects to .avc/corrupt/
+avc verify --json
+```
+
+Each corrupt object is mapped to the snapshots that reference it, so you
+know exactly which history is damaged. The non-zero exit on corruption makes
+verify suitable as a CI or pre-backup gate.
 
 ---
 
@@ -397,3 +466,44 @@ Files larger than `[snapshot] max_file_size_mb` in `.avc/config.toml` (default
 100 MB) are skipped — not read, hashed, or stored — with a warning printed to
 stderr and listed in the snapshot's `skipped_large` field. This protects
 against an out-of-memory read on an accidentally-tracked large binary.
+
+---
+
+## `[protect]` — protected paths
+
+List paths agents must not change under `[protect]` in `.avc/config.toml`.
+Globs use `.avcignore` syntax (`**`, trailing `/` for directories):
+
+```toml
+[protect]
+paths = [".github/workflows/**", "secrets/**", "*.pem"]
+mode  = "block"   # or "warn"
+```
+
+- **Enforcement is mechanical, at merge time.** In `block` mode (the default
+  — an unset or misspelled mode fails safe to block), a merge that would
+  change a protected path is refused before anything is written. In `warn`
+  mode it proceeds with a prominent warning.
+- **Only a human can override**, with `avc merge <branch> --allow-protected`
+  from a terminal. The MCP merge tool has no override parameter, so an agent
+  cannot lift the gate — the same trust model as `[run] enabled`.
+- **Early warnings everywhere:** `avc status` marks changed protected files
+  with `!`, and the MCP snapshot/status/branch-diff responses include a
+  `protected_changes` list so agents can surface the collision to the user
+  long before merge time.
+- A malformed `config.toml` fails closed: the merge is refused rather than
+  silently proceeding without the protection rules.
+
+Protection applies to AVC-mediated integration (merges into main). An agent
+writing directly to the project root on main bypasses it — one more reason
+the agent instructions mandate branch workspaces.
+
+---
+
+## Object store format
+
+Objects in `.avc/objects/` are stored zstd-compressed when compression saves
+space (a 13-byte `AVCO` header records the original size), and as raw bytes
+otherwise. Objects written by older AVC versions remain readable — the two
+forms coexist freely. `avc storage` reports the on-disk vs. logical size and
+how many objects are compressed; `avc verify` checks both forms.

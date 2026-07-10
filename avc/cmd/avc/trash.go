@@ -38,10 +38,65 @@ entries older than a given duration (e.g. "24h", "168h" for 7 days).`,
 	RunE: runTrashEmpty,
 }
 
+var trashRestoreCmd = &cobra.Command{
+	Use:   "restore <op_id> [path]",
+	Short: "Move quarantined files back to where they came from",
+	Long: `Restores files from a trash entry to their original location (recorded when
+they were quarantined). Pass a specific relative path to restore one file, or
+omit it to restore the whole entry. Files that already exist at the
+destination are skipped, never overwritten.`,
+	Args: cobra.RangeArgs(1, 2),
+	RunE: runTrashRestore,
+}
+
 func init() {
 	trashEmptyCmd.Flags().StringVar(&trashOlderThan, "older-than", "",
 		`Only remove entries older than this duration (e.g. "24h"); default removes all`)
-	trashCmd.AddCommand(trashListCmd, trashEmptyCmd)
+	trashCmd.AddCommand(trashListCmd, trashEmptyCmd, trashRestoreCmd)
+}
+
+func runTrashRestore(cmd *cobra.Command, args []string) error {
+	projectPath, err := requireInitializedProject()
+	if err != nil {
+		return err
+	}
+
+	opID := args[0]
+	path := ""
+	if len(args) == 2 {
+		path = args[1]
+	}
+
+	restored, skipped, err := trash.Restore(projectPath, opID, path)
+	if err != nil {
+		return fmt.Errorf("trash restore: %w", err)
+	}
+
+	if jsonOutput {
+		if restored == nil {
+			restored = []string{}
+		}
+		if skipped == nil {
+			skipped = []string{}
+		}
+		return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{
+			"op_id":    opID,
+			"restored": restored,
+			"skipped":  skipped,
+			"success":  true,
+		})
+	}
+
+	for _, f := range restored {
+		fmt.Printf("%s %s\n", success("✓ Restored:"), f)
+	}
+	for _, f := range skipped {
+		fmt.Printf("%s %s %s\n", warn("⚠ Skipped:"), f, dim("(a file already exists there — not overwritten)"))
+	}
+	if len(restored) == 0 && len(skipped) == 0 {
+		fmt.Printf("%s\n", dim("Nothing to restore."))
+	}
+	return nil
 }
 
 func runTrashList(cmd *cobra.Command, args []string) error {

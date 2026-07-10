@@ -5,6 +5,7 @@ package mcp
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/trevarix/agentic-vc/avc/internal/annotate"
@@ -13,8 +14,11 @@ import (
 	"github.com/trevarix/agentic-vc/avc/internal/db"
 	diffpkg "github.com/trevarix/agentic-vc/avc/internal/diff"
 	mergepkg "github.com/trevarix/agentic-vc/avc/internal/merge"
+	"github.com/trevarix/agentic-vc/avc/internal/oplog"
+	"github.com/trevarix/agentic-vc/avc/internal/policy"
 	"github.com/trevarix/agentic-vc/avc/internal/restore"
 	"github.com/trevarix/agentic-vc/avc/internal/snapshot"
+	undopkg "github.com/trevarix/agentic-vc/avc/internal/undo"
 	workspacepkg "github.com/trevarix/agentic-vc/avc/internal/workspace"
 )
 
@@ -68,6 +72,8 @@ func dispatchTool(projectRoot string, compact bool, name string, args map[string
 		result, err = toolRunInWorkspace(projectRoot, args)
 	case "avc_status":
 		result, err = toolStatus(projectRoot)
+	case "avc_undo":
+		result, err = toolUndo(projectRoot)
 	case "avc_restore_file":
 		result, err = toolRestoreFile(projectRoot, args)
 	case "avc_annotate":
@@ -110,6 +116,17 @@ func toolSnapshot(projectRoot string, args map[string]any) (any, error) {
 	branchName := branchpkg.GetActiveBranchName(projectRoot)
 	sourceDir := branchpkg.WorkspacePath(projectRoot, branchName) // "" for main
 
+	// Remember the branch HEAD before snapshotting so protected-path changes
+	// in this snapshot can be reported (early warning — the hard gate is at
+	// merge time).
+	prevHeadID := ""
+	if store, dbErr := db.Open(projectRoot); dbErr == nil {
+		if head, headErr := store.GetHeadSnapshot(branchID); headErr == nil {
+			prevHeadID = head.ID
+		}
+		store.Close()
+	}
+
 	snap, err := snapshot.Create(
 		projectRoot,
 		label,
@@ -121,7 +138,7 @@ func toolSnapshot(projectRoot string, args map[string]any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{
+	out := map[string]any{
 		"id":            snap.ID,
 		"label":         snap.Label,
 		"timestamp":     snap.Timestamp,
@@ -132,7 +149,61 @@ func toolSnapshot(projectRoot string, args map[string]any) (any, error) {
 		"branch_id":     snap.BranchID,
 		"skipped_large": snap.SkippedLarge,
 		"success":       true,
-	}, nil
+	}
+	if protected := protectedChangesBetween(projectRoot, prevHeadID, snap.ID); len(protected) > 0 {
+		out["protected_changes"] = protected
+		out["protected_warning"] = "This snapshot changes paths listed under [protect] in .avc/config.toml. " +
+			"A merge touching them will be refused (or flagged in warn mode) — surface this to the user now rather than at merge time."
+	}
+	return out, nil
+}
+
+// protectedChangesBetween returns the paths whose content differs between
+// two snapshots and matches the [protect] globs. Hash-only comparison — no
+// object reads or line diffs — so it adds negligible cost to a snapshot.
+// Either snapshot ID may be "" (treated as an empty file set).
+func protectedChangesBetween(projectRoot, fromID, toID string) []string {
+	cfg, _ := config.Load(projectRoot)
+	if !policy.Enabled(cfg) {
+		return nil
+	}
+	store, err := db.Open(projectRoot)
+	if err != nil {
+		return nil
+	}
+	defer store.Close()
+
+	hashesOf := func(id string) map[string]string {
+		m := map[string]string{}
+		if id == "" {
+			return m
+		}
+		files, err := store.GetSnapshotFiles(id)
+		if err != nil {
+			return m
+		}
+		for _, f := range files {
+			m[f.RelativePath] = f.FileHash
+		}
+		return m
+	}
+	from := hashesOf(fromID)
+	to := hashesOf(toID)
+
+	var changed []string
+	for p, h := range to {
+		if from[p] != h {
+			changed = append(changed, p)
+		}
+	}
+	for p := range from {
+		if _, ok := to[p]; !ok {
+			changed = append(changed, p)
+		}
+	}
+	matched := policy.Check(cfg, changed)
+	sort.Strings(matched)
+	return matched
 }
 
 func toolList(projectRoot string, args map[string]any) (any, error) {
@@ -260,6 +331,12 @@ func toolRestore(projectRoot string, args map[string]any) (any, error) {
 	if preSnap != nil {
 		undoID = preSnap.ID
 	}
+
+	// Record in the operations log so avc_undo can reverse this restore.
+	// Best-effort: the restore already succeeded.
+	_ = oplog.Record(projectRoot, activeBranchID, oplog.KindRestore, undoID,
+		fmt.Sprintf("restored snapshot %s", id))
+
 	return map[string]any{
 		"id":                result.SnapshotID,
 		"restored_files":    result.RestoredFiles,
@@ -507,7 +584,30 @@ func toolBranchDiff(projectRoot string, args map[string]any) (any, error) {
 		return nil, err
 	}
 
-	return formatBranchDiff(name, baseSnapshotID, head.ID, result), nil
+	text := formatBranchDiff(name, baseSnapshotID, head.ID, result)
+
+	// Early warning: flag protected-path changes now, before a merge attempt
+	// gets refused by the [protect] gate.
+	cfg, _ := config.Load(projectRoot)
+	if policy.Enabled(cfg) {
+		var paths []string
+		for _, f := range result.Files {
+			paths = append(paths, f.Path)
+		}
+		if protected := policy.Check(cfg, paths); len(protected) > 0 {
+			sort.Strings(protected)
+			consequence := "a merge will be refused unless a human overrides with --allow-protected"
+			if policy.Mode(cfg) == policy.ModeWarn {
+				consequence = "a merge will be flagged with a warning"
+			}
+			text = fmt.Sprintf(
+				"⚠ PROTECTED PATHS CHANGED: this branch changes %d path(s) listed under [protect] in .avc/config.toml (%s) — %s. Tell the user before offering to merge.\n\n",
+				len(protected), strings.Join(protected, ", "), consequence,
+			) + text
+		}
+	}
+
+	return text, nil
 }
 
 // formatBranchDiff renders a branch diff as human-readable markdown text.
@@ -612,6 +712,7 @@ func mergeResultToMap(result *mergepkg.Result, preview bool) map[string]any {
 		"branch":    result.BranchName,
 		"preview":   preview,
 		"clean":     result.Clean,
+		"merged":    result.Merged,
 		"deleted":   result.Deleted,
 		"conflicts": result.Conflicts,
 		"skipped":   result.Skipped,
@@ -629,6 +730,15 @@ func mergeResultToMap(result *mergepkg.Result, preview bool) map[string]any {
 			"%d file(s) in the workspace have changed since the last snapshot on this branch and are NOT reflected in this preview. Call avc_snapshot first if you want them included.",
 			result.WorkspaceDirtyFiles,
 		)
+	}
+	if len(result.ProtectedChanges) > 0 {
+		m["protected_changes"] = result.ProtectedChanges
+		m["protected_mode"] = result.ProtectedMode
+		if result.ProtectedMode == "block" {
+			m["protected_warning"] = "This merge changes protected paths ([protect] in .avc/config.toml) and will be refused. " +
+				"Only a human can override, by running `avc merge --allow-protected` from the CLI. " +
+				"Tell the user which paths are affected and let them decide."
+		}
 	}
 	return m
 }
@@ -791,12 +901,42 @@ func toolStatus(projectRoot string) (any, error) {
 			CountsEstimated: f.CountsEstimated,
 		}
 	}
-	return map[string]any{
+	out := map[string]any{
 		"branch":         branchName,
 		"snapshot_id":    head.ID,
 		"snapshot_label": head.Label,
 		"files":          files,
 		"changed_count":  len(result.Files),
+	}
+	cfg, _ := config.Load(projectRoot)
+	if policy.Enabled(cfg) {
+		var paths []string
+		for _, f := range result.Files {
+			paths = append(paths, f.Path)
+		}
+		if protected := policy.Check(cfg, paths); len(protected) > 0 {
+			sort.Strings(protected)
+			out["protected_changes"] = protected
+		}
+	}
+	return out, nil
+}
+
+// ─── Undo tool ────────────────────────────────────────────────────────────────
+
+func toolUndo(projectRoot string) (any, error) {
+	result, err := undopkg.Undo(projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"undone_kind":          result.UndoneKind,
+		"undone_details":       result.UndoneDetails,
+		"restored_snapshot_id": result.RestoredSnapshotID,
+		"redo_snapshot_id":     result.RedoSnapshotID,
+		"branch":               result.BranchName,
+		"reactivated_branch":   result.ReactivatedBranch,
+		"success":              true,
 	}, nil
 }
 
