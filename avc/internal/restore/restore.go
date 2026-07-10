@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -156,6 +157,12 @@ func RestoreToDir(projectRoot, snapshotID, targetDir string) (*Result, error) {
 		if err := fileutil.WriteFile(absPath, data); err != nil {
 			return nil, fmt.Errorf("write file %s: %w", f.RelativePath, err)
 		}
+		// Restore the recorded permission bits (notably the executable bit).
+		// f.FileMode is 0 for rows written before mode tracking existed —
+		// WriteFile's own default (0644) already applies in that case.
+		if f.FileMode != 0 {
+			_ = os.Chmod(absPath, os.FileMode(f.FileMode))
+		}
 		restoredSize += f.FileSize
 
 		if isWorkspace {
@@ -176,6 +183,10 @@ func RestoreToDir(projectRoot, snapshotID, targetDir string) (*Result, error) {
 		// Stat cache is only valid for the real project root — invalidate it after restore.
 		statcache.Invalidate(projectRoot)
 	}
+
+	// Quarantining files can leave their now-empty parent directories behind
+	// (e.g. a workspace subdirectory whose only file was untracked).
+	removeEmptyDirs(targetDir)
 
 	// Opportunistically sweep trash entries older than the retention window.
 	// Best-effort — a failure here must never fail the restore itself.
@@ -267,4 +278,30 @@ func StoreObject(projectRoot, hash string, data []byte) error {
 	}
 	os.Remove(tmp)
 	return renameErr
+}
+
+// removeEmptyDirs removes every directory under root that ends up empty,
+// deepest first so a parent that becomes empty only after its child is
+// removed is caught in the same pass. Used after a restore's deletion sweep
+// so quarantining files doesn't leave orphaned empty directories behind.
+// Best-effort: a directory that can't be removed is simply left in place.
+func removeEmptyDirs(root string) {
+	var dirs []string
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || !d.IsDir() || path == root {
+			return nil
+		}
+		switch d.Name() {
+		case ".avc", ".git", ".hg", ".svn", ".bzr":
+			return filepath.SkipDir
+		}
+		dirs = append(dirs, path)
+		return nil
+	})
+	sort.Slice(dirs, func(i, j int) bool { return len(dirs[i]) > len(dirs[j]) })
+	for _, dir := range dirs {
+		if entries, err := os.ReadDir(dir); err == nil && len(entries) == 0 {
+			os.Remove(dir) //nolint:errcheck
+		}
+	}
 }

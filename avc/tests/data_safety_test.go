@@ -216,7 +216,7 @@ func TestGC_SweepsStrayTempFiles(t *testing.T) {
 		t.Fatalf("write stray tmp: %v", err)
 	}
 
-	result, err := gc.Run(projectRoot, false)
+	result, err := gc.RunWithGrace(projectRoot, false, 0)
 	if err != nil {
 		t.Fatalf("gc.Run: %v", err)
 	}

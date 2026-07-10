@@ -6,6 +6,7 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -70,6 +71,7 @@ type File struct {
 	RelativePath string
 	FileHash     string
 	FileSize     int64
+	FileMode     uint32 // Unix permission bits (e.g. 0644, 0755); 0 = not recorded (pre-mode-tracking row, or platform without meaningful modes) — restore falls back to 0644
 }
 
 // Merge represents one merge operation (branch → main).
@@ -264,12 +266,24 @@ func (s *Store) migrate() error {
 	if _, err := s.db.Exec(schema); err != nil {
 		return err
 	}
-	// Phase 4: add branch_id to snapshots (idempotent — SQLite returns an error
-	// if the column already exists, which we intentionally ignore).
-	_, _ = s.db.Exec(`ALTER TABLE snapshots ADD COLUMN branch_id TEXT REFERENCES branches(id)`)
+	// Phase 4: add branch_id to snapshots (idempotent — SQLite returns
+	// "duplicate column name" if it already exists, which we ignore; any
+	// other failure, e.g. a locked or full-disk database, must propagate).
+	if err := execIgnoreDuplicateColumn(s.db, `ALTER TABLE snapshots ADD COLUMN branch_id TEXT REFERENCES branches(id)`); err != nil {
+		return fmt.Errorf("add snapshots.branch_id: %w", err)
+	}
 
 	// Phase 7.1: branch lifecycle status column.
-	_, _ = s.db.Exec(`ALTER TABLE branches ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`)
+	if err := execIgnoreDuplicateColumn(s.db, `ALTER TABLE branches ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`); err != nil {
+		return fmt.Errorf("add branches.status: %w", err)
+	}
+
+	// Lifecycle hardening: file_mode preserves Unix permission bits (notably
+	// the executable bit) across snapshot/restore. 0 default means "not
+	// recorded" for rows written before this column existed.
+	if err := execIgnoreDuplicateColumn(s.db, `ALTER TABLE files ADD COLUMN file_mode INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return fmt.Errorf("add files.file_mode: %w", err)
+	}
 
 	// Phase 7.3: project_state — stores the active branch name inside the DB
 	// (eliminates the config.toml race condition for concurrent writers).
@@ -298,7 +312,9 @@ func (s *Store) migrate() error {
 
 	// Phase 5.3: add computed_at to the diffs cache table (tracks when each
 	// cached diff was computed; enables TTL-based invalidation).
-	_, _ = s.db.Exec(`ALTER TABLE diffs ADD COLUMN computed_at INTEGER NOT NULL DEFAULT 0`)
+	if err := execIgnoreDuplicateColumn(s.db, `ALTER TABLE diffs ADD COLUMN computed_at INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return fmt.Errorf("add diffs.computed_at: %w", err)
+	}
 
 	// Phase 1 improvement: query indexes for hot paths.
 	// All idempotent via IF NOT EXISTS — safe to run on every Open.
@@ -322,6 +338,20 @@ func (s *Store) migrate() error {
 		}
 	}
 	return nil
+}
+
+// execIgnoreDuplicateColumn runs an idempotent `ALTER TABLE ... ADD COLUMN`
+// migration statement. SQLite has no `IF NOT EXISTS` for columns, so a
+// column that already exists returns an error containing "duplicate column
+// name" — that specific case is expected on every Open() after the first and
+// is ignored. Any other error (locked database, disk full, syntax error, ...)
+// propagates, so a real migration failure is never mistaken for "already applied".
+func execIgnoreDuplicateColumn(db *sql.DB, stmt string) error {
+	_, err := db.Exec(stmt)
+	if err == nil || strings.Contains(err.Error(), "duplicate column name") {
+		return nil
+	}
+	return err
 }
 
 // ─── Project ─────────────────────────────────────────────────────────────────
@@ -488,9 +518,15 @@ func (s *Store) GetActiveBranch(projectID string) (string, error) {
 	err := s.db.QueryRow(
 		`SELECT active_branch FROM project_state WHERE project_id = ?`, projectID,
 	).Scan(&name)
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		// No row yet — default to main.
 		return "main", nil
+	}
+	if err != nil {
+		// A real failure (locked DB, I/O error, ...) must propagate: silently
+		// returning "main" here would retarget snapshots/restores to the
+		// wrong branch on a transient error instead of surfacing it.
+		return "", err
 	}
 	return name, nil
 }
@@ -595,14 +631,14 @@ func (s *Store) InsertSnapshotWithFiles(snap *Snapshot, files []*File) error {
 	}
 
 	stmt, err := tx.Prepare(
-		`INSERT INTO files (id, snapshot_id, relative_path, file_hash, file_size) VALUES (?, ?, ?, ?, ?)`,
+		`INSERT INTO files (id, snapshot_id, relative_path, file_hash, file_size, file_mode) VALUES (?, ?, ?, ?, ?, ?)`,
 	)
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
 	for _, f := range files {
-		if _, err := stmt.Exec(f.ID, f.SnapshotID, f.RelativePath, f.FileHash, f.FileSize); err != nil {
+		if _, err := stmt.Exec(f.ID, f.SnapshotID, f.RelativePath, f.FileHash, f.FileSize, f.FileMode); err != nil {
 			stmt.Close()
 			tx.Rollback()
 			return fmt.Errorf("insert file %s: %w", f.RelativePath, err)
@@ -880,6 +916,103 @@ func (s *Store) DeleteSnapshot(id string) error {
 	return tx.Commit()
 }
 
+// ProtectedSnapshotIDs returns snapshot IDs that must not be deleted:
+//   - base_snapshot_id of any branch with status 'active'
+//   - any snapshot carrying at least one tag
+//   - the base/main/head snapshot of the most recent merge per branch
+//
+// Retention and `avc delete` both consult this so pruning can never corrupt
+// an active branch's merge base, silently untag a deliberately marked
+// milestone, or invalidate the record of the last merge.
+func (s *Store) ProtectedSnapshotIDs(projectID string) (map[string]bool, error) {
+	protected := make(map[string]bool)
+
+	branchRows, err := s.db.Query(
+		`SELECT base_snapshot_id FROM branches
+		 WHERE project_id = ? AND COALESCE(status, 'active') = 'active'
+		   AND base_snapshot_id IS NOT NULL AND base_snapshot_id != ''`,
+		projectID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	for branchRows.Next() {
+		var id string
+		if err := branchRows.Scan(&id); err != nil {
+			branchRows.Close()
+			return nil, err
+		}
+		protected[id] = true
+	}
+	if err := branchRows.Err(); err != nil {
+		branchRows.Close()
+		return nil, err
+	}
+	branchRows.Close()
+
+	tagRows, err := s.db.Query(
+		`SELECT DISTINCT st.snapshot_id FROM snapshot_tags st
+		 JOIN snapshots s ON s.id = st.snapshot_id
+		 WHERE s.project_id = ?`,
+		projectID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	for tagRows.Next() {
+		var id string
+		if err := tagRows.Scan(&id); err != nil {
+			tagRows.Close()
+			return nil, err
+		}
+		protected[id] = true
+	}
+	if err := tagRows.Err(); err != nil {
+		tagRows.Close()
+		return nil, err
+	}
+	tagRows.Close()
+
+	mergeRows, err := s.db.Query(
+		`SELECT base_snapshot_id, main_snapshot_id, head_snapshot_id
+		 FROM merges m
+		 WHERE project_id = ? AND started_at = (
+		     SELECT MAX(started_at) FROM merges WHERE branch_id = m.branch_id
+		 )`,
+		projectID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	for mergeRows.Next() {
+		var base, main, head string
+		if err := mergeRows.Scan(&base, &main, &head); err != nil {
+			mergeRows.Close()
+			return nil, err
+		}
+		protected[base] = true
+		protected[main] = true
+		protected[head] = true
+	}
+	if err := mergeRows.Err(); err != nil {
+		mergeRows.Close()
+		return nil, err
+	}
+	mergeRows.Close()
+
+	return protected, nil
+}
+
+// IsSnapshotProtected reports whether snapshotID is protected from deletion
+// within projectID. See ProtectedSnapshotIDs.
+func (s *Store) IsSnapshotProtected(projectID, snapshotID string) (bool, error) {
+	protected, err := s.ProtectedSnapshotIDs(projectID)
+	if err != nil {
+		return false, err
+	}
+	return protected[snapshotID], nil
+}
+
 // FileVersion is a single (snapshot, hash, timestamp) tuple for one file path.
 // Used by annotate to load all versions in one query instead of N queries.
 type FileVersion struct {
@@ -921,7 +1054,7 @@ func (s *Store) GetFileVersions(relPath string) ([]FileVersion, error) {
 // GetSnapshotFiles returns all file records for a snapshot.
 func (s *Store) GetSnapshotFiles(snapshotID string) ([]*File, error) {
 	rows, err := s.db.Query(
-		`SELECT id, snapshot_id, relative_path, file_hash, file_size
+		`SELECT id, snapshot_id, relative_path, file_hash, file_size, file_mode
 		 FROM files WHERE snapshot_id = ? ORDER BY relative_path`, snapshotID,
 	)
 	if err != nil {
@@ -932,7 +1065,7 @@ func (s *Store) GetSnapshotFiles(snapshotID string) ([]*File, error) {
 	var files []*File
 	for rows.Next() {
 		f := &File{}
-		if err := rows.Scan(&f.ID, &f.SnapshotID, &f.RelativePath, &f.FileHash, &f.FileSize); err != nil {
+		if err := rows.Scan(&f.ID, &f.SnapshotID, &f.RelativePath, &f.FileHash, &f.FileSize, &f.FileMode); err != nil {
 			return nil, err
 		}
 		files = append(files, f)

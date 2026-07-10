@@ -86,6 +86,7 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 			"total_size":    snap.TotalSize,
 			"notes":         snap.Notes,
 			"branch_id":     snap.BranchID,
+			"skipped_large": snap.SkippedLarge,
 			"success":       true,
 		})
 	}
@@ -95,6 +96,10 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  %s %s\n", prop("Branch: "), green(branchpkg.GetActiveBranchName(projectPath)))
 	fmt.Printf("  %s %s\n", prop("Files:  "), yellow(fmt.Sprintf("%d", snap.FileCount)))
 	fmt.Printf("  %s %s\n", prop("Size:   "), dim(fmt.Sprintf("%d bytes", snap.TotalSize)))
+	if len(snap.SkippedLarge) > 0 {
+		fmt.Printf("  %s %s\n", prop("Skipped:"),
+			yellow(fmt.Sprintf("%d file(s) exceeded the size limit (see stderr)", len(snap.SkippedLarge))))
+	}
 	return nil
 }
 

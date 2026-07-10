@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/trevarix/agentic-vc/avc/internal/gc"
 	"github.com/spf13/cobra"
 )
 
 var gcRunFlag bool
+var gcGraceFlag string
 
 var gcCmd = &cobra.Command{
 	Use:   "gc",
@@ -18,6 +20,11 @@ var gcCmd = &cobra.Command{
 
 By default this is a dry run — it reports what would be deleted without removing anything.
 Pass --run to actually delete the orphaned blobs and reclaim disk space.
+
+Objects younger than --grace (default 15m) are always kept regardless of
+--run: a snapshot writes its objects to disk before its DB row exists, so an
+object that looks unreferenced for a brief window may belong to a snapshot
+still being created concurrently.
 
 Typical workflow after deleting branches or pruning snapshots:
 
@@ -28,6 +35,8 @@ Typical workflow after deleting branches or pruning snapshots:
 
 func init() {
 	gcCmd.Flags().BoolVar(&gcRunFlag, "run", false, "Delete unreferenced objects (default is dry-run)")
+	gcCmd.Flags().StringVar(&gcGraceFlag, "grace", "15m",
+		"Skip objects younger than this duration (protects objects from an in-flight snapshot); 0 disables it")
 }
 
 func runGC(cmd *cobra.Command, args []string) error {
@@ -36,8 +45,13 @@ func runGC(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	grace, err := time.ParseDuration(gcGraceFlag)
+	if err != nil {
+		return fmt.Errorf("invalid --grace duration: %w", err)
+	}
+
 	dryRun := !gcRunFlag
-	result, err := gc.Run(projectPath, dryRun)
+	result, err := gc.RunWithGrace(projectPath, dryRun, grace)
 	if err != nil {
 		return fmt.Errorf("gc: %w", err)
 	}
@@ -47,6 +61,7 @@ func runGC(cmd *cobra.Command, args []string) error {
 			"scanned_objects": result.ScannedObjects,
 			"deleted_objects": result.DeletedObjects,
 			"bytes_reclaimed": result.BytesReclaimed,
+			"skipped_recent":  result.SkippedRecent,
 			"dry_run":         result.DryRun,
 		})
 	}
@@ -80,6 +95,12 @@ func runGC(cmd *cobra.Command, args []string) error {
 		result.ScannedObjects-result.DeletedObjects,
 		verb, result.DeletedObjects,
 	)
+	if result.SkippedRecent > 0 {
+		fmt.Printf("  %s\n", dim(fmt.Sprintf(
+			"%d recent object(s) skipped (younger than --grace=%s; may belong to an in-flight snapshot)",
+			result.SkippedRecent, gcGraceFlag,
+		)))
+	}
 	if result.DryRun {
 		fmt.Printf("\n%s\n", dim("Run `avc gc --run` to delete these objects."))
 	}

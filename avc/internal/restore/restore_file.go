@@ -5,6 +5,7 @@ package restore
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/trevarix/agentic-vc/avc/internal/db"
@@ -59,6 +60,9 @@ func RestoreFile(projectRoot, snapshotID, filePath string) (*RestoreFileResult, 
 	if err := fileutil.WriteFile(absPath, data); err != nil {
 		return nil, fmt.Errorf("write file %s: %w", filePath, err)
 	}
+	if target.FileMode != 0 {
+		_ = os.Chmod(absPath, os.FileMode(target.FileMode))
+	}
 
 	return &RestoreFileResult{
 		SnapshotID: snapshotID,
@@ -109,6 +113,9 @@ func RestoreFileToDir(projectRoot, snapshotID, filePath, targetDir string) (*Res
 	absPath := filepath.Join(targetDir, filepath.FromSlash(target.RelativePath))
 	if err := fileutil.WriteFile(absPath, data); err != nil {
 		return nil, fmt.Errorf("write file %s: %w", filePath, err)
+	}
+	if target.FileMode != 0 {
+		_ = os.Chmod(absPath, os.FileMode(target.FileMode))
 	}
 
 	return &RestoreFileResult{

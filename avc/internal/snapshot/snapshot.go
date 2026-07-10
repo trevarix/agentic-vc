@@ -22,14 +22,15 @@ import (
 
 // Result is returned by Create after a successful snapshot.
 type Result struct {
-	ID        string
-	Label     string
-	Timestamp int64
-	AgentName string
-	Notes     string
-	FileCount int
-	TotalSize int64
-	BranchID  string
+	ID           string
+	Label        string
+	Timestamp    int64
+	AgentName    string
+	Notes        string
+	FileCount    int
+	TotalSize    int64
+	BranchID     string
+	SkippedLarge []string // relative paths skipped for exceeding the max file size
 }
 
 // Create walks sourceDir, hashes all tracked files, and persists a snapshot
@@ -63,7 +64,7 @@ func Create(projectRoot, label, agentName, notes, branchID, sourceDir string) (*
 		}
 	}
 
-	ignore, err := fileutil.LoadIgnoreRules(projectRoot)
+	ignore, err := loadIgnoreRulesForSource(projectRoot, sourceDir)
 	if err != nil {
 		return nil, fmt.Errorf("load ignore rules: %w", err)
 	}
@@ -111,7 +112,14 @@ func Create(projectRoot, label, agentName, notes, branchID, sourceDir string) (*
 	snapID := newSnapID()
 	now := time.Now().Unix()
 
+	maxFileSizeMB := config.DefaultMaxFileSizeMB
+	if cfg != nil && cfg.Snapshot.MaxFileSizeMB > 0 {
+		maxFileSizeMB = cfg.Snapshot.MaxFileSizeMB
+	}
+	maxFileSizeBytes := int64(maxFileSizeMB) * 1024 * 1024
+
 	var totalSize int64
+	var skippedLarge []string
 	files := make([]*db.File, 0, len(paths))
 
 	for _, absPath := range paths {
@@ -121,6 +129,18 @@ func Create(projectRoot, label, agentName, notes, branchID, sourceDir string) (*
 		info, err := os.Stat(absPath)
 		if err != nil {
 			return nil, fmt.Errorf("stat file %s: %w", absPath, err)
+		}
+
+		// Files larger than the configured cap are skipped entirely (not
+		// read, not hashed, not stored) rather than risking an
+		// out-of-memory read on an accidentally-tracked large binary.
+		if info.Size() > maxFileSizeBytes {
+			skippedLarge = append(skippedLarge, rel)
+			fmt.Fprintf(os.Stderr,
+				"[avc] warning: skipping %s (%.1f MB exceeds the %d MB snapshot limit; set [snapshot] max_file_size_mb in .avc/config.toml to change this)\n",
+				rel, float64(info.Size())/(1024*1024), maxFileSizeMB,
+			)
+			continue
 		}
 
 		var hash string
@@ -150,6 +170,7 @@ func Create(projectRoot, label, agentName, notes, branchID, sourceDir string) (*
 			RelativePath: rel,
 			FileHash:     hash,
 			FileSize:     size,
+			FileMode:     uint32(info.Mode().Perm()),
 		})
 		totalSize += size
 	}
@@ -181,14 +202,15 @@ func Create(projectRoot, label, agentName, notes, branchID, sourceDir string) (*
 	}
 
 	result := &Result{
-		ID:        snapID,
-		Label:     label,
-		Timestamp: now,
-		AgentName: agentName,
-		Notes:     notes,
-		FileCount: len(files),
-		TotalSize: totalSize,
-		BranchID:  branchID,
+		ID:           snapID,
+		Label:        label,
+		Timestamp:    now,
+		AgentName:    agentName,
+		Notes:        notes,
+		FileCount:    len(files),
+		TotalSize:    totalSize,
+		BranchID:     branchID,
+		SkippedLarge: skippedLarge,
 	}
 
 	// Apply retention policy (best-effort).
@@ -202,4 +224,20 @@ func Create(projectRoot, label, agentName, notes, branchID, sourceDir string) (*
 	}
 
 	return result, nil
+}
+
+// loadIgnoreRulesForSource loads .avcignore from sourceDir when it differs
+// from projectRoot (i.e. this snapshot is walking a branch workspace) and a
+// copy exists there; otherwise it falls back to the project root's rules.
+// A workspace's .avcignore can diverge from the root's (an agent may edit it
+// as part of its work), and a snapshot should honor the rules of the
+// directory it is actually walking, not always the root's.
+func loadIgnoreRulesForSource(projectRoot, sourceDir string) (*fileutil.IgnoreRules, error) {
+	if sourceDir != "" && sourceDir != projectRoot {
+		wsIgnorePath := filepath.Join(sourceDir, ".avcignore")
+		if _, err := os.Stat(wsIgnorePath); err == nil {
+			return fileutil.LoadIgnoreRulesFrom(wsIgnorePath)
+		}
+	}
+	return fileutil.LoadIgnoreRules(projectRoot)
 }

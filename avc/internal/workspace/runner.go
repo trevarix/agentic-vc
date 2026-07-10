@@ -164,11 +164,27 @@ func Run(req RunRequest) (*RunResult, error) {
 	}
 
 	// Step 9: drain output concurrently, then wait.
+	//
+	// Once the LimitedReader budget is exhausted, io.Copy into the buffer
+	// stops — but if nothing keeps reading the underlying pipe past that
+	// point, a still-writing child fills the OS pipe buffer and blocks on
+	// its next write forever. A chatty-but-passing command would then hang
+	// until the context timeout and get reported as killed (-1) instead of
+	// its real, successful exit code. Draining the raw pipe to io.Discard
+	// after the cap keeps the child able to finish normally.
 	var stdoutBuf, stderrBuf bytes.Buffer
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); io.Copy(&stdoutBuf, stdoutReader) }()  //nolint:errcheck
-	go func() { defer wg.Done(); io.Copy(&stderrBuf, stderrReader) }()  //nolint:errcheck
+	go func() {
+		defer wg.Done()
+		io.Copy(&stdoutBuf, stdoutReader) //nolint:errcheck
+		io.Copy(io.Discard, stdoutPipe)   //nolint:errcheck
+	}()
+	go func() {
+		defer wg.Done()
+		io.Copy(&stderrBuf, stderrReader) //nolint:errcheck
+		io.Copy(io.Discard, stderrPipe)   //nolint:errcheck
+	}()
 
 	waitErr := cmd.Wait()
 

@@ -24,7 +24,19 @@ type Config struct {
 	Run       RunConfig       `toml:"run"`
 	Retention RetentionConfig `toml:"retention"`
 	Hooks     HooksConfig     `toml:"hooks"`
+	Snapshot  SnapshotConfig  `toml:"snapshot"`
 }
+
+// SnapshotConfig controls snapshot creation behavior.
+type SnapshotConfig struct {
+	// MaxFileSizeMB is the largest single file (in MB) a snapshot will read
+	// and store. Larger files are skipped with a warning rather than risking
+	// an out-of-memory read. 0 falls back to DefaultMaxFileSizeMB.
+	MaxFileSizeMB int `toml:"max_file_size_mb"`
+}
+
+// DefaultMaxFileSizeMB is used when SnapshotConfig.MaxFileSizeMB is unset (0).
+const DefaultMaxFileSizeMB = 100
 
 // HooksConfig defines shell commands to run before/after snapshots and restores.
 // Pre-hooks abort the operation on non-zero exit; post-hooks are non-fatal.
@@ -290,6 +302,12 @@ max_timeout_seconds     = 600
 # Maximum output captured per stream (stdout/stderr) before truncation.
 # Increase for projects with verbose test suites.
 max_output_kb = 512
+
+[snapshot]
+# Files larger than this are skipped (with a warning) instead of being
+# read and stored — protects against an out-of-memory read on an
+# accidentally-tracked large binary. 0 = use the built-in default (100 MB).
+# max_file_size_mb = 100
 
 [retention]
 # Maximum snapshots to keep per branch (oldest pruned first). 0 = unlimited.

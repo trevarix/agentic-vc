@@ -402,24 +402,28 @@ func runBranchDiff(cmd *cobra.Command, args []string) error {
 
 	if jsonOutput {
 		type fileDiffJSON struct {
-			Path         string `json:"path"`
-			Type         string `json:"type"`
-			OldHash      string `json:"old_hash,omitempty"`
-			NewHash      string `json:"new_hash,omitempty"`
-			LinesAdded   int    `json:"lines_added"`
-			LinesRemoved int    `json:"lines_removed"`
-			DiffPreview  string `json:"diff_preview,omitempty"`
+			Path            string `json:"path"`
+			Type            string `json:"type"`
+			OldHash         string `json:"old_hash,omitempty"`
+			NewHash         string `json:"new_hash,omitempty"`
+			LinesAdded      int    `json:"lines_added"`
+			LinesRemoved    int    `json:"lines_removed"`
+			DiffPreview     string `json:"diff_preview,omitempty"`
+			Binary          bool   `json:"binary,omitempty"`
+			CountsEstimated bool   `json:"counts_estimated,omitempty"`
 		}
 		files := make([]fileDiffJSON, len(result.Files))
 		for i, f := range result.Files {
 			files[i] = fileDiffJSON{
-				Path:         f.Path,
-				Type:         string(f.Type),
-				OldHash:      f.OldHash,
-				NewHash:      f.NewHash,
-				LinesAdded:   f.LinesAdded,
-				LinesRemoved: f.LinesRemoved,
-				DiffPreview:  f.DiffPreview,
+				Path:            f.Path,
+				Type:            string(f.Type),
+				OldHash:         f.OldHash,
+				NewHash:         f.NewHash,
+				LinesAdded:      f.LinesAdded,
+				LinesRemoved:    f.LinesRemoved,
+				DiffPreview:     f.DiffPreview,
+				Binary:          f.Binary,
+				CountsEstimated: f.CountsEstimated,
 			}
 		}
 		return json.NewEncoder(os.Stdout).Encode(map[string]any{
@@ -438,6 +442,10 @@ func runBranchDiff(cmd *cobra.Command, args []string) error {
 	fmt.Printf("%s %s\n%s\n\n", accent("◆ Branch diff:"), cyan(name), ruler(50))
 	for _, f := range result.Files {
 		symbol, pathColor := changeSymbol(string(f.Type))
+		if f.Binary {
+			fmt.Printf("%s %s (%s)\n", symbol, pathColor(f.Path), dim("binary file"))
+			continue
+		}
 		added := green(fmt.Sprintf("+%d", f.LinesAdded))
 		removed := red(fmt.Sprintf("-%d", f.LinesRemoved))
 		fmt.Printf("%s %s (%s %s)\n", symbol, pathColor(f.Path), added, removed)

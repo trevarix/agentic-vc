@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -46,45 +47,98 @@ type rpcError struct {
 	Message string `json:"message"`
 }
 
+// maxLineBytes bounds a single JSON-RPC request line. Requests larger than
+// this are discarded (not buffered in full) rather than accepted unbounded.
+const maxLineBytes = 32 * 1024 * 1024
+
 // Serve runs the MCP server over stdin/stdout, blocking until EOF.
 //
 // projectRoot is the resolved AVC project root directory (.avc/ parent).
 // compact controls whether tool output JSON is compact or pretty-printed.
 // toolTier selects the advertised tool set: "core", "standard" (default), or "full".
 func Serve(projectRoot string, compact bool, toolTier string) error {
-	enc := json.NewEncoder(os.Stdout)
-	scanner := bufio.NewScanner(os.Stdin)
-	// 4 MB buffer — large diffs can produce substantial JSON output.
-	scanner.Buffer(make([]byte, 4*1024*1024), 4*1024*1024)
+	return serve(os.Stdin, os.Stdout, projectRoot, compact, toolTier)
+}
 
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
+// serve is Serve with the transport as parameters, so it can be exercised
+// with an in-memory pipe in tests.
+func serve(r io.Reader, w io.Writer, projectRoot string, compact bool, toolTier string) error {
+	enc := json.NewEncoder(w)
+	reader := bufio.NewReaderSize(r, 64*1024)
+
+	for {
+		line, tooLong, err := readLine(reader)
+
+		switch {
+		case tooLong:
+			// A request this large is almost certainly a mistake (or a
+			// large avc_resolve_conflict content payload exceeding the
+			// cap) rather than a reason to kill the whole MCP session —
+			// unlike bufio.Scanner, which stops permanently the first time
+			// a single token exceeds its fixed buffer. Report and keep
+			// serving; readLine has already resynchronized to the next line.
+			writeErrorNoID(enc, -32600,
+				fmt.Sprintf("request exceeds the %d byte limit and was discarded; the connection is still open", maxLineBytes))
+		case len(bytes.TrimRight(line, "\r\n")) > 0:
+			trimmed := bytes.TrimRight(line, "\r\n")
+			var req rpcRequest
+			if jsonErr := json.Unmarshal(trimmed, &req); jsonErr != nil {
+				writeErrorNoID(enc, -32700, "parse error: "+jsonErr.Error())
+			} else if len(req.ID) != 0 {
+				// Notifications have no id — they require no response.
+				result, rpcErr := dispatch(projectRoot, compact, toolTier, req.Method, req.Params)
+				resp := rpcResponse{JSONRPC: "2.0", ID: req.ID}
+				if rpcErr != nil {
+					resp.Error = rpcErr
+				} else {
+					resp.Result = result
+				}
+				_ = enc.Encode(resp)
+			}
 		}
 
-		var req rpcRequest
-		if err := json.Unmarshal(line, &req); err != nil {
-			writeErrorNoID(enc, -32700, "parse error: "+err.Error())
-			continue
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
 		}
-
-		// Notifications have no id — they require no response.
-		if len(req.ID) == 0 {
-			continue
-		}
-
-		result, rpcErr := dispatch(projectRoot, compact, toolTier, req.Method, req.Params)
-		resp := rpcResponse{JSONRPC: "2.0", ID: req.ID}
-		if rpcErr != nil {
-			resp.Error = rpcErr
-		} else {
-			resp.Result = result
-		}
-		_ = enc.Encode(resp)
 	}
+}
 
-	return scanner.Err()
+// readLine reads one newline-terminated line from r, in bounded-size chunks
+// via ReadSlice so no single Read call must buffer an entire oversized line.
+// If the accumulated line exceeds maxLineBytes, remaining bytes up to (and
+// including) the next newline are read and discarded — not returned — so the
+// stream resynchronizes cleanly at the next request, and tooLong is reported
+// so the caller can respond with an error instead of silently dropping data.
+//
+// This replaces bufio.Scanner, which permanently stops the entire session
+// (Scan always returns false afterward) the first time one token exceeds its
+// fixed buffer — an unrecoverable failure for what should be a per-request problem.
+func readLine(r *bufio.Reader) (line []byte, tooLong bool, err error) {
+	var buf []byte
+	for {
+		chunk, e := r.ReadSlice('\n')
+		if !tooLong {
+			if len(buf)+len(chunk) > maxLineBytes {
+				tooLong = true
+				buf = nil
+			} else {
+				buf = append(buf, chunk...)
+			}
+		}
+		if e == nil {
+			return buf, tooLong, nil // found the newline
+		}
+		if e != bufio.ErrBufferFull {
+			// Real error (EOF, underlying read error) with a partial,
+			// unterminated final line.
+			return buf, tooLong, e
+		}
+		// ErrBufferFull: ReadSlice's internal buffer filled without finding
+		// '\n' yet — loop again, accumulating (or discarding) further chunks.
+	}
 }
 
 // dispatch routes a method to its handler.
