@@ -151,7 +151,9 @@ func AllTools() []Tool {
 			Name: "avc_restore",
 			Description: "Restore the project to a previous snapshot. " +
 				"On an agent branch this restores the workspace only — the real project root is untouched. " +
-				"Use this to undo mistakes without touching main.",
+				"Use this to undo mistakes without touching main. " +
+				"If the working tree has changed since its last snapshot, that state is captured automatically " +
+				"first — the response's undo_snapshot_id can be passed to avc_restore again to undo this restore itself.",
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{

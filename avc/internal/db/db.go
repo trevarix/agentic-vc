@@ -1007,6 +1007,28 @@ func (s *Store) GetLastMerge(branchID string) (*Merge, error) {
 	return m, nil
 }
 
+// GetLastMergeForProject returns the most recent merge for a project,
+// regardless of which branch it targeted. Merges are recorded under the
+// *agent* branch's ID (see InsertMerge), so callers that only know the
+// project — like Abort, which must find an in-progress merge without
+// knowing which agent branch it belongs to — should use this instead of
+// GetLastMerge(mainBranch.ID), which never matches.
+func (s *Store) GetLastMergeForProject(projectID string) (*Merge, error) {
+	row := s.db.QueryRow(
+		`SELECT id, project_id, branch_id, base_snapshot_id, main_snapshot_id, head_snapshot_id,
+		        status, started_at, finished_at
+		 FROM merges WHERE project_id = ? ORDER BY started_at DESC, rowid DESC LIMIT 1`,
+		projectID,
+	)
+	m := &Merge{}
+	err := row.Scan(&m.ID, &m.ProjectID, &m.BranchID, &m.BaseSnapshotID,
+		&m.MainSnapshotID, &m.HeadSnapshotID, &m.Status, &m.StartedAt, &m.FinishedAt)
+	if err != nil {
+		return nil, fmt.Errorf("no merge record for project")
+	}
+	return m, nil
+}
+
 // UpdateMergeStatus updates the status and finished_at timestamp of a merge.
 func (s *Store) UpdateMergeStatus(id, status string, finishedAt int64) error {
 	_, err := s.db.Exec(

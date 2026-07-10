@@ -15,6 +15,7 @@ import (
 
 	"github.com/trevarix/agentic-vc/avc/internal/branch"
 	"github.com/trevarix/agentic-vc/avc/internal/db"
+	diffpkg "github.com/trevarix/agentic-vc/avc/internal/diff"
 	"github.com/trevarix/agentic-vc/avc/internal/fileutil"
 	"github.com/trevarix/agentic-vc/avc/internal/restore"
 	"github.com/trevarix/agentic-vc/avc/internal/snapshot"
@@ -37,23 +38,41 @@ type Result struct {
 	Files               []FileResult
 	Conflicts           int
 	Clean               int
+	Deleted             int // files removed from main because the branch deleted them
 	Skipped             int
 	PostMergeSnapshotID string // set after a clean merge; empty on conflicts or preview
+	AutoSnapshotID      string // set when Merge captured un-snapshotted workspace changes before merging
+	WorkspaceDirtyFiles int    // Preview only: files changed in the workspace since its last snapshot (not reflected below)
 }
 
-// Preview computes the merge plan without writing any files or recording a merge.
+// Preview computes the merge plan without writing any files or recording a
+// merge. It never snapshots the workspace (unlike Merge), so
+// WorkspaceDirtyFiles reports un-snapshotted workspace changes that this
+// preview does not yet reflect.
 func Preview(projectRoot, branchName string) (*Result, error) {
 	files, _, agentBranch, mainBranch, err := buildPlan(projectRoot, branchName)
 	if err != nil {
 		return nil, err
 	}
-	return summarise("", agentBranch, mainBranch, files), nil
+	result := summarise("", agentBranch, mainBranch, files)
+	result.WorkspaceDirtyFiles = countWorkspaceDirtyFiles(projectRoot, agentBranch)
+	return result, nil
 }
 
 // Merge performs the three-way merge of branchName into main.
 // It auto-snapshots main before writing, records a merge record, and returns the result.
 // If there are conflicts the files are written with conflict markers and status is "conflicts".
 func Merge(projectRoot, branchName string) (*Result, error) {
+	// Phase 0: if the branch's workspace has un-snapshotted changes, capture
+	// them first. Otherwise those changes would be silently absent from the
+	// merge and then permanently lost when the workspace is removed after a
+	// successful merge. Must run before buildPlan so the merge plan reflects
+	// the fresh snapshot, not the stale one.
+	autoSnapshotID, err := autoSnapshotDirtyWorkspace(projectRoot, branchName)
+	if err != nil {
+		return nil, err
+	}
+
 	// Phase 1: build the plan (opens and closes its own DB connection).
 	files, resolvedBaseID, agentBranch, mainBranch, err := buildPlan(projectRoot, branchName)
 	if err != nil {
@@ -73,20 +92,21 @@ func Merge(projectRoot, branchName string) (*Result, error) {
 		return nil, fmt.Errorf("pre-merge snapshot failed: %w", err)
 	}
 
-	// Phase 3: record the merge row and apply files.
+	// Phase 3: record the merge row.
 	store, err := db.Open(projectRoot)
 	if err != nil {
 		return nil, err
 	}
-	defer store.Close()
 
 	proj, err := store.GetProject(projectRoot)
 	if err != nil {
+		store.Close()
 		return nil, err
 	}
 
 	headSnap, err := store.GetHeadSnapshot(agentBranch.ID)
 	if err != nil {
+		store.Close()
 		return nil, fmt.Errorf("branch '%s' has no snapshots to merge", branchName)
 	}
 
@@ -103,35 +123,21 @@ func Merge(projectRoot, branchName string) (*Result, error) {
 		StartedAt:      now,
 	}
 	if err := store.InsertMerge(m); err != nil {
+		store.Close()
 		return nil, fmt.Errorf("insert merge record: %w", err)
 	}
 	store.Close()
 
-	// Apply clean files; write conflict markers for conflicts.
-	hasConflicts := false
-	for _, f := range files {
-		if f.Decision == "skip" {
-			continue
-		}
-		dest := filepath.Join(projectRoot, filepath.FromSlash(f.Path))
-		if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
-			return nil, fmt.Errorf("mkdir for %s: %w", f.Path, err)
-		}
-		if f.Decision == "clean" {
-			data, err := restore.ReadObject(projectRoot, f.BranchHash)
-			if err != nil {
-				return nil, fmt.Errorf("read branch object for %s: %w", f.Path, err)
-			}
-			if err := fileutil.WriteFile(dest, data); err != nil {
-				return nil, fmt.Errorf("write %s: %w", f.Path, err)
-			}
-		} else {
-			// conflict
-			hasConflicts = true
-			if err := writeConflict(projectRoot, dest, f); err != nil {
-				return nil, fmt.Errorf("write conflict for %s: %w", f.Path, err)
-			}
-		}
+	// Phase 3.5: apply the plan to disk. Any failure here marks the merge
+	// "failed" (rather than leaving it stuck "in_progress" forever) so that
+	// `avc merge --abort` can find and roll back the attempt.
+	hasConflicts, applyErr := applyPlan(projectRoot, files)
+	if applyErr != nil {
+		markMergeFailed(projectRoot, mergeID)
+		return nil, fmt.Errorf(
+			"merge apply failed (main may be partially written — run `avc merge --abort` to roll back): %w",
+			applyErr,
+		)
 	}
 
 	// Invalidate stat cache since we wrote to the project root.
@@ -140,6 +146,7 @@ func Merge(projectRoot, branchName string) (*Result, error) {
 	// Phase 4: record merge files and update status.
 	store2, err := db.Open(projectRoot)
 	if err != nil {
+		markMergeFailed(projectRoot, mergeID)
 		return nil, err
 	}
 
@@ -156,6 +163,8 @@ func Merge(projectRoot, branchName string) (*Result, error) {
 		}
 	}
 	if err := store2.InsertMergeFiles(dbFiles); err != nil {
+		_ = store2.UpdateMergeStatus(mergeID, "failed", time.Now().Unix())
+		store2.Close()
 		return nil, fmt.Errorf("insert merge files: %w", err)
 	}
 
@@ -164,11 +173,13 @@ func Merge(projectRoot, branchName string) (*Result, error) {
 		finalStatus = "conflicts"
 	}
 	if err := store2.UpdateMergeStatus(mergeID, finalStatus, time.Now().Unix()); err != nil {
+		store2.Close()
 		return nil, fmt.Errorf("update merge status: %w", err)
 	}
 	store2.Close()
 
 	result := summarise(mergeID, agentBranch, mainBranch, files)
+	result.AutoSnapshotID = autoSnapshotID
 
 	// Post-merge auto-snapshot: capture the merged state as the new HEAD on main.
 	// Only created on a clean merge — conflicts must be resolved first.
@@ -212,19 +223,15 @@ func Abort(projectRoot string) error {
 		return err
 	}
 
-	mainBranch, err := store.EnsureMainBranch(proj.ID)
+	// Look up the last merge by project, not by main's branch ID: merges are
+	// recorded under the *agent* branch's ID (see InsertMerge above), so a
+	// lookup keyed on main's branch ID never matches and abort always fails.
+	m, err := store.GetLastMergeForProject(proj.ID)
 	if err != nil {
-		store.Close()
-		return err
-	}
-
-	m, err := store.GetLastMerge(mainBranch.ID)
-	if err != nil {
-		// try any branch
 		store.Close()
 		return fmt.Errorf("no merge in progress to abort")
 	}
-	if m.Status != "in_progress" && m.Status != "conflicts" {
+	if m.Status != "in_progress" && m.Status != "conflicts" && m.Status != "failed" {
 		store.Close()
 		return fmt.Errorf("last merge has status '%s' — nothing to abort", m.Status)
 	}
@@ -245,6 +252,149 @@ func Abort(projectRoot string) error {
 	}
 	defer store2.Close()
 	return store2.UpdateMergeStatus(mergeID, "aborted", time.Now().Unix())
+}
+
+// autoSnapshotDirtyWorkspace snapshots branchName's workspace if it has
+// changed since the branch's last snapshot, so those changes are captured
+// before the merge plan is built rather than silently dropped and then lost
+// when the workspace is removed after a successful merge. Returns the
+// auto-snapshot's ID, or "" if the workspace was already clean (or the
+// branch is main, which has no workspace).
+func autoSnapshotDirtyWorkspace(projectRoot, branchName string) (string, error) {
+	store, err := db.Open(projectRoot)
+	if err != nil {
+		return "", err
+	}
+	proj, err := store.GetProject(projectRoot)
+	if err != nil {
+		store.Close()
+		return "", err
+	}
+	agentBranch, err := store.GetBranchByName(proj.ID, branchName)
+	if err != nil {
+		store.Close()
+		return "", fmt.Errorf("branch '%s' not found", branchName)
+	}
+	headSnap, headErr := store.GetHeadSnapshot(agentBranch.ID)
+	store.Close()
+
+	ws := branch.WorkspacePath(projectRoot, agentBranch.Name)
+	if ws == "" {
+		return "", nil // main has no workspace
+	}
+	headSnapID := ""
+	if headErr == nil {
+		headSnapID = headSnap.ID
+	}
+
+	dirtySnap, err := snapshot.CreateIfDirty(
+		projectRoot, ws, headSnapID,
+		fmt.Sprintf("auto: pre-merge workspace state for '%s'", branchName),
+		"avc-merge", "un-snapshotted workspace changes captured before merge",
+		agentBranch.ID,
+	)
+	if err != nil {
+		return "", fmt.Errorf("workspace has un-snapshotted changes and auto-snapshot failed: %w", err)
+	}
+	if dirtySnap == nil {
+		return "", nil
+	}
+	return dirtySnap.ID, nil
+}
+
+// countWorkspaceDirtyFiles reports how many files in agentBranch's workspace
+// differ from its last snapshot. Read-only — never snapshots — so Preview
+// can warn about un-snapshotted work without violating its no-side-effects
+// contract.
+func countWorkspaceDirtyFiles(projectRoot string, agentBranch *db.Branch) int {
+	ws := branch.WorkspacePath(projectRoot, agentBranch.Name)
+	if ws == "" {
+		return 0
+	}
+	store, err := db.Open(projectRoot)
+	if err != nil {
+		return 0
+	}
+	headSnap, headErr := store.GetHeadSnapshot(agentBranch.ID)
+	store.Close()
+	if headErr != nil {
+		return 0
+	}
+	result, err := diffpkg.CompareWithCurrentDir(projectRoot, ws, headSnap.ID)
+	if err != nil {
+		return 0
+	}
+	return len(result.Files)
+}
+
+// applyPlan writes clean files, deletes files removed on the branch, and
+// writes conflict markers for files that could not be merged cleanly.
+func applyPlan(projectRoot string, files []FileResult) (hasConflicts bool, err error) {
+	for _, f := range files {
+		if f.Decision == "skip" {
+			continue
+		}
+		dest := filepath.Join(projectRoot, filepath.FromSlash(f.Path))
+
+		switch f.Decision {
+		case "clean":
+			if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+				return hasConflicts, fmt.Errorf("mkdir for %s: %w", f.Path, err)
+			}
+			data, err := restore.ReadObject(projectRoot, f.BranchHash)
+			if err != nil {
+				return hasConflicts, fmt.Errorf("read branch object for %s: %w", f.Path, err)
+			}
+			if err := fileutil.WriteFile(dest, data); err != nil {
+				return hasConflicts, fmt.Errorf("write %s: %w", f.Path, err)
+			}
+		case "delete":
+			if err := os.Remove(dest); err != nil && !os.IsNotExist(err) {
+				return hasConflicts, fmt.Errorf("delete %s: %w", f.Path, err)
+			}
+			removeEmptyParents(projectRoot, dest)
+		case "conflict":
+			hasConflicts = true
+			if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+				return hasConflicts, fmt.Errorf("mkdir for %s: %w", f.Path, err)
+			}
+			if err := writeConflict(projectRoot, dest, f); err != nil {
+				return hasConflicts, fmt.Errorf("write conflict for %s: %w", f.Path, err)
+			}
+		}
+	}
+	return hasConflicts, nil
+}
+
+// removeEmptyParents removes dest's parent directory and any now-empty
+// ancestors up to (but not including) projectRoot, so a deletion merge does
+// not leave orphaned empty directories behind. Best-effort: any error simply
+// leaves the (now harmless, empty) directory in place.
+func removeEmptyParents(projectRoot, dest string) {
+	dir := filepath.Dir(dest)
+	for len(dir) > len(projectRoot) && strings.HasPrefix(dir, projectRoot) {
+		entries, err := os.ReadDir(dir)
+		if err != nil || len(entries) > 0 {
+			return
+		}
+		if err := os.Remove(dir); err != nil {
+			return
+		}
+		dir = filepath.Dir(dir)
+	}
+}
+
+// markMergeFailed sets a merge's status to "failed", best-effort. Called when
+// the apply loop errors out after the merge row was already inserted, so
+// `avc merge --abort` can find and roll back the attempt instead of it being
+// stuck at "in_progress" forever.
+func markMergeFailed(projectRoot, mergeID string) {
+	store, err := db.Open(projectRoot)
+	if err != nil {
+		return
+	}
+	defer store.Close()
+	_ = store.UpdateMergeStatus(mergeID, "failed", time.Now().Unix())
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -343,7 +493,9 @@ func buildPlan(projectRoot, branchName string) ([]FileResult, string, *db.Branch
 			decision = "skip"
 		case bh == rh: // branch unchanged relative to base
 			decision = "skip"
-		case bh == mh: // only branch changed
+		case bh == mh && rh == "": // branch deleted a file main left unchanged
+			decision = "delete"
+		case bh == mh: // only branch changed (added or modified)
 			decision = "clean"
 		case mh == rh: // both main and branch changed to same thing
 			decision = "skip"
@@ -418,14 +570,26 @@ func writeConflict(projectRoot, dest string, f FileResult) error {
 		return b
 	}
 
+	// Label empty sides explicitly (a delete-vs-edit conflict) so the reader
+	// isn't left guessing whether a blank section means "empty file" or
+	// "file deleted on this side".
+	mainLabel := "main (ours)"
+	if f.MainHash == "" {
+		mainLabel = "main (ours) — file deleted on main"
+	}
+	branchLabel := "branch (theirs)"
+	if f.BranchHash == "" {
+		branchLabel = "branch (theirs) — file deleted on branch"
+	}
+
 	var sb strings.Builder
-	sb.WriteString("<<<<<<< main (ours)\n")
+	sb.WriteString("<<<<<<< " + mainLabel + "\n")
 	sb.Write(ensureNewline(mainContent))
 	sb.WriteString("||||||| base (common ancestor)\n")
 	sb.Write(ensureNewline(baseContent))
 	sb.WriteString("=======\n")
 	sb.Write(ensureNewline(branchContent))
-	sb.WriteString(">>>>>>> branch (theirs)\n")
+	sb.WriteString(">>>>>>> " + branchLabel + "\n")
 
 	return fileutil.WriteFile(dest, []byte(sb.String()))
 }
@@ -441,6 +605,8 @@ func summarise(mergeID string, agentBranch, _ *db.Branch, files []FileResult) *R
 		switch f.Decision {
 		case "clean":
 			r.Clean++
+		case "delete":
+			r.Deleted++
 		case "conflict":
 			r.Conflicts++
 		default:
