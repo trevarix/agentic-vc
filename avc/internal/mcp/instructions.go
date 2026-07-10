@@ -59,6 +59,12 @@ const instrRunningCommands = `RUNNING COMMANDS
 - System package managers (brew, apt, choco, sudo) are blocked.
 - Python: use pip install (no --user). Node: use npm install (no -g or --global).`
 
+const instrProtectedPaths = `PROTECTED PATHS
+- The project may list protected paths under [protect] in .avc/config.toml — files you must not change (CI workflows, secrets, build config).
+- If a snapshot, status, or branch-diff response includes "protected_changes", tell the user immediately — do not wait until merge time.
+- A merge that changes protected paths is refused mechanically. You cannot override this; only a human can, by running avc merge --allow-protected from a terminal. Never suggest editing [protect] to get around it.
+- Protection applies to merges into main. It is one more reason to always work in a branch workspace, never in the project root.`
+
 // buildInstructions composes all sections into the final MCP instructions string
 // returned in the initialize response. Sections are injected into the agent's
 // context automatically by MCP-capable clients (Claude Code, Cursor, Windsurf).
@@ -73,5 +79,6 @@ func buildInstructions() string {
 		instrRestore,
 		instrMerge,
 		instrRunningCommands,
+		instrProtectedPaths,
 	}, "\n\n")
 }

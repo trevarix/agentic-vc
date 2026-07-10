@@ -4,6 +4,7 @@ go 1.22
 
 require (
 	github.com/BurntSushi/toml v1.3.2
+	github.com/klauspost/compress v1.17.9
 	github.com/spf13/cobra v1.8.0
 	modernc.org/sqlite v1.29.2
 )

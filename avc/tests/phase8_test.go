@@ -5,7 +5,7 @@
 //       branch-filtered export, version check on import
 //   8.2 Workspace hardlink/reflink: branch creation uses optimised copy (hardlink
 //       where possible, byte-copy as fallback) and produces a warm stat cache
-//   8.3 MCP tool tiers: CoreTools has 4 tools, StandardTools has 11, AllTools > 11,
+//   8.3 MCP tool tiers: CoreTools has 4 tools, StandardTools has 12, AllTools > 12,
 //       ToolsForTier resolves names correctly
 package tests
 
@@ -230,16 +230,16 @@ func TestMCPTiers_CoreHasFourTools(t *testing.T) {
 	}
 }
 
-func TestMCPTiers_StandardHasElevenTools(t *testing.T) {
+func TestMCPTiers_StandardHasTwelveTools(t *testing.T) {
 	tools := mcp.StandardTools()
-	if len(tools) != 11 {
-		t.Errorf("StandardTools() returned %d tools, want 11", len(tools))
+	if len(tools) != 12 {
+		t.Errorf("StandardTools() returned %d tools, want 12", len(tools))
 	}
-	// Must include core tools plus key branch/merge tools.
+	// Must include core tools plus key branch/merge tools and undo.
 	names := toolNames(tools)
 	for _, want := range []string{
 		"avc_snapshot", "avc_list", "avc_diff", "avc_restore", "avc_status",
-		"avc_branch_create", "avc_branch_list", "avc_branch_switch",
+		"avc_undo", "avc_branch_create", "avc_branch_list", "avc_branch_switch",
 		"avc_branch_diff", "avc_merge", "avc_merge_abort",
 	} {
 		if !names[want] {
@@ -261,15 +261,15 @@ func TestMCPTiers_ToolsForTier(t *testing.T) {
 	if len(mcp.ToolsForTier("core")) != 4 {
 		t.Error("ToolsForTier(\"core\") should return 4 tools")
 	}
-	if len(mcp.ToolsForTier("standard")) != 11 {
-		t.Error("ToolsForTier(\"standard\") should return 11 tools")
+	if len(mcp.ToolsForTier("standard")) != 12 {
+		t.Error("ToolsForTier(\"standard\") should return 12 tools")
 	}
 	if len(mcp.ToolsForTier("full")) != len(mcp.AllTools()) {
 		t.Error("ToolsForTier(\"full\") should return all tools")
 	}
 	// Unknown tier falls back to standard.
-	if len(mcp.ToolsForTier("unknown")) != 11 {
-		t.Error("ToolsForTier(\"unknown\") should fall back to 11 standard tools")
+	if len(mcp.ToolsForTier("unknown")) != 12 {
+		t.Error("ToolsForTier(\"unknown\") should fall back to 12 standard tools")
 	}
 }
 

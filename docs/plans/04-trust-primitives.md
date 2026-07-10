@@ -156,11 +156,22 @@ Round-trip both formats; legacy raw objects read fine post-upgrade. fsck detects
 
 ## Exit criteria
 
-- [ ] Two branches editing disjoint regions of the same file merge cleanly; overlapping edits conflict at hunk level only
-- [ ] Preview counts match merge outcomes (including `merged`)
-- [ ] Binary/oversized files never get line-merged
-- [ ] `[protect]` in `block` mode stops a merge touching protected paths; CLI `--allow-protected` overrides; MCP cannot
-- [ ] `avc undo` reverses the last restore and the last merge; `avc undo --list` works; `avc_undo` exposed via MCP
-- [ ] `avc trash restore` recovers swept untracked files
-- [ ] Objects round-trip through zstd; legacy objects still readable; `avc fsck` catches injected corruption and maps it to snapshots
-- [ ] `go test ./...` green; `docs/cli-reference.md` + `docs/architecture.md` document objstore v2, undo, protect, fsck
+- [x] Two branches editing disjoint regions of the same file merge cleanly; overlapping edits conflict at hunk level only
+- [x] Preview counts match merge outcomes (including `merged`)
+- [x] Binary/oversized files never get line-merged
+- [x] `[protect]` in `block` mode stops a merge touching protected paths; CLI `--allow-protected` overrides; MCP cannot
+- [x] `avc undo` reverses the last restore and the last merge; `avc undo --list` works; `avc_undo` exposed via MCP
+- [x] `avc trash restore` recovers swept untracked files
+- [x] Objects round-trip through zstd; legacy objects still readable; `avc fsck` catches injected corruption and maps it to snapshots
+- [x] `go test ./...` green; `docs/cli-reference.md` + `docs/architecture.md` document objstore v2, undo, protect, fsck
+
+### Implementation notes (deviations and decisions)
+
+- **Diff3 preserves bytes exactly.** The merge splits lines keeping their original terminators (`\r\n` vs `\n`) rather than reusing `diff.SplitLines` (which normalizes line endings for comparison). A clean merge must write byte-faithful content back to main — normalizing every line ending of an otherwise-untouched region would itself be data corruption. Consequence: a CRLF-vs-LF difference between sides is honestly a change, not silently papered over.
+- **Merged content is computed once, in `buildPlan`.** Both the clean result and hunk-marked conflict content ride along in `FileResult` (unexported field), so Preview and Merge always agree and `applyPlan` never recomputes. Hunk markers reuse the exact `<<<<<<< main (ours)` format, so `ListConflicts`/`avc_resolve_conflict` work unchanged on hunk conflicts.
+- **Adjacent-line edits conflict (like git).** With no common synchronization point between two touching edits, diff3 correctly reports a conflict rather than guessing — the plan's "adjacent-line edits" test case was written to match real diff3/git semantics.
+- **v2 object format uses a magic header (`AVCO` + format byte + raw size), not a bare format byte.** A single leading byte can't be distinguished from legacy raw content that happens to start with that byte. With the magic, ambiguity is limited to raw files whose content literally starts with `AVCO\x01` — and even those fall back to raw bytes when the zstd frame or size check fails, so no legacy object can be misread. The 8-byte raw size makes `avc storage`'s compression accounting free (no decompression).
+- **Compression dependency pinned to `klauspost/compress v1.17.9`** — the latest release requires Go 1.24 while CI pins 1.22; v1.17.9 keeps `go.mod` at 1.22.
+- **The smoke tests surfaced and fixed two latent bugs beyond the plan:** (1) a malformed `config.toml` crashed every CLI command with a nil-pointer panic in `ensureMainBranchSetup` — it now fails with a clear ".avc/config.toml is malformed" error; (2) the same malformed config would have silently *disabled* the `[protect]` gate (fail-open) — `checkProtectedChanges` now refuses to merge when the config can't be parsed (fail-closed).
+- **Export's implicit fsck was not added** — `avc export` already streams objects byte-for-byte and `avc fsck` covers auditing; wiring fsck into export remains a nice-to-have for Plan 06's remote-sync work, where transfer integrity matters more.
+- **`avc_undo` joins the standard MCP tier** (now 12 tools; tier tests updated). Undoing a merge reactivates the branch *and* rebuilds its workspace from the branch HEAD — without the workspace the "active again" status would be unusable.

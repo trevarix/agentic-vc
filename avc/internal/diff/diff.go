@@ -7,12 +7,11 @@ package diff
 import (
 	"bytes"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/trevarix/agentic-vc/avc/internal/db"
+	"github.com/trevarix/agentic-vc/avc/internal/objstore"
 )
 
 
@@ -131,7 +130,7 @@ func enrichWithLineCounts(projectRoot string, fd *FileDiff) {
 	oldData := ReadObjectSafe(projectRoot, fd.OldHash)
 	newData := ReadObjectSafe(projectRoot, fd.NewHash)
 
-	if isBinary(oldData) || isBinary(newData) {
+	if IsBinary(oldData) || IsBinary(newData) {
 		fd.Binary = true
 		return
 	}
@@ -143,10 +142,12 @@ func enrichWithLineCounts(projectRoot string, fd *FileDiff) {
 	fd.CountsEstimated = estimated
 }
 
-// isBinary reports whether data looks like binary content — the same
+// IsBinary reports whether data looks like binary content — the same
 // heuristic git uses: a NUL byte anywhere in the first 8 KB. Binary files
 // are never diffed as text; a "line count" for them is meaningless.
-func isBinary(data []byte) bool {
+// Exported for the merge package, which must exclude binary content from
+// line-level three-way merging.
+func IsBinary(data []byte) bool {
 	n := len(data)
 	if n > 8192 {
 		n = 8192
@@ -155,13 +156,9 @@ func isBinary(data []byte) bool {
 }
 
 // ReadObjectSafe reads a stored object by hash, returning nil on any error.
+// Thin wrapper over the objstore package, which owns the on-disk format.
 func ReadObjectSafe(projectRoot, hash string) []byte {
-	if len(hash) < 3 {
-		return nil
-	}
-	path := filepath.Join(projectRoot, ".avc", "objects", hash[:2], hash[2:])
-	data, _ := os.ReadFile(path)
-	return data
+	return objstore.ReadSafe(projectRoot, hash)
 }
 
 // SplitLines normalizes line endings and splits data into lines.

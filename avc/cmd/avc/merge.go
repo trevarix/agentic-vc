@@ -13,6 +13,7 @@ import (
 
 var mergePreview bool
 var mergeAbort bool
+var mergeAllowProtected bool
 
 var mergeCmd = &cobra.Command{
 	Use:   "merge <branch>",
@@ -32,6 +33,8 @@ Decisions per file:
 func init() {
 	mergeCmd.Flags().BoolVar(&mergePreview, "preview", false, "Preview the merge without applying changes")
 	mergeCmd.Flags().BoolVar(&mergeAbort, "abort", false, "Abort the last in-progress merge")
+	mergeCmd.Flags().BoolVar(&mergeAllowProtected, "allow-protected", false,
+		"Proceed even if the merge changes [protect] paths (human override; agents cannot pass this)")
 }
 
 func runMerge(cmd *cobra.Command, args []string) error {
@@ -67,7 +70,7 @@ func runMerge(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	result, err := mergepkg.Merge(projectPath, branchName)
+	result, err := mergepkg.MergeWithOptions(projectPath, branchName, mergeAllowProtected)
 	if err != nil {
 		return err
 	}
@@ -90,6 +93,7 @@ func printMergeResult(result *mergepkg.Result, preview bool) {
 			"branch":    result.BranchName,
 			"preview":   preview,
 			"clean":     result.Clean,
+			"merged":    result.Merged,
 			"deleted":   result.Deleted,
 			"conflicts": result.Conflicts,
 			"skipped":   result.Skipped,
@@ -103,6 +107,10 @@ func printMergeResult(result *mergepkg.Result, preview bool) {
 		}
 		if preview && result.WorkspaceDirtyFiles > 0 {
 			m["workspace_dirty_files"] = result.WorkspaceDirtyFiles
+		}
+		if len(result.ProtectedChanges) > 0 {
+			m["protected_changes"] = result.ProtectedChanges
+			m["protected_mode"] = result.ProtectedMode
 		}
 		out, _ := json.MarshalIndent(m, "", "  ")
 		fmt.Println(string(out))
@@ -119,6 +127,9 @@ func printMergeResult(result *mergepkg.Result, preview bool) {
 	conflictStr := failure(fmt.Sprintf("%d", result.Conflicts))
 	skippedStr := dim(fmt.Sprintf("%d", result.Skipped))
 	fmt.Printf("  %s %s %s\n", prop("Clean:    "), cleanStr, dim("file(s) applied automatically"))
+	if result.Merged > 0 {
+		fmt.Printf("  %s %s %s\n", prop("Merged:   "), success(fmt.Sprintf("%d", result.Merged)), dim("file(s) combined line-by-line (both sides changed, no overlap)"))
+	}
 	if result.Deleted > 0 {
 		fmt.Printf("  %s %s %s\n", prop("Deleted:  "), yellow(fmt.Sprintf("%d", result.Deleted)), dim("file(s) removed (deleted on branch)"))
 	}
@@ -131,6 +142,19 @@ func printMergeResult(result *mergepkg.Result, preview bool) {
 			result.WorkspaceDirtyFiles,
 		)))
 		fmt.Printf("  %s\n", dim("Run `avc snapshot` first if you want them included."))
+	}
+
+	if len(result.ProtectedChanges) > 0 {
+		fmt.Printf("\n  %s\n", warn(fmt.Sprintf(
+			"⚠ This merge changes %d protected path(s) ([protect] in .avc/config.toml):",
+			len(result.ProtectedChanges),
+		)))
+		for _, p := range result.ProtectedChanges {
+			fmt.Printf("    %s %s\n", failure("!"), red(p))
+		}
+		if preview && result.ProtectedMode == "block" {
+			fmt.Printf("  %s\n", dim("The merge will be refused unless a human runs it with --allow-protected."))
+		}
 	}
 
 	if result.AutoSnapshotID != "" {
@@ -154,7 +178,7 @@ func printMergeResult(result *mergepkg.Result, preview bool) {
 		fmt.Printf("  %s\n", dim("Main is now at the merged state. Run `avc list` to confirm."))
 	}
 
-	if result.Clean > 0 || result.Deleted > 0 || result.Conflicts > 0 {
+	if result.Clean > 0 || result.Merged > 0 || result.Deleted > 0 || result.Conflicts > 0 {
 		fmt.Printf("\n%s\n", ruler(50))
 		for _, f := range result.Files {
 			switch f.Decision {
@@ -162,6 +186,8 @@ func printMergeResult(result *mergepkg.Result, preview bool) {
 				continue
 			case "conflict":
 				fmt.Printf("  %s  %s  %s\n", failure("!"), red(f.Path), dim("conflict"))
+			case "merged":
+				fmt.Printf("  %s  %s  %s\n", success("✓"), green(f.Path), dim("merged line-by-line"))
 			case "delete":
 				fmt.Printf("  %s  %s  %s\n", yellow("-"), yellow(f.Path), dim("deleted"))
 			default:

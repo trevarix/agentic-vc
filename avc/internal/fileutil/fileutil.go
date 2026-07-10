@@ -138,6 +138,20 @@ func LoadIgnoreRules(projectRoot string) (*IgnoreRules, error) {
 	return LoadIgnoreRulesFrom(filepath.Join(projectRoot, ".avcignore"))
 }
 
+// CompilePatterns builds an IgnoreRules matcher from in-memory pattern
+// lines (same syntax as .avcignore). Used by the protected-paths policy so
+// [protect] globs and ignore rules share one matcher implementation.
+func CompilePatterns(lines []string) *IgnoreRules {
+	var patterns []ignorePattern
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			patterns = append(patterns, compilePattern(line))
+		}
+	}
+	return &IgnoreRules{patterns: patterns}
+}
+
 // LoadIgnoreRulesFrom reads ignore rules from an explicit file path.
 func LoadIgnoreRulesFrom(path string) (*IgnoreRules, error) {
 	data, err := os.ReadFile(path)

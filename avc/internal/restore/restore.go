@@ -5,8 +5,6 @@
 package restore
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +16,7 @@ import (
 	"github.com/trevarix/agentic-vc/avc/internal/db"
 	"github.com/trevarix/agentic-vc/avc/internal/fileutil"
 	"github.com/trevarix/agentic-vc/avc/internal/hooks"
+	"github.com/trevarix/agentic-vc/avc/internal/objstore"
 	"github.com/trevarix/agentic-vc/avc/internal/statcache"
 	"github.com/trevarix/agentic-vc/avc/internal/trash"
 )
@@ -203,81 +202,23 @@ func RestoreToDir(projectRoot, snapshotID, targetDir string) (*Result, error) {
 	}, nil
 }
 
-// objectPath returns the path inside .avc/objects/ where a file's content is stored.
-func objectPath(projectRoot, hash string) string {
-	if len(hash) < 3 {
-		return ""
-	}
-	return filepath.Join(projectRoot, ".avc", "objects", hash[:2], hash[2:])
-}
-
 // ReadObject reads a stored file blob by its hash. Exported for use by merge.
+// Thin wrapper over the objstore package, which owns the on-disk format.
 func ReadObject(projectRoot, hash string) ([]byte, error) {
-	return readObject(projectRoot, hash)
+	return objstore.Read(projectRoot, hash)
 }
 
 // readObject reads a stored file blob by its hash.
 func readObject(projectRoot, hash string) ([]byte, error) {
-	if len(hash) < 3 {
-		return nil, fmt.Errorf("invalid object hash %q", hash)
-	}
-	path := objectPath(projectRoot, hash)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("object %q not found: %w", hash, err)
-	}
-	return data, nil
+	return objstore.Read(projectRoot, hash)
 }
 
 // StoreObject writes file content to the object store under its hash.
-// Called during snapshot creation to persist actual file bytes.
-//
-// Written atomically (temp file + rename) so a crash or disk-full mid-write
-// can never leave a truncated blob on the final path — the existence check
-// below would otherwise treat a torn write as "already stored" forever,
-// permanently corrupting every future snapshot that dedupes against it.
+// Called during snapshot creation to persist actual file bytes. Thin wrapper
+// over the objstore package, which owns the on-disk format (atomic writes,
+// transparent zstd compression, legacy raw objects).
 func StoreObject(projectRoot, hash string, data []byte) error {
-	if len(hash) < 3 {
-		return fmt.Errorf("invalid object hash %q", hash)
-	}
-	path := objectPath(projectRoot, hash)
-	if _, err := os.Stat(path); err == nil {
-		return nil // already stored (content-addressed deduplication)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return err
-	}
-	// The suffix must be unique per call, not just per process: concurrent
-	// goroutines (e.g. two agents snapshotting identical new content at once)
-	// share a PID, so a PID-only suffix would collide and race on Windows,
-	// where a file mid-rename cannot be opened by a second writer.
-	suffix := make([]byte, 4)
-	_, _ = rand.Read(suffix)
-	tmp := fmt.Sprintf("%s.%d.%s.tmp", path, os.Getpid(), hex.EncodeToString(suffix))
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-
-	// Two concurrent StoreObject calls for the same hash are guaranteed to be
-	// writing byte-identical content (that's what content-addressing means),
-	// but Windows does not make concurrent renames onto the same destination
-	// as forgiving as POSIX rename(2) — a losing rename can surface as
-	// "access is denied" even though the winner's result is fine. Retry a
-	// few times against a destination that may only just now have appeared.
-	var renameErr error
-	for attempt := 0; attempt < 5; attempt++ {
-		if renameErr = os.Rename(tmp, path); renameErr == nil {
-			return nil
-		}
-		if _, statErr := os.Stat(path); statErr == nil {
-			os.Remove(tmp)
-			return nil // a concurrent writer already stored identical content
-		}
-		time.Sleep(time.Duration(attempt+1) * 5 * time.Millisecond)
-	}
-	os.Remove(tmp)
-	return renameErr
+	return objstore.Store(projectRoot, hash, data)
 }
 
 // removeEmptyDirs removes every directory under root that ends up empty,

@@ -21,6 +21,11 @@ import (
 
 const trashDir = "trash"
 
+// metaFile, inside each op directory, records the directory quarantined
+// files were moved out of (project root for main, the workspace for a
+// branch) so `avc trash restore` can put them back where they came from.
+const metaFile = ".avc-trash-meta"
+
 // Session groups every file quarantined by one operation (e.g. one restore)
 // under a single timestamped directory, so the whole operation can be
 // inspected or emptied as a unit.
@@ -53,9 +58,15 @@ func (s *Session) Move(targetDir, rel string) error {
 		return nil
 	}
 
-	dst := filepath.Join(s.projectRoot, ".avc", trashDir, s.opID, filepath.FromSlash(rel))
+	opDir := filepath.Join(s.projectRoot, ".avc", trashDir, s.opID)
+	dst := filepath.Join(opDir, filepath.FromSlash(rel))
 	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
 		return fmt.Errorf("create trash dir: %w", err)
+	}
+	if !s.created {
+		// First quarantined file — record where files came from so
+		// `avc trash restore` can put them back. Best-effort.
+		_ = os.WriteFile(filepath.Join(opDir, metaFile), []byte(targetDir), 0644)
 	}
 	if err := os.Rename(src, dst); err != nil {
 		return fmt.Errorf("move %s to trash: %w", rel, err)
@@ -117,6 +128,9 @@ func readEntry(root, opID string) (Entry, error) {
 		if err != nil || d.IsDir() {
 			return err
 		}
+		if filepath.Base(path) == metaFile {
+			return nil // internal bookkeeping, not a quarantined file
+		}
 		rel, relErr := filepath.Rel(filepath.Join(root, opID), path)
 		if relErr != nil {
 			return relErr
@@ -145,6 +159,60 @@ func parseKind(opID string) string {
 		return ""
 	}
 	return parts[5]
+}
+
+// Restore moves quarantined files from a trash entry back to where they came
+// from (the directory recorded when they were quarantined; project root when
+// no record exists). Pass path="" to restore every file in the entry, or a
+// specific relative path to restore just that file. Existing files at the
+// destination are never overwritten — they are reported as skipped instead,
+// since the file on disk may hold newer work.
+func Restore(projectRoot, opID, path string) (restored, skipped []string, err error) {
+	opDir := filepath.Join(projectRoot, ".avc", trashDir, opID)
+	if _, statErr := os.Stat(opDir); os.IsNotExist(statErr) {
+		return nil, nil, fmt.Errorf("trash entry '%s' not found", opID)
+	}
+
+	targetDir := projectRoot
+	if meta, metaErr := os.ReadFile(filepath.Join(opDir, metaFile)); metaErr == nil {
+		if dir := strings.TrimSpace(string(meta)); dir != "" {
+			targetDir = dir
+		}
+	}
+
+	entry, err := readEntry(filepath.Join(projectRoot, ".avc", trashDir), opID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	for _, rel := range entry.Files {
+		if path != "" && rel != path {
+			continue
+		}
+		src := filepath.Join(opDir, filepath.FromSlash(rel))
+		dst := filepath.Join(targetDir, filepath.FromSlash(rel))
+
+		if _, statErr := os.Stat(dst); statErr == nil {
+			skipped = append(skipped, rel) // never clobber a live file
+			continue
+		}
+		if mkErr := os.MkdirAll(filepath.Dir(dst), 0755); mkErr != nil {
+			return restored, skipped, fmt.Errorf("create parent for %s: %w", rel, mkErr)
+		}
+		if mvErr := os.Rename(src, dst); mvErr != nil {
+			return restored, skipped, fmt.Errorf("restore %s from trash: %w", rel, mvErr)
+		}
+		restored = append(restored, rel)
+	}
+	if path != "" && len(restored) == 0 && len(skipped) == 0 {
+		return nil, nil, fmt.Errorf("file '%s' not found in trash entry '%s'", path, opID)
+	}
+
+	// If everything was restored, remove the now-empty entry (best-effort).
+	if remaining, listErr := readEntry(filepath.Join(projectRoot, ".avc", trashDir), opID); listErr == nil && len(remaining.Files) == 0 {
+		_ = os.RemoveAll(opDir)
+	}
+	return restored, skipped, nil
 }
 
 // Empty removes trash entries older than olderThan. Pass 0 to remove all

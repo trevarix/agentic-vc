@@ -25,6 +25,21 @@ type Config struct {
 	Retention RetentionConfig `toml:"retention"`
 	Hooks     HooksConfig     `toml:"hooks"`
 	Snapshot  SnapshotConfig  `toml:"snapshot"`
+	Protect   ProtectConfig   `toml:"protect"`
+}
+
+// ProtectConfig bounds what agent-driven integration may change. Paths
+// matching these globs are refused (mode "block") or flagged (mode "warn")
+// when a merge would modify them — enforced mechanically, like run.enabled:
+// agents cannot lift it, only a human editing config.toml or passing the
+// CLI-only --allow-protected flag can.
+type ProtectConfig struct {
+	// Paths are gitignore-style globs (same syntax as .avcignore, including
+	// ** and trailing-/ for directories) naming files agents must not change.
+	Paths []string `toml:"paths"`
+	// Mode is "block" (default — merges touching protected paths are
+	// refused) or "warn" (merges proceed with a prominent warning).
+	Mode string `toml:"mode"`
 }
 
 // SnapshotConfig controls snapshot creation behavior.
@@ -308,6 +323,15 @@ max_output_kb = 512
 # read and stored — protects against an out-of-memory read on an
 # accidentally-tracked large binary. 0 = use the built-in default (100 MB).
 # max_file_size_mb = 100
+
+[protect]
+# Paths agents must not change. Merges that would modify a matching path are
+# refused (mode = "block", the default) or flagged (mode = "warn"). Globs use
+# .avcignore syntax, including ** and trailing / for directories.
+# A human can override a blocked merge with: avc merge <branch> --allow-protected
+# (the MCP merge tool has no such override — agents cannot lift this).
+# paths = [".github/workflows/**", "secrets/**", "*.pem"]
+# mode  = "block"
 
 [retention]
 # Maximum snapshots to keep per branch (oldest pruned first). 0 = unlimited.

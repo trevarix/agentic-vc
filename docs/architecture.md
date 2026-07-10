@@ -97,6 +97,24 @@ File blobs are stored in `.avc/objects/<first-2-hex>/<remaining-62-hex>` — the
 - **Immutability** — objects are write-once; restoring a snapshot is always a pure read.
 - **Cheap snapshots** — only changed files produce new objects; unchanged files cost nothing beyond a DB row.
 
+The `internal/objstore` package is the single owner of the store — all reads
+and writes (from `snapshot`, `restore`, `diff`, `merge`, `fsck`) go through it.
+
+**On-disk object format (v2).** Each object is one of two forms, detected by
+prefix on read:
+
+- *Compressed*: a 13-byte header — magic `AVCO`, format byte `0x01`, 8-byte
+  little-endian raw size — followed by one zstd frame. Written only when
+  compression actually saves space.
+- *Raw*: the exact original bytes, headerless. Every object written before
+  compression existed is this form, as is content that doesn't compress.
+
+Anything that fails to parse as a well-formed compressed object (including
+the pathological legacy file whose own content starts with the magic) falls
+back to raw bytes, so the two forms coexist indefinitely with no migration.
+Writes are atomic (unique temp file + rename). `avc fsck` re-hashes every
+object to audit integrity; the hot read path deliberately does not.
+
 ### SQLite schema
 
 ```sql

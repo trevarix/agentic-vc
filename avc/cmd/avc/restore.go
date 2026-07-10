@@ -10,6 +10,7 @@ import (
 
 	branchpkg "github.com/trevarix/agentic-vc/avc/internal/branch"
 	"github.com/trevarix/agentic-vc/avc/internal/db"
+	"github.com/trevarix/agentic-vc/avc/internal/oplog"
 	"github.com/trevarix/agentic-vc/avc/internal/restore"
 	"github.com/trevarix/agentic-vc/avc/internal/snapshot"
 	"github.com/spf13/cobra"
@@ -86,6 +87,11 @@ func runRestore(cmd *cobra.Command, args []string) error {
 	if preSnap != nil {
 		undoID = preSnap.ID
 	}
+
+	// Record in the operations log so `avc undo` can reverse this restore.
+	// Best-effort: the restore already succeeded.
+	_ = oplog.Record(projectPath, activeBranchID, oplog.KindRestore, undoID,
+		fmt.Sprintf("restored snapshot %s", snapshotID))
 
 	if jsonOutput {
 		return json.NewEncoder(os.Stdout).Encode(map[string]any{
