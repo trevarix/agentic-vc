@@ -353,21 +353,22 @@ avc undo --json
 
 ---
 
-## `avc fsck`
+## `avc verify`
 
 Re-hashes every object in the store and reports any whose content no longer
 matches its content-addressed filename. The hot read path deliberately skips
-this check (it would double restore cost) — fsck is the explicit audit.
+this check (it would double restore cost) — verify is the explicit audit.
+`avc fsck` works as an alias for git/unix muscle memory.
 
 ```bash
-avc fsck             # verify; exits non-zero if corruption is found
-avc fsck --repair    # quarantine corrupt objects to .avc/corrupt/
-avc fsck --json
+avc verify             # exits non-zero if corruption is found
+avc verify --repair    # quarantine corrupt objects to .avc/corrupt/
+avc verify --json
 ```
 
 Each corrupt object is mapped to the snapshots that reference it, so you
 know exactly which history is damaged. The non-zero exit on corruption makes
-fsck suitable as a CI or pre-backup gate.
+verify suitable as a CI or pre-backup gate.
 
 ---
 
@@ -505,4 +506,4 @@ Objects in `.avc/objects/` are stored zstd-compressed when compression saves
 space (a 13-byte `AVCO` header records the original size), and as raw bytes
 otherwise. Objects written by older AVC versions remain readable — the two
 forms coexist freely. `avc storage` reports the on-disk vs. logical size and
-how many objects are compressed; `avc fsck` verifies both forms.
+how many objects are compressed; `avc verify` checks both forms.

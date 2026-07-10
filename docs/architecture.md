@@ -112,7 +112,7 @@ prefix on read:
 Anything that fails to parse as a well-formed compressed object (including
 the pathological legacy file whose own content starts with the magic) falls
 back to raw bytes, so the two forms coexist indefinitely with no migration.
-Writes are atomic (unique temp file + rename). `avc fsck` re-hashes every
+Writes are atomic (unique temp file + rename). `avc verify` re-hashes every
 object to audit integrity; the hot read path deliberately does not.
 
 ### SQLite schema

@@ -12,37 +12,38 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var fsckRepair bool
+var verifyRepair bool
 
-var fsckCmd = &cobra.Command{
-	Use:   "fsck",
-	Short: "Verify object-store integrity (re-hash every stored blob)",
-	Long: `Re-hashes every object in .avc/objects/ and reports any whose content no
-longer matches its content-addressed filename (disk corruption, tampering,
-or a torn write predating atomic object writes).
+var verifyCmd = &cobra.Command{
+	Use:     "verify",
+	Aliases: []string{"fsck"}, // familiar spelling for git/unix users
+	Short:   "Verify stored history is intact (re-hash every stored file version)",
+	Long: `Re-hashes every stored file version in .avc/objects/ and reports any whose
+content no longer matches its content-addressed filename (disk corruption,
+tampering, or a torn write predating atomic object writes).
 
 Pass --repair to quarantine corrupt objects to .avc/corrupt/ so nothing
 dedupes against or restores from them; the affected snapshots are listed so
 you know which history is damaged.
 
-Exits non-zero when corruption is found, so fsck can gate CI or backups.`,
-	RunE: runFsck,
+Exits non-zero when corruption is found, so verify can gate CI or backups.`,
+	RunE: runVerify,
 }
 
 func init() {
-	fsckCmd.Flags().BoolVar(&fsckRepair, "repair", false, "Quarantine corrupt objects to .avc/corrupt/")
-	rootCmd.AddCommand(fsckCmd)
+	verifyCmd.Flags().BoolVar(&verifyRepair, "repair", false, "Quarantine corrupt objects to .avc/corrupt/")
+	rootCmd.AddCommand(verifyCmd)
 }
 
-func runFsck(cmd *cobra.Command, args []string) error {
+func runVerify(cmd *cobra.Command, args []string) error {
 	projectPath, err := requireInitializedProject()
 	if err != nil {
 		return err
 	}
 
-	result, err := fsck.Run(projectPath, fsckRepair)
+	result, err := fsck.Run(projectPath, verifyRepair)
 	if err != nil {
-		return fmt.Errorf("fsck: %w", err)
+		return fmt.Errorf("verify: %w", err)
 	}
 
 	if jsonOutput {
@@ -67,8 +68,8 @@ func runFsck(cmd *cobra.Command, args []string) error {
 					fmt.Printf("      %s %s\n", dim("damages snapshot"), cyan(snapID))
 				}
 			}
-			if !fsckRepair {
-				fmt.Printf("\n%s\n", dim("Run `avc fsck --repair` to quarantine corrupt objects to .avc/corrupt/."))
+			if !verifyRepair {
+				fmt.Printf("\n%s\n", dim("Run `avc verify --repair` to quarantine corrupt objects to .avc/corrupt/."))
 			}
 		}
 	}
