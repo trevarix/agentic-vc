@@ -1,6 +1,18 @@
+<div align="center">
+
 # AVC — Agentic Version Control
 
-A local version control system built for the agent era. AVC gives agents and users four primitives to work safely — **snapshot**, **diff**, **branch**, and **merge** — without the complexity of Git.
+**Version control built for the agent era.**
+Snapshot, diff, branch, and merge — without the complexity of Git.
+
+[![CI](https://github.com/trevarix/agentic-vc/actions/workflows/ci.yml/badge.svg)](https://github.com/trevarix/agentic-vc/actions/workflows/ci.yml)
+[![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8?logo=go&logoColor=white)](avc/go.mod)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
+[![MCP](https://img.shields.io/badge/MCP-server-6E56CF)](#agent-integration)
+
+</div>
+
+AVC gives agents and users four primitives to work safely:
 
 | Primitive | What it does |
 |-----------|-------------|
@@ -12,6 +24,17 @@ A local version control system built for the agent era. AVC gives agents and use
 Beyond the four primitives, AVC adds the trust and scale layer agent-assisted development needs: **`avc undo`** reverses the last restore or merge with zero arguments, **protected paths** mechanically block agents from touching files like CI config or secrets, **`avc verify`** audits stored history for corruption, **`avc watch`** checkpoints continuously so safety doesn't depend on an agent remembering to snapshot, **`avc bisect`** finds regressions in O(log n) test runs, **`avc timeline`** tells the story of what your agents did session by session, and **`avc merge --train`** merges a fleet of agent branches in sequence.
 
 AVC also runs as an **MCP server** so any agent framework (Claude Code, Cursor, Windsurf) can call it directly as a tool.
+
+### Contents
+
+- [Requirements](#requirements)
+- [Quick start](#quick-start)
+- [Agent integration](#agent-integration)
+- [How branching works](#how-branching-works)
+- [VSCode extension](#vscode-extension)
+- [Development](#development)
+- [Project layout](#project-layout)
+- [Docs](#docs)
 
 ---
 
@@ -62,32 +85,36 @@ This writes the MCP server config and agent instruction files for each framework
 
 ### 3. Core commands
 
+**Snapshots & history**
+
 ```bash
-# Snapshots
 avc snapshot "Before refactor"
 avc snapshot "Agent run #3" --agent "claude" --notes "Fixed the auth bug" --session sess-1 --task "add auth"
-avc list
+avc list                              # avc search "auth refactor" for full-text search
 avc info <snapshot-id>
 avc diff <from-id> <to-id>
 avc restore <snapshot-id>
 avc log
 avc delete <snapshot-id>
-avc search "auth refactor"            # full-text search on labels/notes
 avc status                            # working tree vs. last snapshot
+```
 
-# Undo — reverse the last restore or merge, zero arguments
-avc undo
+**Undo, continuous checkpointing & timeline**
+
+```bash
+avc undo                              # reverse the last restore or merge, zero arguments
 avc undo --list
 
-# Continuous checkpointing — makes safety structural, not behavioral
 avc watch                             # foreground daemon; debounced auto-checkpoints
-avc watch --status
+avc watch --status                    # makes safety structural, not behavioral
 
-# Timeline — what your agents did, grouped by session
-avc timeline
+avc timeline                          # what your agents did, grouped by session
 avc timeline --session sess-1
+```
 
-# Branches (agent workspaces)
+**Branches (agent workspaces)**
+
+```bash
 avc branch create feature/my-task
 avc branch create feature/tests --from-branch feature/my-task   # stack on another branch
 avc branch list
@@ -95,29 +122,38 @@ avc branch switch main
 avc branch diff feature/my-task              # cumulative diff vs. base
 avc branch diff main..feature/my-task        # compare two branches' HEADs
 avc branch delete feature/my-task
+```
 
-# Merge
+**Merge**
+
+```bash
 avc merge feature/my-task --preview   # dry-run: shows clean/merged/conflict/skipped counts
 avc merge feature/my-task             # apply: auto-snapshots main first
 avc merge --abort                     # undo: restores main from pre-merge snapshot
 avc merge --train a b c --validate "go test ./..."   # merge a fleet in sequence
+```
 
-# Bisect — find the snapshot that broke a command, O(log n)
+**Bisect** — find the snapshot that broke a command, O(log n)
+
+```bash
 avc bisect --good <snapshot-id> --cmd "go test ./..."
+```
 
-# File inspection
+**File inspection & surgical restore**
+
+```bash
 avc annotate <file>                   # show which snapshot introduced each line
 avc cat <snapshot-id> <file>          # print file content from a snapshot
 avc diff-current <snapshot-id>        # diff a snapshot against the current working tree
 avc file-history <file>               # list all snapshots that contain a file
-
-# Surgical restore
 avc restore-file <snapshot-id> <file> # restore a single file from a snapshot
+```
 
-# Workspace execution
+**Workspace execution, integrity, storage & portability**
+
+```bash
 avc run --branch <name> <command>     # run a command inside a branch workspace
 
-# Integrity, storage, and portability
 avc verify --repair                   # audit stored history for corruption
 avc trash list                        # files quarantined by a restore, recoverable
 avc gc --run                          # reclaim disk space from orphaned objects
@@ -125,7 +161,6 @@ avc storage                           # disk usage breakdown, compression stats
 avc export --branch feature/my-task   # bundle snapshots to a .avc.tar.gz file
 avc import --from bundle.avc.tar.gz
 
-# Web UI
 avc ui                                # standalone web UI at localhost:3004
 ```
 
@@ -163,6 +198,10 @@ Running `--skills` multiple times is safe — existing files are never overwritt
 
 Tools are exposed in three tiers (`avc mcp serve --tier core|standard|full`; `standard` is the default) so agents with small context windows aren't handed every tool at once.
 
+<details>
+<summary><strong>Full tool list (27 tools across core / standard / full)</strong></summary>
+<br>
+
 | Tool | Tier | Description |
 |------|------|-------------|
 | `avc_snapshot` | core | Save a snapshot (workspace-aware on agent branches; accepts `session_id`/`task`) |
@@ -190,6 +229,8 @@ Tools are exposed in three tiers (`avc mcp serve --tier core|standard|full`; `st
 | `avc_tag_snapshot` / `avc_untag_snapshot` | full | Apply or remove a machine-readable milestone tag |
 | `avc_list_conflicts` / `avc_resolve_conflict` | full | Inspect and resolve merge conflicts |
 | `avc_bisect` | full | Find the snapshot that broke a command, O(log n) (requires human opt-in) |
+
+</details>
 
 ---
 
@@ -292,6 +333,9 @@ npm run watch       # rebuild on save
 
 ## Project layout
 
+<details>
+<summary><strong>Expand full tree</strong></summary>
+
 ```
 avc/
   main.go
@@ -325,14 +369,7 @@ extension/src/           # TypeScript — extension, sidebar, diff viewer, CLI p
 docs/                    # architecture, CLI reference, contributing guide
 ```
 
----
-
-## Windows note
-
-Binaries built with `go install` are placed in `%USERPROFILE%\go\bin\`. If Windows Smart App Control blocks the binary:
-
-- Disable Smart App Control in **Windows Security → App & browser control → Smart App Control settings** (recommended for developer machines)
-- Or use `go run . <command>` during development instead of the installed binary
+</details>
 
 ---
 
