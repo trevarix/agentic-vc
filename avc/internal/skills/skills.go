@@ -652,9 +652,13 @@ Do not assess whether the change is "small enough" or "easily reversible" — th
 {
   "label": "auto: before <what you are about to do>",
   "agent_name": "claude",
-  "notes": "<brief description of the change planned>"
+  "notes": "<brief description of the change planned>",
+  "session_id": "<stable ID for this conversation — reuse it on every snapshot>",
+  "task": "<one-line description of the overall task>"
 }
 ` + "```" + `
+
+Always pass ` + "`session_id`" + ` and ` + "`task`" + ` — they are how ` + "`avc timeline`" + ` groups your snapshots into a reviewable story for the user. Use the same ` + "`session_id`" + ` for the whole conversation and the same ` + "`task`" + ` for the whole task, not per-step values.
 
 ## Label format — always use the ` + "`auto:`" + ` prefix
 

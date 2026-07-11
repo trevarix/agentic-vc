@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/trevarix/agentic-vc/avc/internal/api"
@@ -19,6 +20,7 @@ import (
 	"github.com/trevarix/agentic-vc/avc/internal/oplog"
 	"github.com/trevarix/agentic-vc/avc/internal/restore"
 	"github.com/trevarix/agentic-vc/avc/internal/snapshot"
+	"github.com/trevarix/agentic-vc/avc/internal/timeline"
 )
 
 // Serve starts the HTTP server. Blocks until the server stops.
@@ -63,6 +65,7 @@ func Serve(addr, projectPath string) error {
 	// API endpoints — status & storage.
 	mux.HandleFunc("/api/status", auth(statusHandler(projectPath)))
 	mux.HandleFunc("/api/storage", auth(storageHandler(projectPath)))
+	mux.HandleFunc("/api/timeline", auth(timelineHandler(projectPath)))
 
 	srv := &http.Server{Addr: addr, Handler: mux}
 	return srv.ListenAndServe()
@@ -94,6 +97,8 @@ func snapshotToMap(s *db.Snapshot) map[string]any {
 		"total_size":    s.TotalSize,
 		"notes":         s.Notes,
 		"branch_id":     s.BranchID,
+		"session_id":    s.SessionID,
+		"task":          s.Task,
 	}
 }
 
@@ -668,6 +673,35 @@ func storageHandler(projectPath string) http.HandlerFunc {
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	}
+}
+
+// GET /api/timeline?branch=<name>&session=<id>&limit=<n>
+// branch defaults to the active branch.
+func timelineHandler(projectPath string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w)
+			return
+		}
+		q := r.URL.Query()
+		branchName := q.Get("branch")
+		if branchName == "" {
+			branchName = branchpkg.GetActiveBranchName(projectPath)
+		}
+		limit := 0
+		if l := q.Get("limit"); l != "" {
+			limit, _ = strconv.Atoi(l)
+		}
+		result, err := timeline.Build(projectPath, branchName, q.Get("session"), limit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if result.Sessions == nil {
+			result.Sessions = []timeline.Session{}
 		}
 		writeJSON(w, http.StatusOK, result)
 	}

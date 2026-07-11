@@ -112,6 +112,8 @@ func AllTools() []Tool {
 					"label":      {Type: "string", Description: "Required. Prefix with 'auto:' — e.g. 'auto: before auth refactor' or 'auto: after test fixes'"},
 					"agent_name": {Type: "string", Description: "Name of the agent creating this snapshot, e.g. 'claude'. Defaults to 'agent' if omitted."},
 					"notes":      {Type: "string", Description: "Brief description of what you are about to do or just completed"},
+					"session_id": {Type: "string", Description: "Stable ID for your current session/conversation. Pass the same value on every snapshot in the session so `avc timeline` can group your work."},
+					"task":       {Type: "string", Description: "One-line description of the overall task this session is doing (not this individual step)"},
 				},
 				Required: []string{"label"},
 			},
@@ -197,6 +199,7 @@ func AllTools() []Tool {
 				Properties: map[string]Property{
 					"name":             {Type: "string", Description: "Branch name (e.g. 'feature/add-auth', 'fix/payment-bug')"},
 					"from_snapshot_id": {Type: "string", Description: "Base snapshot ID. Defaults to HEAD of main if omitted."},
+					"from_branch":      {Type: "string", Description: "Stack on another branch: use its HEAD snapshot as the base. The new branch starts from that branch's latest work; merging still targets main."},
 				},
 				Required: []string{"name"},
 			},
@@ -226,7 +229,8 @@ func AllTools() []Tool {
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
-					"name": {Type: "string", Description: "Branch name"},
+					"name":    {Type: "string", Description: "Branch name"},
+					"against": {Type: "string", Description: "Compare this branch's HEAD against another branch's HEAD instead of the base→HEAD diff. Useful to see how two parallel agent branches differ."},
 				},
 				Required: []string{"name"},
 			},
@@ -290,6 +294,24 @@ func AllTools() []Tool {
 			},
 		},
 		{
+			Name: "avc_merge_train",
+			Description: "Merge several branches into main in order, each against the current main " +
+				"(so each merge sees the previous ones). Stops at the first branch that conflicts or is " +
+				"blocked by [protect]; completed merges are kept, each reversible with avc_undo. " +
+				"An optional validate command runs after every merge — a failure rolls that one merge " +
+				"back, reactivates its branch, and stops the train (validate requires [run] enabled = true, " +
+				"set by a human). " +
+				"Requires the same explicit user approval as avc_merge; one approval covers the whole train.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"branches": {Type: "string", Description: "Comma-separated branch names in merge order, e.g. 'feat/a,feat/b,feat/c'"},
+					"validate": {Type: "string", Description: "Optional command to run against main after each merge; non-zero exit rolls that merge back and stops the train"},
+				},
+				Required: []string{"branches"},
+			},
+		},
+		{
 			Name:        "avc_merge_abort",
 			Description: "Abort the last in-progress or conflicted merge. Restores main from the pre-merge auto-snapshot.",
 			InputSchema: InputSchema{Type: "object"},
@@ -319,6 +341,30 @@ func AllTools() []Tool {
 					"timeout_seconds": {Type: "integer", Description: "Timeout in seconds (default 180, max 600). Overrides config."},
 				},
 				Required: []string{"branch", "command"},
+			},
+		},
+		{
+			Name: "avc_bisect",
+			Description: "Find the first snapshot that broke a test command via binary search over " +
+				"snapshot history — O(log n) runs instead of restoring snapshots one by one. " +
+				"Each candidate is materialized into a throwaway scratch workspace and the command " +
+				"runs through the same sandbox as avc_run_in_workspace. " +
+				"Exit-code protocol: 0 = good, 125 = skip (cannot judge), anything else = bad. " +
+				"Returns the first bad snapshot, its predecessor, and a summary of what changed between them. " +
+				"\n\nREQUIRES [run] enabled = true in .avc/config.toml — set manually by a human; " +
+				"agents cannot enable it. " +
+				"\n\nIMPORTANT: Always present the full command to the user and obtain explicit " +
+				"approval before calling this tool. Never call it autonomously.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"cmd":             {Type: "string", Description: "Test command; exit 0 = good, 125 = skip, other = bad"},
+					"good":            {Type: "string", Description: "Known-good snapshot ID"},
+					"bad":             {Type: "string", Description: "Known-bad snapshot ID (default: branch HEAD)"},
+					"branch":          {Type: "string", Description: "Branch to search (default: main)"},
+					"timeout_seconds": {Type: "integer", Description: "Per-step timeout in seconds (default: sandbox default)"},
+				},
+				Required: []string{"cmd", "good"},
 			},
 		},
 		{

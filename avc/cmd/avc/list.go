@@ -139,6 +139,8 @@ func runList(cmd *cobra.Command, args []string) error {
 			TotalSize    int64  `json:"total_size"`
 			Notes        string `json:"notes"`
 			BranchID     string `json:"branch_id"`
+			SessionID    string `json:"session_id"`
+			Task         string `json:"task"`
 		}
 		out := make([]snapshotJSON, len(snapshots))
 		for i, s := range snapshots {
@@ -151,6 +153,8 @@ func runList(cmd *cobra.Command, args []string) error {
 				TotalSize:    s.TotalSize,
 				Notes:        s.Notes,
 				BranchID:     s.BranchID,
+				SessionID:    s.SessionID,
+				Task:         s.Task,
 			}
 		}
 		return json.NewEncoder(os.Stdout).Encode(out)

@@ -116,6 +116,38 @@ func RemoveWorkspace(projectRoot, branchName string) error {
 // is used. Branch creation never takes a new snapshot — it inherits the base
 // by reference only.
 func Create(projectRoot, name, baseSnapshotID string) (*db.Branch, error) {
+	return create(projectRoot, name, baseSnapshotID, "")
+}
+
+// CreateFromBranch creates a stacked branch: its base snapshot is the parent
+// branch's current HEAD, so the child starts from the parent's latest work.
+// Merging a child still targets main — the base snapshot already encodes the
+// fork point, so the three-way math is unchanged. The parent is recorded for
+// lineage display only.
+func CreateFromBranch(projectRoot, name, parentName string) (*db.Branch, error) {
+	store, err := db.Open(projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	project, err := store.GetProject(projectRoot)
+	if err != nil {
+		store.Close()
+		return nil, fmt.Errorf("project not initialized: %w", err)
+	}
+	parent, err := store.GetBranchByName(project.ID, parentName)
+	if err != nil {
+		store.Close()
+		return nil, fmt.Errorf("parent branch '%s' not found", parentName)
+	}
+	head, err := store.GetHeadSnapshot(parent.ID)
+	store.Close()
+	if err != nil {
+		return nil, fmt.Errorf("parent branch '%s' has no snapshots to branch from — snapshot it first", parentName)
+	}
+	return create(projectRoot, name, head.ID, parent.ID)
+}
+
+func create(projectRoot, name, baseSnapshotID, parentBranchID string) (*db.Branch, error) {
 	if err := ValidateBranchName(name); err != nil {
 		return nil, err
 	}
@@ -158,6 +190,7 @@ func Create(projectRoot, name, baseSnapshotID string) (*db.Branch, error) {
 		BaseSnapshotID: baseSnapshotID,
 		CreatedAt:      time.Now().Unix(),
 		Status:         "active",
+		ParentBranchID: parentBranchID,
 	}
 	if err := store.InsertBranch(b); err != nil {
 		return nil, fmt.Errorf("create branch: %w", err)

@@ -26,7 +26,27 @@ type Config struct {
 	Hooks     HooksConfig     `toml:"hooks"`
 	Snapshot  SnapshotConfig  `toml:"snapshot"`
 	Protect   ProtectConfig   `toml:"protect"`
+	Watch     WatchConfig     `toml:"watch"`
 }
+
+// WatchConfig controls the `avc watch` continuous-checkpointing daemon.
+type WatchConfig struct {
+	// DebounceSeconds is the quiet period after the last file change before
+	// a checkpoint snapshot is taken. 0 = DefaultWatchDebounceSeconds.
+	DebounceSeconds int `toml:"debounce_seconds"`
+	// MinIntervalSeconds is the minimum time between two watch snapshots on
+	// the same branch, regardless of change volume. 0 = DefaultWatchMinIntervalSeconds.
+	MinIntervalSeconds int `toml:"min_interval_seconds"`
+	// IncludeWorkspaces also watches every active branch workspace, not just
+	// the project root. Defaults to true (set include_workspaces = false to disable).
+	IncludeWorkspaces *bool `toml:"include_workspaces"`
+}
+
+// Watch daemon defaults, applied when the corresponding config value is 0.
+const (
+	DefaultWatchDebounceSeconds    = 30
+	DefaultWatchMinIntervalSeconds = 120
+)
 
 // ProtectConfig bounds what agent-driven integration may change. Paths
 // matching these globs are refused (mode "block") or flagged (mode "warn")
@@ -78,7 +98,18 @@ type RetentionConfig struct {
 	// AutoGC runs garbage collection automatically after pruning.
 	// Defaults to true when a pruning policy is active.
 	AutoGC bool `toml:"auto_gc"`
+
+	// MaxWatchSnapshotsPerBranch caps snapshots created by `avc watch`
+	// (label prefix "auto:watch") per branch — the oldest watch snapshots
+	// are pruned first, before any other retention rule considers them.
+	// 0 = the built-in default (200); -1 = unlimited.
+	MaxWatchSnapshotsPerBranch int `toml:"max_watch_snapshots_per_branch"`
 }
+
+// DefaultMaxWatchSnapshotsPerBranch is used when MaxWatchSnapshotsPerBranch
+// is unset (0). Watch snapshots are high-volume by design, so unlike the
+// other retention rules this cap is on by default.
+const DefaultMaxWatchSnapshotsPerBranch = 200
 
 // RunConfig holds workspace command runner settings.
 type RunConfig struct {
@@ -333,6 +364,17 @@ max_output_kb = 512
 # paths = [".github/workflows/**", "secrets/**", "*.pem"]
 # mode  = "block"
 
+[watch]
+# Settings for the continuous-checkpointing daemon (avc watch).
+# Quiet period after the last file change before a checkpoint is taken.
+# debounce_seconds = 30
+
+# Minimum time between two watch snapshots on the same branch.
+# min_interval_seconds = 120
+
+# Also watch every active branch workspace, not just the project root.
+# include_workspaces = true
+
 [retention]
 # Maximum snapshots to keep per branch (oldest pruned first). 0 = unlimited.
 # max_snapshots_per_branch = 100
@@ -342,6 +384,10 @@ max_output_kb = 512
 
 # Run gc automatically after pruning. Default: true.
 # auto_gc = true
+
+# Cap on snapshots created by "avc watch" per branch — these are pruned
+# first. 0 = the built-in default (200); -1 = unlimited.
+# max_watch_snapshots_per_branch = 200
 
 [hooks]
 # Shell commands run around snapshots and restores.

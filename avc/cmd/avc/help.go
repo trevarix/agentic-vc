@@ -40,6 +40,7 @@ func printRootHelp() {
 
 	helpSection("SNAPSHOTS")
 	helpEntry("snapshot <label>", "Create a snapshot of the current state")
+	helpEntry("watch [--status]", "Continuously checkpoint as files change")
 	helpEntry("list", "List snapshots on the active branch")
 	helpEntry("log", "Show snapshot history as a tree")
 	helpEntry("restore <snapshot-id>", "Restore the project to a snapshot")
@@ -55,7 +56,10 @@ func printRootHelp() {
 	helpEntry("branch switch <branch>", "Switch to a branch")
 	helpEntry("branch diff [branch]", "Show cumulative changes on a branch")
 	helpEntry("branch delete <branch>", "Delete a branch")
+	helpEntry("branch create <name> --from-branch <p>", "Stack a branch on another branch")
+	helpEntry("branch diff <a>..<b>", "Compare two branches' latest snapshots")
 	helpEntry("merge <branch>", "Merge a branch back into main")
+	helpEntry("merge --train <branch>...", "Merge several branches in order")
 	fmt.Println()
 
 	helpSection("FILE INSPECTION")
@@ -69,6 +73,7 @@ func printRootHelp() {
 	helpSection("SEARCH & STATUS")
 	helpEntry("search <query>", "Search snapshot labels and notes")
 	helpEntry("status", "Compare working tree to the last snapshot")
+	helpEntry("timeline [--session <id>]", "Branch history grouped by agent session")
 	fmt.Println()
 
 	helpSection("SETUP & AGENT INTEGRATION")
@@ -76,6 +81,7 @@ func printRootHelp() {
 	helpEntry("ui", "Start the web UI (default port 3004)")
 	helpEntry("mcp serve", "Start the MCP server for agent frameworks")
 	helpEntry("run --branch <branch> <command>", "Run a command in a branch workspace")
+	helpEntry("bisect --good <id> --cmd <command>", "Find the snapshot that broke a command")
 	fmt.Println()
 
 	helpSection("PORTABILITY")
