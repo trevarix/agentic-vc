@@ -9,6 +9,7 @@ Snapshot, diff, branch, and merge — without the complexity of Git.
 [![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8?logo=go&logoColor=white)](avc/go.mod)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-server-6E56CF)](#agent-integration)
+[![Docs](https://img.shields.io/badge/docs-avc.trevarix.com-informational)](https://avc.trevarix.com)
 
 </div>
 
@@ -24,6 +25,8 @@ AVC gives agents and users four primitives to work safely:
 Beyond the four primitives, AVC adds the trust and scale layer agent-assisted development needs: **`avc undo`** reverses the last restore or merge with zero arguments, **protected paths** mechanically block agents from touching files like CI config or secrets, **`avc verify`** audits stored history for corruption, **`avc watch`** checkpoints continuously so safety doesn't depend on an agent remembering to snapshot, **`avc bisect`** finds regressions in O(log n) test runs, **`avc timeline`** tells the story of what your agents did session by session, and **`avc merge --train`** merges a fleet of agent branches in sequence.
 
 AVC also runs as an **MCP server** so any agent framework (Claude Code, Cursor, Windsurf) can call it directly as a tool.
+
+📖 **Full documentation, installation guides, and API reference:** **[avc.trevarix.com](https://avc.trevarix.com)**
 
 ### Contents
 
@@ -258,22 +261,6 @@ If `[protect]` is configured in `.avc/config.toml`, a merge that would touch a p
 
 ## VSCode extension
 
-### Setup
-
-```bash
-cd extension
-npm install
-code .
-```
-
-Press **F5** to launch the Extension Development Host. Open an `avc init`-ed folder — the AVC sidebar appears in the activity bar.
-
-If `avc` is not on `PATH` in the dev host, set it explicitly:
-
-```json
-"avc.cliPath": "/Users/you/go/bin/avc"
-```
-
 ### Features
 
 **Snapshots**
@@ -302,9 +289,6 @@ If `avc` is not on `PATH` in the dev host, set it explicitly:
 - Create branch, switch branch, delete branch commands
 - Open a branch workspace folder in a new VSCode window
 - Merge branch to main with preview modal and abort support
-
-**SCM integration**
-- AVC appears as a source control provider in the SCM panel alongside Git
 
 ---
 
@@ -375,6 +359,7 @@ docs/                    # architecture, CLI reference, contributing guide
 
 ## Docs
 
+- **[Full documentation](https://avc.trevarix.com)** — detailed guides and installation steps
 - [Architecture](docs/architecture.md)
 - [CLI Reference](docs/cli-reference.md)
 - [Contributing](docs/contributing.md)
