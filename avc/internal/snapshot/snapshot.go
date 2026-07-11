@@ -13,6 +13,7 @@ import (
 
 	"github.com/trevarix/agentic-vc/avc/internal/config"
 	"github.com/trevarix/agentic-vc/avc/internal/db"
+	diffpkg "github.com/trevarix/agentic-vc/avc/internal/diff"
 	"github.com/trevarix/agentic-vc/avc/internal/fileutil"
 	"github.com/trevarix/agentic-vc/avc/internal/hooks"
 	"github.com/trevarix/agentic-vc/avc/internal/restore"
@@ -30,7 +31,23 @@ type Result struct {
 	FileCount    int
 	TotalSize    int64
 	BranchID     string
+	SessionID    string
+	Task         string
+	Summary      string   // heuristic one-line change summary vs the previous branch HEAD; empty when no baseline exists
 	SkippedLarge []string // relative paths skipped for exceeding the max file size
+}
+
+// Options describes one snapshot to create. Label is required; everything
+// else is optional. SourceDir "" means walk projectRoot (the default for
+// main); for branch workspaces it is the workspace path.
+type Options struct {
+	Label     string
+	AgentName string
+	Notes     string
+	BranchID  string // associates the snapshot with a branch; "" for unscoped snapshots
+	SourceDir string
+	SessionID string // agent session attribution (see `avc timeline`)
+	Task      string // one-line task description for the session
 }
 
 // Create walks sourceDir, hashes all tracked files, and persists a snapshot
@@ -41,6 +58,19 @@ type Result struct {
 //
 // branchID associates the snapshot with a branch; pass "" for unscoped snapshots.
 func Create(projectRoot, label, agentName, notes, branchID, sourceDir string) (*Result, error) {
+	return CreateWithOptions(projectRoot, Options{
+		Label:     label,
+		AgentName: agentName,
+		Notes:     notes,
+		BranchID:  branchID,
+		SourceDir: sourceDir,
+	})
+}
+
+// CreateWithOptions is Create with session attribution (session_id/task).
+func CreateWithOptions(projectRoot string, opts Options) (*Result, error) {
+	label, agentName, notes := opts.Label, opts.AgentName, opts.Notes
+	branchID, sourceDir := opts.BranchID, opts.SourceDir
 	if sourceDir == "" {
 		sourceDir = projectRoot
 	}
@@ -175,6 +205,18 @@ func Create(projectRoot, label, agentName, notes, branchID, sourceDir string) (*
 		totalSize += size
 	}
 
+	// Baseline for the heuristic change summary: the branch HEAD before this
+	// snapshot, falling back to the branch's base snapshot for the first
+	// snapshot on a fresh branch. Empty = no baseline, no summary.
+	summaryBaseID := ""
+	if branchID != "" {
+		if head, headErr := store.GetHeadSnapshot(branchID); headErr == nil {
+			summaryBaseID = head.ID
+		} else if b, branchErr := store.GetBranchByID(branchID); branchErr == nil {
+			summaryBaseID = b.BaseSnapshotID
+		}
+	}
+
 	snap := &db.Snapshot{
 		ID:        snapID,
 		ProjectID: project.ID,
@@ -185,10 +227,22 @@ func Create(projectRoot, label, agentName, notes, branchID, sourceDir string) (*
 		FileCount: len(files),
 		TotalSize: totalSize,
 		BranchID:  branchID,
+		SessionID: opts.SessionID,
+		Task:      opts.Task,
 	}
 
 	if err := store.InsertSnapshotWithFiles(snap, files); err != nil {
 		return nil, fmt.Errorf("insert snapshot: %w", err)
+	}
+
+	// Generate and cache the change summary vs the baseline. Best-effort: a
+	// snapshot that succeeded must not fail because its summary could not be
+	// computed, and `avc timeline` recomputes missing summaries lazily.
+	summary := ""
+	if summaryBaseID != "" {
+		if diffFiles, sumErr := diffpkg.CacheSummaries(projectRoot, summaryBaseID, snapID); sumErr == nil {
+			summary = diffpkg.Summarize(diffFiles)
+		}
 	}
 
 	// Persist updated cache — best-effort.
@@ -210,6 +264,9 @@ func Create(projectRoot, label, agentName, notes, branchID, sourceDir string) (*
 		FileCount:    len(files),
 		TotalSize:    totalSize,
 		BranchID:     branchID,
+		SessionID:    opts.SessionID,
+		Task:         opts.Task,
+		Summary:      summary,
 		SkippedLarge: skippedLarge,
 	}
 

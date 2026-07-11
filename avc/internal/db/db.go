@@ -49,6 +49,7 @@ type Branch struct {
 	BaseSnapshotID string // empty string for main (no base snapshot)
 	CreatedAt      int64
 	Status         string // "active" | "merged" | "abandoned"
+	ParentBranchID string // branch this one was stacked on (--from-branch); empty when branched from main
 }
 
 // Snapshot represents a row in the snapshots table.
@@ -62,6 +63,8 @@ type Snapshot struct {
 	FileCount int
 	TotalSize int64
 	BranchID  string // empty string when branch_id is NULL (pre-Phase-4 rows)
+	SessionID string // agent session that produced this snapshot; empty when unattributed
+	Task      string // one-line task description for the session; empty when unattributed
 }
 
 // File represents a row in the files table.
@@ -204,7 +207,7 @@ func InitProject(projectRoot string) (*Project, error) {
 //
 // BUMP THIS whenever migrate() gains or changes a statement, or existing
 // databases will silently skip the new migration.
-const schemaVersion = 1
+const schemaVersion = 2
 
 // migrate creates all tables if absent and applies incremental schema changes
 // idempotently. Safe to call on every Open; already-migrated databases
@@ -311,6 +314,23 @@ func (s *Store) migrate() error {
 	// recorded" for rows written before this column existed.
 	if err := execIgnoreDuplicateColumn(s.db, `ALTER TABLE files ADD COLUMN file_mode INTEGER NOT NULL DEFAULT 0`); err != nil {
 		return fmt.Errorf("add files.file_mode: %w", err)
+	}
+
+	// Agent features: stacked branches record their parent for lineage
+	// display (`avc branch list`). Merge math is unaffected — the base
+	// snapshot already encodes the fork point.
+	if err := execIgnoreDuplicateColumn(s.db, `ALTER TABLE branches ADD COLUMN parent_branch_id TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("add branches.parent_branch_id: %w", err)
+	}
+
+	// Agent features: session attribution — which agent session, doing what
+	// task, produced each snapshot. Empty for rows written before these
+	// columns existed and for unattributed (human/CLI) snapshots.
+	if err := execIgnoreDuplicateColumn(s.db, `ALTER TABLE snapshots ADD COLUMN session_id TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("add snapshots.session_id: %w", err)
+	}
+	if err := execIgnoreDuplicateColumn(s.db, `ALTER TABLE snapshots ADD COLUMN task TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("add snapshots.task: %w", err)
 	}
 
 	// Trust primitives: the operations log records every destructive
@@ -422,11 +442,11 @@ func (s *Store) GetProject(projectRoot string) (*Project, error) {
 
 // ─── Branch ──────────────────────────────────────────────────────────────────
 
-const branchSelectCols = `id, name, project_id, COALESCE(base_snapshot_id, ''), created_at, COALESCE(status, 'active')`
+const branchSelectCols = `id, name, project_id, COALESCE(base_snapshot_id, ''), created_at, COALESCE(status, 'active'), COALESCE(parent_branch_id, '')`
 
 func scanBranch(row interface{ Scan(...any) error }) (*Branch, error) {
 	b := &Branch{}
-	err := row.Scan(&b.ID, &b.Name, &b.ProjectID, &b.BaseSnapshotID, &b.CreatedAt, &b.Status)
+	err := row.Scan(&b.ID, &b.Name, &b.ProjectID, &b.BaseSnapshotID, &b.CreatedAt, &b.Status, &b.ParentBranchID)
 	return b, err
 }
 
@@ -437,9 +457,9 @@ func (s *Store) InsertBranch(b *Branch) error {
 		status = "active"
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO branches (id, name, project_id, base_snapshot_id, created_at, status)
-		 VALUES (?, ?, ?, NULLIF(?, ''), ?, ?)`,
-		b.ID, b.Name, b.ProjectID, b.BaseSnapshotID, b.CreatedAt, status,
+		`INSERT INTO branches (id, name, project_id, base_snapshot_id, created_at, status, parent_branch_id)
+		 VALUES (?, ?, ?, NULLIF(?, ''), ?, ?, ?)`,
+		b.ID, b.Name, b.ProjectID, b.BaseSnapshotID, b.CreatedAt, status, b.ParentBranchID,
 	)
 	return err
 }
@@ -548,7 +568,18 @@ func (s *Store) DeleteSnapshotsByBranch(branchID string) error {
 	if err != nil {
 		return err
 	}
-	// Delete files first to satisfy the FK constraint on files.snapshot_id.
+	// Delete dependents first to satisfy the FK constraints on
+	// files.snapshot_id and diffs.from/to_snapshot_id (cached diff rows are
+	// recomputable — dropping them loses nothing).
+	if _, err := tx.Exec(
+		`DELETE FROM diffs WHERE from_snapshot_id IN
+		 (SELECT id FROM snapshots WHERE branch_id = ?)
+		 OR to_snapshot_id IN
+		 (SELECT id FROM snapshots WHERE branch_id = ?)`, branchID, branchID,
+	); err != nil {
+		tx.Rollback()
+		return err
+	}
 	if _, err := tx.Exec(
 		`DELETE FROM files WHERE snapshot_id IN
 		 (SELECT id FROM snapshots WHERE branch_id = ?)`, branchID,
@@ -710,10 +741,11 @@ func (s *Store) InsertSnapshotWithFiles(snap *Snapshot, files []*File) error {
 
 	if _, err := tx.Exec(
 		`INSERT INTO snapshots
-		 (id, project_id, timestamp, label, agent_name, notes, file_count, total_size, branch_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''))`,
+		 (id, project_id, timestamp, label, agent_name, notes, file_count, total_size, branch_id, session_id, task)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?)`,
 		snap.ID, snap.ProjectID, snap.Timestamp, snap.Label,
 		snap.AgentName, snap.Notes, snap.FileCount, snap.TotalSize, snap.BranchID,
+		snap.SessionID, snap.Task,
 	); err != nil {
 		tx.Rollback()
 		return fmt.Errorf("insert snapshot: %w", err)
@@ -739,13 +771,14 @@ func (s *Store) InsertSnapshotWithFiles(snap *Snapshot, files []*File) error {
 }
 
 const snapshotSelectCols = `id, project_id, timestamp, label, agent_name, notes, file_count, total_size,
-	COALESCE(branch_id, '')`
+	COALESCE(branch_id, ''), COALESCE(session_id, ''), COALESCE(task, '')`
 
 func scanSnapshot(row interface{ Scan(...any) error }) (*Snapshot, error) {
 	snap := &Snapshot{}
 	err := row.Scan(
 		&snap.ID, &snap.ProjectID, &snap.Timestamp, &snap.Label,
 		&snap.AgentName, &snap.Notes, &snap.FileCount, &snap.TotalSize, &snap.BranchID,
+		&snap.SessionID, &snap.Task,
 	)
 	return snap, err
 }
@@ -772,10 +805,12 @@ func (s *Store) ListSnapshots() ([]*Snapshot, error) {
 	return snapshots, rows.Err()
 }
 
-// ListSnapshotsByBranch returns snapshots for a specific branch, newest first.
+// ListSnapshotsByBranch returns snapshots for a specific branch, newest
+// first. rowid breaks timestamp ties (same-second snapshots) so the order is
+// true insertion order — bisect and timeline depend on this being stable.
 func (s *Store) ListSnapshotsByBranch(branchID string) ([]*Snapshot, error) {
 	rows, err := s.db.Query(
-		`SELECT `+snapshotSelectCols+` FROM snapshots WHERE branch_id = ? ORDER BY timestamp DESC`,
+		`SELECT `+snapshotSelectCols+` FROM snapshots WHERE branch_id = ? ORDER BY timestamp DESC, rowid DESC`,
 		branchID,
 	)
 	if err != nil {
@@ -798,6 +833,7 @@ func (s *Store) ListSnapshotsByBranch(branchID string) ([]*Snapshot, error) {
 // Zero values mean "no filter" for that field.
 type SnapshotFilter struct {
 	BranchID  string // exact match; empty = all branches
+	SessionID string // exact match on session attribution; empty = all sessions
 	AgentName string // LIKE match (case-insensitive prefix/substring)
 	Query     string // full-text search on label + notes (LIKE %query%)
 	Tag       string // only snapshots with this tag
@@ -816,6 +852,10 @@ func (s *Store) ListSnapshotsFiltered(f SnapshotFilter) ([]*Snapshot, error) {
 	if f.BranchID != "" {
 		conditions = append(conditions, "s.branch_id = ?")
 		args = append(args, f.BranchID)
+	}
+	if f.SessionID != "" {
+		conditions = append(conditions, "s.session_id = ?")
+		args = append(args, f.SessionID)
 	}
 	if f.AgentName != "" {
 		conditions = append(conditions, "s.agent_name LIKE ?")
@@ -880,7 +920,7 @@ func (s *Store) ListSnapshotsFiltered(f SnapshotFilter) ([]*Snapshot, error) {
 // snapshotSelectColsAliased is snapshotSelectCols with the "s." table alias
 // used by ListSnapshotsFiltered (which joins via EXISTS subqueries).
 const snapshotSelectColsAliased = `s.id, s.project_id, s.timestamp, s.label, s.agent_name, s.notes, s.file_count, s.total_size,
-	COALESCE(s.branch_id, '')`
+	COALESCE(s.branch_id, ''), COALESCE(s.session_id, ''), COALESCE(s.task, '')`
 
 // ─── Snapshot tags ────────────────────────────────────────────────────────────
 
@@ -1051,10 +1091,16 @@ func (s *Store) GetOldestSnapshot(branchID string) (*Snapshot, error) {
 	return snap, nil
 }
 
-// DeleteSnapshot removes a snapshot and its associated file records.
+// DeleteSnapshot removes a snapshot, its file records, and any cached diff
+// rows that reference it (the diffs table is a cache — dropping rows loses
+// nothing that can't be recomputed).
 func (s *Store) DeleteSnapshot(id string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM diffs WHERE from_snapshot_id = ? OR to_snapshot_id = ?`, id, id); err != nil {
+		tx.Rollback()
 		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM files WHERE snapshot_id = ?`, id); err != nil {

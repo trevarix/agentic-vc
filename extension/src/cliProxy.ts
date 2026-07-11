@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { execFile } from 'child_process';
+import { execFile, spawn, ChildProcess } from 'child_process';
 import * as vscode from 'vscode';
 
 export interface Snapshot {
@@ -103,6 +103,21 @@ function runAvcCommand<T>(args: string[], projectPath?: string): Promise<T> {
         reject(new Error('Invalid JSON response from avc CLI'));
       }
     });
+  });
+}
+
+/**
+ * Spawns the long-running `avc watch` daemon for a project. Unlike every
+ * other CLI call this is not a one-shot execFile — the caller owns the
+ * returned process and must kill it on dispose (see WatchManager).
+ */
+export function spawnWatch(projectPath: string): ChildProcess {
+  const config = vscode.workspace.getConfiguration('avc');
+  const cliPath: string = config.get('cliPath') ?? 'avc';
+  return spawn(cliPath, ['watch'], {
+    cwd: projectPath,
+    env: { ...process.env, AVC_PROJECT: projectPath },
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
 }
 

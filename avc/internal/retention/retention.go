@@ -14,12 +14,18 @@ package retention
 import (
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/trevarix/agentic-vc/avc/internal/config"
 	"github.com/trevarix/agentic-vc/avc/internal/db"
 	"github.com/trevarix/agentic-vc/avc/internal/gc"
 )
+
+// WatchLabelPrefix marks snapshots created by the `avc watch` daemon. It
+// lives here (not in the watch package) because retention prunes by it and
+// watch depends on snapshot, which depends on retention.
+const WatchLabelPrefix = "auto:watch"
 
 // Enforce prunes snapshots on branchID that violate the retention policy.
 // It is called from snapshot.Create after each successful snapshot so the
@@ -31,7 +37,16 @@ import (
 // If the policy is completely unconfigured (both MaxSnapshotsPerBranch and
 // MaxAgeDays are 0), Enforce returns immediately without opening the DB.
 func Enforce(projectRoot, branchID string, cfg *config.RetentionConfig, stderr io.Writer) error {
-	if cfg == nil || (cfg.MaxSnapshotsPerBranch == 0 && cfg.MaxAgeDays == 0) {
+	if cfg == nil {
+		return nil
+	}
+	// The watch cap defaults on (watch snapshots are high-volume by design);
+	// -1 disables it. The other rules default off.
+	watchCap := cfg.MaxWatchSnapshotsPerBranch
+	if watchCap == 0 {
+		watchCap = config.DefaultMaxWatchSnapshotsPerBranch
+	}
+	if cfg.MaxSnapshotsPerBranch == 0 && cfg.MaxAgeDays == 0 && watchCap < 0 {
 		return nil // no policy configured
 	}
 
@@ -40,6 +55,52 @@ func Enforce(projectRoot, branchID string, cfg *config.RetentionConfig, stderr i
 		return err
 	}
 	defer store.Close()
+
+	// snapshots returned newest-first.
+	snaps, err := store.ListSnapshotsByBranch(branchID)
+	if err != nil {
+		return err
+	}
+
+	candidates := make(map[string]bool)
+
+	// Rule 0 — watch-snapshot cap: `avc watch` checkpoints are pruned first,
+	// before any other rule considers them, so continuous checkpointing can
+	// never crowd out deliberate snapshots.
+	if watchCap > 0 {
+		var watchSnaps []*db.Snapshot
+		for _, s := range snaps {
+			if strings.HasPrefix(s.Label, WatchLabelPrefix) {
+				watchSnaps = append(watchSnaps, s)
+			}
+		}
+		if len(watchSnaps) > watchCap {
+			for _, s := range watchSnaps[watchCap:] {
+				candidates[s.ID] = true
+			}
+		}
+	}
+
+	// Rule 1 — maximum count (keep the N newest; prune the rest).
+	if cfg.MaxSnapshotsPerBranch > 0 && len(snaps) > cfg.MaxSnapshotsPerBranch {
+		for _, s := range snaps[cfg.MaxSnapshotsPerBranch:] {
+			candidates[s.ID] = true
+		}
+	}
+
+	// Rule 2 — maximum age.
+	if cfg.MaxAgeDays > 0 {
+		cutoff := time.Now().AddDate(0, 0, -cfg.MaxAgeDays).Unix()
+		for _, s := range snaps {
+			if s.Timestamp < cutoff {
+				candidates[s.ID] = true
+			}
+		}
+	}
+
+	if len(candidates) == 0 {
+		return nil // nothing over budget — skip the protected-set queries
+	}
 
 	proj, err := store.GetProject(projectRoot)
 	if err != nil {
@@ -54,37 +115,13 @@ func Enforce(projectRoot, branchID string, cfg *config.RetentionConfig, stderr i
 		return err
 	}
 
-	// snapshots returned newest-first.
-	snaps, err := store.ListSnapshotsByBranch(branchID)
-	if err != nil {
-		return err
-	}
-
 	toDelete := make(map[string]bool)
 	skippedProtected := make(map[string]bool)
-
-	// Rule 1 — maximum count (keep the N newest; prune the rest).
-	if cfg.MaxSnapshotsPerBranch > 0 && len(snaps) > cfg.MaxSnapshotsPerBranch {
-		for _, s := range snaps[cfg.MaxSnapshotsPerBranch:] {
-			if protected[s.ID] {
-				skippedProtected[s.ID] = true
-				continue
-			}
-			toDelete[s.ID] = true
-		}
-	}
-
-	// Rule 2 — maximum age.
-	if cfg.MaxAgeDays > 0 {
-		cutoff := time.Now().AddDate(0, 0, -cfg.MaxAgeDays).Unix()
-		for _, s := range snaps {
-			if s.Timestamp < cutoff {
-				if protected[s.ID] {
-					skippedProtected[s.ID] = true
-					continue
-				}
-				toDelete[s.ID] = true
-			}
+	for id := range candidates {
+		if protected[id] {
+			skippedProtected[id] = true
+		} else {
+			toDelete[id] = true
 		}
 	}
 

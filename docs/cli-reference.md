@@ -54,6 +54,8 @@ avc snapshot "WIP" --json
 |------|-------------|
 | `--agent <name>` | Name of the agent or user creating the snapshot |
 | `--notes <text>` | Free-form notes attached to the snapshot |
+| `--session <id>` | Agent session this snapshot belongs to — `avc timeline` groups by it |
+| `--task <text>` | One-line description of the session's overall task |
 
 **JSON output:**
 ```json
@@ -65,9 +67,17 @@ avc snapshot "WIP" --json
   "files_changed": 42,
   "total_size": 1048576,
   "notes": "Passed all tests",
+  "session_id": "sess-42",
+  "task": "add auth endpoints",
+  "summary": "2 files: modified auth.go (+40 -12), added auth_test.go",
   "success": true
 }
 ```
+
+`summary` is a heuristic one-liner describing what changed versus the
+previous snapshot on the branch (empty for a branch's first snapshot). The
+per-file fragments are persisted in the diff cache and reused by
+`avc timeline`.
 
 Files matching `.avcignore` patterns are excluded. The `.avc/` directory itself is always excluded.
 
@@ -106,7 +116,151 @@ avc list --json
 ]
 ```
 
-Returns an empty array `[]` if no snapshots exist.
+Returns an empty array `[]` if no snapshots exist. Each entry carries
+`session_id` and `task` when the snapshot was created with session
+attribution.
+
+---
+
+## `avc timeline`
+
+Render a branch's history as a story: snapshots grouped by the agent session
+that produced them, each with its one-line change summary, interleaved with
+the restores, merges, and undos from the operations log. This is the "what
+did my agents do while I was away" report.
+
+```bash
+avc timeline                     # active branch, all sessions
+avc timeline --session sess-42   # one session's story
+avc timeline --branch main       # a specific branch
+avc timeline --limit 100 --json
+```
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--session <id>` | Show only this session |
+| `--branch <name>` | Branch to show (default: active branch) |
+| `--limit <n>` | Max snapshots to include (default 50) |
+
+**JSON output:**
+```json
+{
+  "branch": "main",
+  "sessions": [
+    {
+      "session_id": "sess-42",
+      "task": "add auth endpoints",
+      "agents": ["claude"],
+      "started_at": 1712275200,
+      "ended_at": 1712278800,
+      "events": [
+        {"kind": "snapshot", "timestamp": 1712275200, "snapshot_id": "snap-abc",
+         "label": "auto: before auth refactor", "agent_name": "claude",
+         "file_count": 42, "summary": "1 file: modified auth.go (+40 -12)"},
+        {"kind": "operation", "timestamp": 1712278800, "op_kind": "restore",
+         "details": "restored snapshot snap-abc"}
+      ]
+    }
+  ]
+}
+```
+
+Sessions come from the `session_id`/`task` attribution on snapshots
+(`avc snapshot --session --task`, or the matching MCP `avc_snapshot`
+arguments). Unattributed snapshots appear under `(no session)`. Summaries
+missing from older snapshots are computed (and cached) lazily. Also served
+by the web UI at `/api/timeline`.
+
+---
+
+## `avc watch`
+
+Continuously checkpoint the project as files change. A foreground daemon
+watches the project root — and every active branch workspace — and snapshots
+after each burst of changes, so every state the project passes through is
+recoverable whether or not an agent remembered to call `avc_snapshot`.
+
+```bash
+avc watch                 # start watching (foreground; Ctrl+C to stop)
+avc watch --status        # is a watcher running for this project?
+avc watch --poll 15       # poll every 15s instead of file events
+                          # (for network filesystems with unreliable events)
+```
+
+Behavior:
+
+- **Debounced.** A checkpoint is taken only after a quiet period
+  (`debounce_seconds`, default 30) and no more often than
+  `min_interval_seconds` (default 120) per branch.
+- **Deduplicated.** A tree identical to the branch HEAD produces no
+  snapshot — an idle project generates zero checkpoints. The stat cache
+  makes the check nearly free.
+- **Scoped.** Edits in a branch workspace checkpoint to that branch;
+  ignored-file churn (build output, logs) triggers nothing.
+- **Labeled.** Checkpoints are labeled `auto:watch <what changed>` with
+  agent `avc-watch`, and are the first candidates for retention pruning
+  (see below).
+- **Single-instance.** A pid file (`.avc/watch.pid`) with a heartbeat
+  refuses a second watcher; a stale file from a crashed daemon is replaced
+  after 90s.
+
+Configuration:
+
+```toml
+[watch]
+debounce_seconds     = 30
+min_interval_seconds = 120
+include_workspaces   = true
+
+[retention]
+# Watch checkpoints are pruned before any other rule considers them.
+# 0 = the built-in default (200); -1 = unlimited.
+max_watch_snapshots_per_branch = 200
+```
+
+The VSCode extension can manage the daemon for you: enable
+`avc.watch.enabled` and the watcher starts and stops with the editor.
+
+---
+
+## `avc bisect`
+
+Find the first snapshot that broke a test command — binary search over
+snapshot history, O(log n) runs instead of restoring snapshots one by one.
+
+```bash
+avc bisect --good snap-abc --cmd "go test ./..."
+avc bisect --good-tag stable --bad snap-xyz --cmd "npm test"
+avc bisect --branch feat/auth --good snap-abc --cmd "pytest -x" --json
+```
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--good <id>` | Known-good snapshot ID (required unless `--good-tag`) |
+| `--good-tag <tag>` | Use the newest snapshot with this tag as the good point |
+| `--bad <id>` | Known-bad snapshot (default: branch HEAD) |
+| `--branch <name>` | Branch to search (default: main) |
+| `--cmd <command>` | Test command (required) |
+| `--timeout <s>` | Per-step timeout (default: sandbox default) |
+
+**Exit-code protocol** (same as `git bisect run`): `0` = good, `125` = skip
+(cannot judge this snapshot, e.g. it does not build), anything else = bad.
+
+Each candidate is materialized fresh into a throwaway scratch workspace
+(`.avc/workspaces/.bisect-*`, removed afterwards) and the command runs
+through the same sandbox as `avc run` — environment scrubbing, timeout,
+output caps. **Requires `[run] enabled = true`** in `.avc/config.toml`,
+because bisect executes arbitrary commands.
+
+With `--json`, progress streams as one NDJSON object per step
+(`{"type":"step",...}`) followed by a final `{"type":"result",...}` naming
+the first bad snapshot, its predecessor, and a summary of what changed
+between them. If skipped snapshots prevented exact narrowing the result is
+flagged `"ambiguous": true`.
 
 ---
 
@@ -240,6 +394,82 @@ merge record.
 - `auto_snapshot_id` appears when the branch's workspace had changes since its last snapshot — those changes are captured automatically before the merge runs, so un-snapshotted work is never silently dropped. `--preview` never creates this snapshot (it has no side effects); instead its output includes `workspace_dirty_files` as a warning that the preview does not yet reflect those changes.
 - A conflict between an edit and a deletion is written with a labeled diff3 marker (e.g. `>>>>>>> branch (theirs) — file deleted on branch`) so it's clear which side removed the file.
 - Merge status values: `in_progress` → `completed` | `conflicts` | `failed` | `aborted`. A merge that fails partway through applying its plan is marked `failed` (not left stuck at `in_progress`), so `avc merge --abort` can always find and roll back the last attempt regardless of how it ended.
+
+### `avc merge --train` — merge queue for agent fleets
+
+Merge several branches into main in order, each against the *current* main —
+so every merge sees the ones before it, instead of every preview going stale
+the moment the first branch lands.
+
+```bash
+avc merge --train feat/a feat/b feat/c
+avc merge --train feat/a feat/b --validate "go test ./..."
+```
+
+Per branch, in order:
+
+1. Preview against current main. Conflicts or a `[protect]`-blocked change →
+   the train **stops before writing anything**; that branch is reported and
+   the rest are `skipped`. Main keeps the merges completed so far — each is
+   individually reversible with `avc undo` or its pre-merge snapshot.
+2. Clean → the full merge pipeline runs (dirty-workspace auto-snapshot,
+   diff3 line merge, protected-path gate, pre/post-merge snapshots).
+3. `--validate "<command>"` runs against post-merge main through the same
+   sandbox as `avc run` (**requires `[run] enabled = true`**). A non-zero
+   exit rolls exactly that merge back — pre-merge snapshot restored, branch
+   active again, workspace rebuilt — and stops the train.
+
+**JSON output:** per-branch results plus a train summary. The command exits
+non-zero when the train stopped early.
+
+```json
+{
+  "results": [
+    {"branch": "feat/a", "status": "merged", "post_merge_snapshot_id": "snap-...", "clean": 2},
+    {"branch": "feat/b", "status": "conflicts", "conflicts": 1, "detail": "src/auth.go"},
+    {"branch": "feat/c", "status": "skipped"}
+  ],
+  "completed": 1,
+  "stopped_at": "feat/b",
+  "success": false
+}
+```
+
+Statuses: `merged` · `conflicts` · `blocked_protected` · `validation_failed` · `error` · `skipped`.
+
+---
+
+## `avc branch create --from-branch` — stacked branches
+
+Root a new branch at another branch's current HEAD instead of main's, so the
+child starts from the parent's latest work:
+
+```bash
+avc branch create feat/api-tests --from-branch feat/api
+```
+
+Merging a child still targets main — its base snapshot already encodes the
+fork point, so the three-way math is unchanged (merge the parent first, then
+the child; a train handles the ordering naturally). The lineage is recorded
+and shown by `avc branch list` (`(from feat/api)` and `parent_branch` in
+`--json`).
+
+---
+
+## `avc branch diff <a>..<b>` — cross-branch diff
+
+Compare two branches' HEAD snapshots — how two parallel lines of work
+differ, rather than what one changed since its base:
+
+```bash
+avc branch diff feat/auth..feat/api
+avc branch diff main..feat/auth --stat
+```
+
+Both sides accept any branch name, including `main`. The single-argument
+form (`avc branch diff [branch]`) still shows a branch's cumulative
+base→HEAD diff. MCP: `avc_branch_diff` accepts an optional `against`
+argument for the same comparison.
 
 ---
 

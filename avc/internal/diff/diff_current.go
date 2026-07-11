@@ -107,7 +107,7 @@ func CompareWithCurrentDir(projectRoot, sourceDir, snapshotID string) (*Result, 
 				Type:    Deleted,
 				OldHash: snapFile.FileHash,
 			}
-			enrichWithLineCounts(projectRoot, fd)
+			enrichWithLineCounts(projectRoot, fd, enrichFull)
 			diffs = append(diffs, fd)
 		}
 	}
@@ -132,7 +132,7 @@ func enrichWithLineCountsDisk(projectRoot string, fd *FileDiff, currentFilePath 
 		return
 	}
 
-	added, removed, preview, estimated := computeUnifiedDiff(SplitLines(oldData), SplitLines(newData))
+	added, removed, preview, estimated := computeUnifiedDiff(SplitLines(oldData), SplitLines(newData), true)
 	fd.LinesAdded = added
 	fd.LinesRemoved = removed
 	fd.DiffPreview = preview

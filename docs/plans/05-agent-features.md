@@ -155,11 +155,28 @@ Train of 3 disjoint branches → all merge; overlapping second branch that diff3
 
 ## Exit criteria
 
-- [ ] Snapshots carry `session_id`/`task` end-to-end (MCP → DB → list/timeline JSON)
-- [ ] `diffs.change_summary` populated; `avc timeline` renders sessions with summaries and interleaved ops
-- [ ] `avc watch`: debounced snapshots, zero on idle/ignored churn, correct branch scoping, single-instance guard, soak test green with `avc fsck` clean
-- [ ] Watch-snapshot retention prunes `auto:watch` first and never touches protected snapshots
-- [ ] `avc bisect` finds a seeded regression in O(log n) runs, honors skip, cleans up, and is gated on `[run] enabled`
-- [ ] `avc branch diff a..b`, stacked branches, and `avc merge --train` with `--validate` rollback all behave per tests
-- [ ] All new MCP tools registered in the correct tiers with accurate descriptions
-- [ ] `go test ./...` green; CLI reference + architecture docs updated
+- [x] Snapshots carry `session_id`/`task` end-to-end (MCP → DB → list/timeline JSON)
+- [x] `diffs.change_summary` populated; `avc timeline` renders sessions with summaries and interleaved ops
+- [x] `avc watch`: debounced snapshots, zero on idle/ignored churn, correct branch scoping, single-instance guard, soak test green with `avc fsck` clean
+- [x] Watch-snapshot retention prunes `auto:watch` first and never touches protected snapshots
+- [x] `avc bisect` finds a seeded regression in O(log n) runs, honors skip, cleans up, and is gated on `[run] enabled`
+- [x] `avc branch diff a..b`, stacked branches, and `avc merge --train` with `--validate` rollback all behave per tests
+- [x] All new MCP tools registered in the correct tiers with accurate descriptions
+- [x] `go test ./...` green; CLI reference + architecture docs updated
+
+### Implementation notes (deviations and decisions)
+
+- **B3's snapshot-level one-liner is composed, not stored.** `diffs.change_summary` is a per-file column, so each row gets a self-describing fragment ("modified auth.go (+40 -12)") and the snapshot-level line is composed from the cached rows (`diff.SummarizeCached`) — no new column, and `avc timeline` computes+caches summaries lazily for snapshots that predate the feature. Line counts during summary generation are capped at 50 modified files per snapshot so a huge changeset can't stall its own snapshot; the counts-only path also skips the unified-diff backtracking table entirely.
+- **The diffs cache gained real rows — and two FK landmines with them.** `DeleteSnapshot`/`DeleteSnapshotsByBranch` now clear cache rows referencing the deleted snapshots first; the previously-empty table had been masking the constraint.
+- **`avc watch` survives its own event storm.** fsnotify's backend can block event delivery while servicing `watcher.Add`, and the daemon adds watches for new directories from its main loop — draining events on that same goroutine deadlocked (caught by the burst test). A pump goroutine now drains `watcher.Events` into a buffered queue; overflow degrades to "mark everything dirty" (a cheap stat-cache re-check), never a lost change.
+- **Watch liveness is mtime-heartbeat, not PID probing.** Portable to Windows; a pid file whose heartbeat is >90s old is treated as crashed and replaced.
+- **Watch skips oversized files exactly as snapshots do** — otherwise a file over `max_file_size_mb` would read as a perpetual "change" and loop the daemon forever.
+- **The extension manages the daemon** (`avc.watch.enabled` spawns/kills `avc watch` via cliProxy). `autoSnapshot.ts` was kept but stands down while the watcher runs — removing it entirely would break users who prefer the editor-only behavior without the CLI daemon.
+- **Bisect refuses to guess on a -1 exit** (timeout or sandbox-blocked command): neither is a verdict about the snapshot, and misclassifying it would misdirect the whole search. Skips that prevent exact narrowing flag the result `ambiguous` instead of silently pointing at the wrong snapshot. Candidates are materialized fresh per step (no quarantine churn, no cross-step contamination).
+- **The train stops on *preview* conflicts, before writing.** A conflict discovered only at merge time (dirty workspace auto-snapshotted in between) is aborted immediately so a stopping train never leaves conflict markers on main. Validation rollback reuses `undo.Undo` — the newest logged operation at that point is exactly the failed merge, so the op log stays coherent (a later manual `avc undo` behaves as redo).
+- **`--validate` runs through `workspace.RunInDir`**, a directory-targeted variant of the sandbox runner extracted from `Run` (env scrubbing, blocklist, timeout, output caps), because validation must execute against post-merge main, which is not a workspace. Gated on `[run] enabled` like every command-execution surface; the MCP `avc_merge_train` cannot pass `--allow-protected` (CLI-only, as for `avc_merge`).
+- **Status vocabulary gained two members** beyond the plan's list: `blocked_protected` (the [protect] gate stopped the train) and `error` (branch missing etc.) — folding either into "conflicts" would have been a lie.
+- **`ListSnapshotsByBranch` now tiebreaks on rowid**, making same-second snapshot ordering true insertion order — bisect and timeline depend on it; `GetHeadSnapshot` already did this.
+- **`avc_bisect` ships in the full MCP tier only; `avc_merge_train` likewise** (it needs the same explicit-approval discipline as `avc_merge`, and one approval covers the whole train). `avc_snapshot` gained `session_id`/`task`; `avc_branch_create` gained `from_branch`; `avc_branch_diff` gained `against`.
+- **fsnotify pinned to v1.8.0** — keeps `go.mod` at Go 1.22 for CI, same policy as the zstd pin in Plan 04.
+- **The timeline ships on three surfaces: CLI (`avc timeline`), web (`/api/timeline`), MCP-adjacent (snapshots carry the attribution).** Re-skinning the extension's existing snapshot-timeline webview around sessions was deferred to Plan 06's web-cockpit work, where that UI is being reworked anyway.

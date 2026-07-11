@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/trevarix/agentic-vc/avc/internal/annotate"
+	"github.com/trevarix/agentic-vc/avc/internal/bisect"
 	branchpkg "github.com/trevarix/agentic-vc/avc/internal/branch"
 	"github.com/trevarix/agentic-vc/avc/internal/config"
 	"github.com/trevarix/agentic-vc/avc/internal/db"
@@ -66,10 +67,14 @@ func dispatchTool(projectRoot string, compact bool, name string, args map[string
 		result, err = toolMergePreview(projectRoot, args)
 	case "avc_merge":
 		result, err = toolMerge(projectRoot, args)
+	case "avc_merge_train":
+		result, err = toolMergeTrain(projectRoot, args)
 	case "avc_merge_abort":
 		result, err = toolMergeAbort(projectRoot)
 	case "avc_run_in_workspace":
 		result, err = toolRunInWorkspace(projectRoot, args)
+	case "avc_bisect":
+		result, err = toolBisect(projectRoot, args)
 	case "avc_status":
 		result, err = toolStatus(projectRoot)
 	case "avc_undo":
@@ -127,14 +132,15 @@ func toolSnapshot(projectRoot string, args map[string]any) (any, error) {
 		store.Close()
 	}
 
-	snap, err := snapshot.Create(
-		projectRoot,
-		label,
-		agentName,
-		strArg(args, "notes"),
-		branchID,
-		sourceDir,
-	)
+	snap, err := snapshot.CreateWithOptions(projectRoot, snapshot.Options{
+		Label:     label,
+		AgentName: agentName,
+		Notes:     strArg(args, "notes"),
+		BranchID:  branchID,
+		SourceDir: sourceDir,
+		SessionID: strArg(args, "session_id"),
+		Task:      strArg(args, "task"),
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -147,6 +153,9 @@ func toolSnapshot(projectRoot string, args map[string]any) (any, error) {
 		"total_size":    snap.TotalSize,
 		"notes":         snap.Notes,
 		"branch_id":     snap.BranchID,
+		"session_id":    snap.SessionID,
+		"task":          snap.Task,
+		"summary":       snap.Summary,
 		"skipped_large": snap.SkippedLarge,
 		"success":       true,
 	}
@@ -444,7 +453,14 @@ func toolBranchCreate(projectRoot string, args map[string]any) (any, error) {
 	}
 
 	fromSnapshotID := strArg(args, "from_snapshot_id")
-	b, err := branchpkg.Create(projectRoot, name, fromSnapshotID)
+	fromBranch := strArg(args, "from_branch")
+	createBranch := func() (*db.Branch, error) {
+		if fromBranch != "" {
+			return branchpkg.CreateFromBranch(projectRoot, name, fromBranch)
+		}
+		return branchpkg.Create(projectRoot, name, fromSnapshotID)
+	}
+	b, err := createBranch()
 	if err != nil {
 		// On a freshly-initialised project main has no snapshots yet. Take one
 		// automatically and retry rather than surfacing a confusing error.
@@ -466,7 +482,7 @@ func toolBranchCreate(projectRoot string, args map[string]any) (any, error) {
 			if _, snapErr := snapshot.Create(projectRoot, "auto: initial project state", "agent", "baseline snapshot before first branch", mainID, ""); snapErr != nil {
 				return nil, fmt.Errorf("project has no snapshots and auto-snapshot failed: %w", snapErr)
 			}
-			b, err = branchpkg.Create(projectRoot, name, fromSnapshotID)
+			b, err = createBranch()
 		}
 		if err != nil {
 			return nil, err
@@ -542,6 +558,11 @@ func toolBranchDiff(projectRoot string, args map[string]any) (any, error) {
 		return nil, fmt.Errorf("name is required")
 	}
 
+	// Cross-branch mode: HEAD of `name` vs HEAD of `against`.
+	if against := strArg(args, "against"); against != "" {
+		return toolCrossBranchDiff(projectRoot, name, against)
+	}
+
 	branches, err := branchpkg.ListByStatus(projectRoot, "")
 	if err != nil {
 		return nil, err
@@ -608,6 +629,45 @@ func toolBranchDiff(projectRoot string, args map[string]any) (any, error) {
 	}
 
 	return text, nil
+}
+
+// toolCrossBranchDiff compares the HEAD snapshots of two branches — how two
+// parallel lines of work differ, rather than what one changed since its base.
+func toolCrossBranchDiff(projectRoot, name, against string) (any, error) {
+	headOf := func(branchName string) (string, error) {
+		store, err := db.Open(projectRoot)
+		if err != nil {
+			return "", err
+		}
+		defer store.Close()
+		proj, err := store.GetProject(projectRoot)
+		if err != nil {
+			return "", err
+		}
+		b, err := store.GetBranchByName(proj.ID, branchName)
+		if err != nil {
+			return "", fmt.Errorf("branch '%s' not found", branchName)
+		}
+		head, err := store.GetHeadSnapshot(b.ID)
+		if err != nil {
+			return "", fmt.Errorf("branch '%s' has no snapshots yet", branchName)
+		}
+		return head.ID, nil
+	}
+
+	fromHead, err := headOf(name)
+	if err != nil {
+		return nil, err
+	}
+	toHead, err := headOf(against)
+	if err != nil {
+		return nil, err
+	}
+	result, err := diffpkg.Compare(projectRoot, fromHead, toHead)
+	if err != nil {
+		return nil, err
+	}
+	return formatBranchDiff(fmt.Sprintf("%s → %s", name, against), fromHead, toHead, result), nil
 }
 
 // formatBranchDiff renders a branch diff as human-readable markdown text.
@@ -783,6 +843,31 @@ func toolMerge(projectRoot string, args map[string]any) (any, error) {
 	return mergeResultToMap(result, false), nil
 }
 
+func toolMergeTrain(projectRoot string, args map[string]any) (any, error) {
+	raw := strArg(args, "branches")
+	if raw == "" {
+		return nil, fmt.Errorf("branches is required (comma-separated, in merge order)")
+	}
+	var branches []string
+	for _, b := range strings.Split(raw, ",") {
+		if b = strings.TrimSpace(b); b != "" {
+			branches = append(branches, b)
+		}
+	}
+	// allowProtected is always false here — the [protect] override stays
+	// CLI-only, exactly as it is for avc_merge.
+	result, err := mergepkg.Train(projectRoot, branches, strArg(args, "validate"), false)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"results":    result.Results,
+		"completed":  result.Completed,
+		"stopped_at": result.StoppedAt,
+		"success":    result.StoppedAt == "",
+	}, nil
+}
+
 func toolMergeAbort(projectRoot string) (any, error) {
 	if err := mergepkg.Abort(projectRoot); err != nil {
 		return nil, err
@@ -842,6 +927,53 @@ func toolRunInWorkspace(projectRoot string, args map[string]any) (any, error) {
 				"process_tree_kill": result.SandboxInfo.ProcessTreeKill,
 			},
 		},
+	}, nil
+}
+
+// ─── Bisect tool ──────────────────────────────────────────────────────────────
+
+func toolBisect(projectRoot string, args map[string]any) (any, error) {
+	// bisect.Run enforces the [run] enabled gate itself (it executes the
+	// command through the same sandbox as toolRunInWorkspace).
+	command := strArg(args, "cmd")
+	if command == "" {
+		return nil, fmt.Errorf("cmd is required")
+	}
+	good := strArg(args, "good")
+	if good == "" {
+		return nil, fmt.Errorf("good is required")
+	}
+
+	var steps []map[string]any
+	result, err := bisect.Run(projectRoot, bisect.Options{
+		BranchName:     strArg(args, "branch"),
+		GoodID:         good,
+		BadID:          strArg(args, "bad"),
+		Command:        command,
+		TimeoutSeconds: intArg(args, "timeout_seconds"),
+		OnStep: func(s bisect.Step) {
+			steps = append(steps, map[string]any{
+				"snapshot_id": s.SnapshotID,
+				"label":       s.Label,
+				"exit_code":   s.ExitCode,
+				"verdict":     s.Verdict,
+			})
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"first_bad_id":    result.FirstBadID,
+		"first_bad_label": result.FirstBadLabel,
+		"predecessor_id":  result.PredecessorID,
+		"steps":           result.Steps,
+		"step_log":        steps,
+		"skipped":         result.Skipped,
+		"summary":         result.Summary,
+		"ambiguous":       result.Ambiguous,
+		"message":         result.Message,
+		"success":         true,
 	}, nil
 }
 

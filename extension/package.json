@@ -233,10 +233,15 @@
           "default": "avc",
           "description": "Path to the avc CLI binary."
         },
+        "avc.watch.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run the AVC watcher (avc watch) while VSCode is open — continuously checkpoints the project as files change, including edits made outside the editor. Supersedes auto-snapshot on save."
+        },
         "avc.autoSnapshot.enabled": {
           "type": "boolean",
           "default": false,
-          "description": "Automatically create a snapshot after saving files."
+          "description": "Automatically create a snapshot after saving files. Ignored while avc.watch.enabled is on (the CLI watcher covers saves and more)."
         },
         "avc.autoSnapshot.debounceSeconds": {
           "type": "number",

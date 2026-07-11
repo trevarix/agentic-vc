@@ -71,7 +71,25 @@ func Run(req RunRequest) (*RunResult, error) {
 	if _, err := os.Stat(workspacePath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("workspace for branch %q not found — run `avc branch create %s` first", req.BranchName, req.BranchName)
 	}
+	return runSandboxed(req.ProjectRoot, workspacePath, req.Command, req.TimeoutSeconds)
+}
 
+// RunInDir executes command in an arbitrary directory with the same sandbox
+// layers as Run (env scrubbing, command blocklist, timeout, output caps,
+// process-tree kill). Used by the merge train's --validate step, which must
+// run against the real project root (post-merge main) rather than a branch
+// workspace. Callers are responsible for the [run] enabled gate.
+func RunInDir(projectRoot, dir, command string, timeoutSeconds int) (*RunResult, error) {
+	if _, err := os.Stat(dir); err != nil {
+		return nil, fmt.Errorf("run directory %q not accessible: %w", dir, err)
+	}
+	return runSandboxed(projectRoot, dir, command, timeoutSeconds)
+}
+
+// runSandboxed is the shared core of Run and RunInDir. workspacePath is the
+// directory the command executes in (and the anchor for venv/node_modules/
+// GOMODCACHE isolation).
+func runSandboxed(projectRoot, workspacePath, reqCommand string, timeoutSeconds int) (*RunResult, error) {
 	sandboxInfo := SandboxInfo{
 		Platform:        runtime.GOOS,
 		EnvScrubbing:    true,
@@ -80,26 +98,26 @@ func Run(req RunRequest) (*RunResult, error) {
 	}
 
 	// Step 2: classify — block immediately.
-	class := classify(req.Command)
+	class := classify(reqCommand)
 	if class == classBlocked {
 		return &RunResult{
 			ExitCode:      -1,
-			Stderr:        blockedMessage(req.Command),
+			Stderr:        blockedMessage(reqCommand),
 			WorkspacePath: workspacePath,
 			SandboxInfo:   sandboxInfo,
 		}, nil
 	}
 
 	// Step 3: resolve config values.
-	cfg, _ := config.Load(req.ProjectRoot)
-	timeout := resolveTimeout(req.TimeoutSeconds, cfg)
+	cfg, _ := config.Load(projectRoot)
+	timeout := resolveTimeout(timeoutSeconds, cfg)
 	maxOut := resolveMaxOutput(cfg)
 
 	// Step 4: prepare environment (Layer 1).
 	envVars := buildEnv(workspacePath)
 	envInfo := EnvInfo{Type: "none"}
 
-	command := req.Command
+	command := reqCommand
 
 	switch class {
 	case classPipInstall:

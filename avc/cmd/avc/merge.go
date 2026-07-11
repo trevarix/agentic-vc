@@ -14,9 +14,11 @@ import (
 var mergePreview bool
 var mergeAbort bool
 var mergeAllowProtected bool
+var mergeTrain bool
+var mergeValidate string
 
 var mergeCmd = &cobra.Command{
-	Use:   "merge <branch>",
+	Use:   "merge <branch> | --train <branch>...",
 	Short: "Merge an agent branch back into main",
 	Long: `Performs a three-way merge of <branch> into main.
 
@@ -24,9 +26,18 @@ AVC auto-snapshots main before writing anything, so you can always abort.
 
 Decisions per file:
   clean    — only the branch changed; applied automatically
-  conflict — both main and branch changed; written with conflict markers
-  skip     — no net change; left untouched`,
-	Args: cobra.MaximumNArgs(1),
+  merged   — both sides changed different regions; combined line-by-line
+  conflict — overlapping changes; written with conflict markers
+  skip     — no net change; left untouched
+
+With --train, merges several branches in order, each against the current
+main (so each merge sees the previous ones). The train stops at the first
+conflict; completed merges are kept, each reversible via avc undo.
+--validate "<command>" runs after every merge — a failure rolls that merge
+back and stops the train (requires [run] enabled, like avc run):
+
+  avc merge --train feat/a feat/b feat/c --validate "go test ./..."`,
+	Args: cobra.ArbitraryArgs,
 	RunE: runMerge,
 }
 
@@ -35,6 +46,9 @@ func init() {
 	mergeCmd.Flags().BoolVar(&mergeAbort, "abort", false, "Abort the last in-progress merge")
 	mergeCmd.Flags().BoolVar(&mergeAllowProtected, "allow-protected", false,
 		"Proceed even if the merge changes [protect] paths (human override; agents cannot pass this)")
+	mergeCmd.Flags().BoolVar(&mergeTrain, "train", false, "Merge multiple branches in order, stopping at the first conflict")
+	mergeCmd.Flags().StringVar(&mergeValidate, "validate", "",
+		"Command to run after each --train merge; failure rolls that merge back and stops (requires [run] enabled)")
 }
 
 func runMerge(cmd *cobra.Command, args []string) error {
@@ -56,10 +70,24 @@ func runMerge(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	if mergeTrain {
+		if len(args) == 0 {
+			return fmt.Errorf("--train requires at least one branch name")
+		}
+		return runMergeTrain(projectPath, args)
+	}
+
 	if len(args) == 0 {
 		return fmt.Errorf("branch name is required (or use --abort)")
 	}
+	if len(args) > 1 {
+		return fmt.Errorf("merge takes one branch (use --train to merge several in order)")
+	}
 	branchName := args[0]
+
+	if mergeValidate != "" {
+		return fmt.Errorf("--validate only applies to --train")
+	}
 
 	if mergePreview {
 		result, err := mergepkg.Preview(projectPath, branchName)
@@ -77,6 +105,63 @@ func runMerge(cmd *cobra.Command, args []string) error {
 	printMergeResult(result, false)
 	return nil
 }
+
+func runMergeTrain(projectPath string, branches []string) error {
+	result, err := mergepkg.Train(projectPath, branches, mergeValidate, mergeAllowProtected)
+	if err != nil {
+		return fmt.Errorf("merge train: %w", err)
+	}
+
+	if jsonOutput {
+		out, _ := json.MarshalIndent(map[string]any{
+			"results":    result.Results,
+			"completed":  result.Completed,
+			"stopped_at": result.StoppedAt,
+			"success":    result.StoppedAt == "",
+		}, "", "  ")
+		fmt.Println(string(out))
+		if result.StoppedAt != "" {
+			return errTrainStopped
+		}
+		return nil
+	}
+
+	fmt.Printf("%s %d branch(es)\n\n", accent("◆ Merge train:"), len(branches))
+	for _, r := range result.Results {
+		switch r.Status {
+		case mergepkg.TrainMerged:
+			line := fmt.Sprintf("  %s  %s", success("✓ merged           "), cyan(r.Branch))
+			if r.Merged > 0 {
+				line += dim(fmt.Sprintf("  (%d clean, %d line-merged)", r.Clean, r.Merged))
+			}
+			fmt.Println(line)
+		case mergepkg.TrainConflicts:
+			fmt.Printf("  %s  %s  %s\n", failure("✗ conflicts        "), cyan(r.Branch), dim(r.Detail))
+		case mergepkg.TrainBlocked:
+			fmt.Printf("  %s  %s  %s\n", failure("✗ blocked          "), cyan(r.Branch), dim(r.Detail))
+		case mergepkg.TrainValidationFailed:
+			fmt.Printf("  %s  %s  %s\n", failure("✗ validation failed"), cyan(r.Branch), dim(r.Detail))
+		case mergepkg.TrainError:
+			fmt.Printf("  %s  %s  %s\n", failure("✗ error            "), cyan(r.Branch), dim(r.Detail))
+		case mergepkg.TrainSkipped:
+			fmt.Printf("  %s  %s\n", dim("- skipped          "), dim(r.Branch))
+		}
+	}
+
+	fmt.Println()
+	if result.StoppedAt == "" {
+		fmt.Printf("%s All %d branch(es) merged into main.\n", success("✓ Train complete."), result.Completed)
+		return nil
+	}
+	fmt.Printf("%s Stopped at %s after %d merge(s).\n",
+		warn("⚠ Train stopped."), bold(result.StoppedAt), result.Completed)
+	fmt.Println(dim("  Completed merges are kept — each is reversible with `avc undo`."))
+	return errTrainStopped
+}
+
+// errTrainStopped gives a stopped train a non-zero exit code without cobra
+// re-printing a redundant message (the report above already explains it).
+var errTrainStopped = fmt.Errorf("merge train stopped before completing all branches")
 
 func printMergeResult(result *mergepkg.Result, preview bool) {
 	if jsonOutput {

@@ -68,10 +68,35 @@ One file per subcommand. Each command:
 |---------|---------------|
 | `db` | SQLite schema, migrations, all CRUD — `projects`, `snapshots`, `files`, `diffs` tables |
 | `fileutil` | SHA256 hashing, directory walk, `.avcignore` pattern matching |
-| `snapshot` | Orchestrates a snapshot: walk → hash → store objects → insert DB records |
+| `snapshot` | Orchestrates a snapshot: walk → hash → store objects → insert DB records; generates heuristic change summaries |
 | `restore` | Reads file blobs from the object store and writes them back to the working tree |
-| `diff` | Compares two snapshots by joining file maps; computes line counts from stored blobs |
+| `diff` | Compares two snapshots by joining file maps; computes line counts from stored blobs; per-file change summaries |
 | `config` | Reads/writes `.avc/config.toml` (TOML, `github.com/BurntSushi/toml`) |
+| `watch` | `avc watch` daemon: fsnotify-based (or polling) debounced continuous checkpointing, deduped against branch HEAD |
+| `timeline` | Groups a branch's snapshots by agent session and interleaves operations-log events — the `avc timeline` report |
+| `bisect` | Binary search over snapshot history for the first snapshot that breaks a command, in a scratch workspace |
+
+### Continuous checkpointing (`avc watch`)
+
+`avc watch` makes safety structural instead of behavioral: agents are asked
+to snapshot before every change, but the watcher guarantees recoverability
+even when they don't. Change events (fsnotify; polling fallback for network
+filesystems) mark a target tree — the project root or a branch workspace —
+dirty; after a debounce quiet period the tree is compared to the branch HEAD
+using the stat cache and snapshotted only if it differs. Checkpoints carry
+the `auto:watch` label prefix and their own retention cap
+(`max_watch_snapshots_per_branch`, default 200, pruned before any other
+rule), so continuous checkpointing can never crowd out deliberate snapshots.
+A pid file with a heartbeat mtime enforces one watcher per project without
+platform-specific process probing.
+
+One fsnotify subtlety is load-bearing: the daemon's main loop registers new
+directories with `watcher.Add` while events are flowing, and on some
+platforms the fsnotify backend blocks event delivery while servicing `Add` —
+consuming events on the same goroutine would deadlock. A pump goroutine
+therefore drains `watcher.Events` into a buffered queue; on overflow it
+degrades to "mark every target dirty" (a cheap re-check) rather than losing
+a change.
 
 ---
 
