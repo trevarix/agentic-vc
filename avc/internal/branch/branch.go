@@ -56,16 +56,12 @@ func MaterializeWorkspace(projectRoot string, b *db.Branch) error {
 // copyToWorkspace copies all tracked files from projectRoot into ws and writes
 // a warm stat cache so the first snapshot on the branch skips re-hashing.
 //
-// It uses copyFileOptimized which tries (in order): hardlink → regular copy.
-// Hardlinks are zero-cost until a file is mutated, making branch creation on
-// the same filesystem nearly instant for large projects.
-// If hardlinking fails (cross-device, unsupported FS), it falls back to a
-// byte-for-byte copy transparently.
-//
-// Note: when a file is hardlinked, writes in the workspace will mutate the
-// source file too until the OS breaks the link on write (copy-on-write
-// semantics). Because AVC workspaces are written by avc_restore (which always
-// creates a new file), this is safe in practice.
+// It uses copyFileOptimized, a byte-for-byte copy. Hardlinks are deliberately
+// not used here: agents write to workspace files with ordinary tools (editors,
+// in-place appends, sed -i), and a hardlinked file shares its inode with the
+// project-root original, so such a write would silently mutate the real
+// project root too. A future reflink (copy-on-write) optimisation is safe
+// because the OS breaks the share on first write, unlike a hardlink.
 func copyToWorkspace(projectRoot, ws, branchName string) error {
 	ignore, err := fileutil.LoadIgnoreRules(projectRoot)
 	if err != nil {
@@ -120,6 +116,38 @@ func RemoveWorkspace(projectRoot, branchName string) error {
 // is used. Branch creation never takes a new snapshot — it inherits the base
 // by reference only.
 func Create(projectRoot, name, baseSnapshotID string) (*db.Branch, error) {
+	return create(projectRoot, name, baseSnapshotID, "")
+}
+
+// CreateFromBranch creates a stacked branch: its base snapshot is the parent
+// branch's current HEAD, so the child starts from the parent's latest work.
+// Merging a child still targets main — the base snapshot already encodes the
+// fork point, so the three-way math is unchanged. The parent is recorded for
+// lineage display only.
+func CreateFromBranch(projectRoot, name, parentName string) (*db.Branch, error) {
+	store, err := db.Open(projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	project, err := store.GetProject(projectRoot)
+	if err != nil {
+		store.Close()
+		return nil, fmt.Errorf("project not initialized: %w", err)
+	}
+	parent, err := store.GetBranchByName(project.ID, parentName)
+	if err != nil {
+		store.Close()
+		return nil, fmt.Errorf("parent branch '%s' not found", parentName)
+	}
+	head, err := store.GetHeadSnapshot(parent.ID)
+	store.Close()
+	if err != nil {
+		return nil, fmt.Errorf("parent branch '%s' has no snapshots to branch from — snapshot it first", parentName)
+	}
+	return create(projectRoot, name, head.ID, parent.ID)
+}
+
+func create(projectRoot, name, baseSnapshotID, parentBranchID string) (*db.Branch, error) {
 	if err := ValidateBranchName(name); err != nil {
 		return nil, err
 	}
@@ -162,6 +190,7 @@ func Create(projectRoot, name, baseSnapshotID string) (*db.Branch, error) {
 		BaseSnapshotID: baseSnapshotID,
 		CreatedAt:      time.Now().Unix(),
 		Status:         "active",
+		ParentBranchID: parentBranchID,
 	}
 	if err := store.InsertBranch(b); err != nil {
 		return nil, fmt.Errorf("create branch: %w", err)
@@ -233,11 +262,11 @@ func Delete(projectRoot, name string, keepHistory bool) error {
 		return fmt.Errorf("cannot delete the main branch")
 	}
 
-	cfg, err := config.Load(projectRoot)
-	if err != nil {
-		return err
-	}
-	if cfg.Branch.Active == name {
+	// GetActiveBranchName is authoritative (project_state in the DB, since
+	// Phase 7.3) — reading config.toml directly here could delete the truly
+	// active branch and its workspace out from under a running agent if the
+	// two sources of truth ever disagree.
+	if GetActiveBranchName(projectRoot) == name {
 		return fmt.Errorf("cannot delete the active branch; switch to another branch first")
 	}
 

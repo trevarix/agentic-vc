@@ -24,7 +24,54 @@ type Config struct {
 	Run       RunConfig       `toml:"run"`
 	Retention RetentionConfig `toml:"retention"`
 	Hooks     HooksConfig     `toml:"hooks"`
+	Snapshot  SnapshotConfig  `toml:"snapshot"`
+	Protect   ProtectConfig   `toml:"protect"`
+	Watch     WatchConfig     `toml:"watch"`
 }
+
+// WatchConfig controls the `avc watch` continuous-checkpointing daemon.
+type WatchConfig struct {
+	// DebounceSeconds is the quiet period after the last file change before
+	// a checkpoint snapshot is taken. 0 = DefaultWatchDebounceSeconds.
+	DebounceSeconds int `toml:"debounce_seconds"`
+	// MinIntervalSeconds is the minimum time between two watch snapshots on
+	// the same branch, regardless of change volume. 0 = DefaultWatchMinIntervalSeconds.
+	MinIntervalSeconds int `toml:"min_interval_seconds"`
+	// IncludeWorkspaces also watches every active branch workspace, not just
+	// the project root. Defaults to true (set include_workspaces = false to disable).
+	IncludeWorkspaces *bool `toml:"include_workspaces"`
+}
+
+// Watch daemon defaults, applied when the corresponding config value is 0.
+const (
+	DefaultWatchDebounceSeconds    = 30
+	DefaultWatchMinIntervalSeconds = 120
+)
+
+// ProtectConfig bounds what agent-driven integration may change. Paths
+// matching these globs are refused (mode "block") or flagged (mode "warn")
+// when a merge would modify them — enforced mechanically, like run.enabled:
+// agents cannot lift it, only a human editing config.toml or passing the
+// CLI-only --allow-protected flag can.
+type ProtectConfig struct {
+	// Paths are gitignore-style globs (same syntax as .avcignore, including
+	// ** and trailing-/ for directories) naming files agents must not change.
+	Paths []string `toml:"paths"`
+	// Mode is "block" (default — merges touching protected paths are
+	// refused) or "warn" (merges proceed with a prominent warning).
+	Mode string `toml:"mode"`
+}
+
+// SnapshotConfig controls snapshot creation behavior.
+type SnapshotConfig struct {
+	// MaxFileSizeMB is the largest single file (in MB) a snapshot will read
+	// and store. Larger files are skipped with a warning rather than risking
+	// an out-of-memory read. 0 falls back to DefaultMaxFileSizeMB.
+	MaxFileSizeMB int `toml:"max_file_size_mb"`
+}
+
+// DefaultMaxFileSizeMB is used when SnapshotConfig.MaxFileSizeMB is unset (0).
+const DefaultMaxFileSizeMB = 100
 
 // HooksConfig defines shell commands to run before/after snapshots and restores.
 // Pre-hooks abort the operation on non-zero exit; post-hooks are non-fatal.
@@ -51,7 +98,18 @@ type RetentionConfig struct {
 	// AutoGC runs garbage collection automatically after pruning.
 	// Defaults to true when a pruning policy is active.
 	AutoGC bool `toml:"auto_gc"`
+
+	// MaxWatchSnapshotsPerBranch caps snapshots created by `avc watch`
+	// (label prefix "auto:watch") per branch — the oldest watch snapshots
+	// are pruned first, before any other retention rule considers them.
+	// 0 = the built-in default (200); -1 = unlimited.
+	MaxWatchSnapshotsPerBranch int `toml:"max_watch_snapshots_per_branch"`
 }
+
+// DefaultMaxWatchSnapshotsPerBranch is used when MaxWatchSnapshotsPerBranch
+// is unset (0). Watch snapshots are high-volume by design, so unlike the
+// other retention rules this cap is on by default.
+const DefaultMaxWatchSnapshotsPerBranch = 200
 
 // RunConfig holds workspace command runner settings.
 type RunConfig struct {
@@ -291,6 +349,32 @@ max_timeout_seconds     = 600
 # Increase for projects with verbose test suites.
 max_output_kb = 512
 
+[snapshot]
+# Files larger than this are skipped (with a warning) instead of being
+# read and stored — protects against an out-of-memory read on an
+# accidentally-tracked large binary. 0 = use the built-in default (100 MB).
+# max_file_size_mb = 100
+
+[protect]
+# Paths agents must not change. Merges that would modify a matching path are
+# refused (mode = "block", the default) or flagged (mode = "warn"). Globs use
+# .avcignore syntax, including ** and trailing / for directories.
+# A human can override a blocked merge with: avc merge <branch> --allow-protected
+# (the MCP merge tool has no such override — agents cannot lift this).
+# paths = [".github/workflows/**", "secrets/**", "*.pem"]
+# mode  = "block"
+
+[watch]
+# Settings for the continuous-checkpointing daemon (avc watch).
+# Quiet period after the last file change before a checkpoint is taken.
+# debounce_seconds = 30
+
+# Minimum time between two watch snapshots on the same branch.
+# min_interval_seconds = 120
+
+# Also watch every active branch workspace, not just the project root.
+# include_workspaces = true
+
 [retention]
 # Maximum snapshots to keep per branch (oldest pruned first). 0 = unlimited.
 # max_snapshots_per_branch = 100
@@ -300,6 +384,10 @@ max_output_kb = 512
 
 # Run gc automatically after pruning. Default: true.
 # auto_gc = true
+
+# Cap on snapshots created by "avc watch" per branch — these are pruned
+# first. 0 = the built-in default (200); -1 = unlimited.
+# max_watch_snapshots_per_branch = 200
 
 [hooks]
 # Shell commands run around snapshots and restores.

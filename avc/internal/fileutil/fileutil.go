@@ -91,15 +91,69 @@ func WalkProject(root string, ignore *IgnoreRules) ([]string, error) {
 	return paths, err
 }
 
-// IgnoreRules holds compiled patterns from .avcignore.
+// ignorePattern is one compiled line from .avcignore, following gitignore
+// syntax and precedence rules.
+type ignorePattern struct {
+	segments []string // pattern split on "/"; "**" segments match zero or more path segments
+	dirOnly  bool      // true if the pattern ended in "/" — only matches directories
+	negate   bool      // true if the pattern started with "!" — un-ignores a prior match
+}
+
+// compilePattern parses one non-comment, non-blank .avcignore line.
+//
+// A pattern containing no "/" (other than an optional trailing one, e.g.
+// "node_modules" or "build/") is unanchored — it matches at any depth, not
+// just at the project root. This is implemented by implicitly prefixing such
+// patterns with "**/", which also gives every pattern uniform "**" handling.
+func compilePattern(raw string) ignorePattern {
+	negate := strings.HasPrefix(raw, "!")
+	if negate {
+		raw = raw[1:]
+	}
+	dirOnly := strings.HasSuffix(raw, "/")
+	body := raw
+	if dirOnly {
+		body = strings.TrimSuffix(body, "/")
+	}
+
+	anchored := strings.Contains(body, "/")
+	body = strings.TrimPrefix(body, "/")
+	if !anchored {
+		body = "**/" + body
+	}
+
+	return ignorePattern{segments: strings.Split(body, "/"), dirOnly: dirOnly, negate: negate}
+}
+
+// IgnoreRules holds compiled patterns from .avcignore, in file order (later
+// patterns — including "!" negations — take precedence over earlier ones,
+// matching gitignore semantics).
 type IgnoreRules struct {
-	patterns []string
+	patterns []ignorePattern
 }
 
 // LoadIgnoreRules reads .avcignore from projectRoot. If the file doesn't exist,
 // returns an empty rule set (nothing ignored beyond .avc/).
 func LoadIgnoreRules(projectRoot string) (*IgnoreRules, error) {
-	path := filepath.Join(projectRoot, ".avcignore")
+	return LoadIgnoreRulesFrom(filepath.Join(projectRoot, ".avcignore"))
+}
+
+// CompilePatterns builds an IgnoreRules matcher from in-memory pattern
+// lines (same syntax as .avcignore). Used by the protected-paths policy so
+// [protect] globs and ignore rules share one matcher implementation.
+func CompilePatterns(lines []string) *IgnoreRules {
+	var patterns []ignorePattern
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			patterns = append(patterns, compilePattern(line))
+		}
+	}
+	return &IgnoreRules{patterns: patterns}
+}
+
+// LoadIgnoreRulesFrom reads ignore rules from an explicit file path.
+func LoadIgnoreRulesFrom(path string) (*IgnoreRules, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return &IgnoreRules{}, nil
@@ -108,44 +162,66 @@ func LoadIgnoreRules(projectRoot string) (*IgnoreRules, error) {
 		return nil, err
 	}
 
-	var patterns []string
+	var patterns []ignorePattern
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line != "" && !strings.HasPrefix(line, "#") {
-			patterns = append(patterns, line)
+			patterns = append(patterns, compilePattern(line))
 		}
 	}
 	return &IgnoreRules{patterns: patterns}, nil
 }
 
-// Matches returns true if the given slash-separated relative path matches any
-// ignore pattern.
+// Matches returns true if the given slash-separated relative file path
+// matches the ignore rules. dirOnly patterns (ending in "/") never match
+// files.
 func (r *IgnoreRules) Matches(rel string) bool {
-	for _, pat := range r.patterns {
-		if matchPattern(pat, rel) {
-			return true
-		}
-	}
-	return false
+	return r.matchAny(rel, false)
 }
 
-// MatchesDir returns true if a directory should be skipped entirely.
+// MatchesDir returns true if the given slash-separated relative directory
+// path matches the ignore rules — dirOnly patterns apply here, in addition
+// to every pattern that also matches files.
 func (r *IgnoreRules) MatchesDir(rel string) bool {
-	return r.Matches(rel) || r.Matches(rel+"/")
+	return r.matchAny(rel, true)
 }
 
-// matchPattern is a simple glob matcher supporting * and ** wildcards.
-func matchPattern(pattern, path string) bool {
-	matched, err := filepath.Match(pattern, path)
-	if err == nil && matched {
-		return true
-	}
-	// Also match if any path component matches the pattern (e.g. "node_modules").
-	parts := strings.Split(path, "/")
-	for _, part := range parts {
-		if m, _ := filepath.Match(pattern, part); m {
-			return true
+// matchAny applies every pattern in file order and returns the outcome of
+// the last one that matched — this is what makes a later "!pattern" able to
+// un-ignore something an earlier broader pattern excluded.
+func (r *IgnoreRules) matchAny(rel string, isDir bool) bool {
+	segments := strings.Split(rel, "/")
+	matched := false
+	for _, p := range r.patterns {
+		if p.dirOnly && !isDir {
+			continue
+		}
+		if matchSegments(p.segments, segments) {
+			matched = !p.negate
 		}
 	}
-	return false
+	return matched
+}
+
+// matchSegments recursively matches pattern segments against path segments.
+// A "**" segment matches zero or more path segments; every other segment is
+// matched against exactly one path segment via filepath.Match (so "*" and
+// "?" never cross a "/" boundary).
+func matchSegments(pat, path []string) bool {
+	if len(pat) == 0 {
+		return len(path) == 0
+	}
+	if pat[0] == "**" {
+		if matchSegments(pat[1:], path) {
+			return true
+		}
+		return len(path) > 0 && matchSegments(pat, path[1:])
+	}
+	if len(path) == 0 {
+		return false
+	}
+	if ok, err := filepath.Match(pat[0], path[0]); err != nil || !ok {
+		return false
+	}
+	return matchSegments(pat[1:], path[1:])
 }

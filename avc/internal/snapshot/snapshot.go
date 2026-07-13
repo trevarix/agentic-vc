@@ -13,6 +13,7 @@ import (
 
 	"github.com/trevarix/agentic-vc/avc/internal/config"
 	"github.com/trevarix/agentic-vc/avc/internal/db"
+	diffpkg "github.com/trevarix/agentic-vc/avc/internal/diff"
 	"github.com/trevarix/agentic-vc/avc/internal/fileutil"
 	"github.com/trevarix/agentic-vc/avc/internal/hooks"
 	"github.com/trevarix/agentic-vc/avc/internal/restore"
@@ -22,14 +23,31 @@ import (
 
 // Result is returned by Create after a successful snapshot.
 type Result struct {
-	ID        string
+	ID           string
+	Label        string
+	Timestamp    int64
+	AgentName    string
+	Notes        string
+	FileCount    int
+	TotalSize    int64
+	BranchID     string
+	SessionID    string
+	Task         string
+	Summary      string   // heuristic one-line change summary vs the previous branch HEAD; empty when no baseline exists
+	SkippedLarge []string // relative paths skipped for exceeding the max file size
+}
+
+// Options describes one snapshot to create. Label is required; everything
+// else is optional. SourceDir "" means walk projectRoot (the default for
+// main); for branch workspaces it is the workspace path.
+type Options struct {
 	Label     string
-	Timestamp int64
 	AgentName string
 	Notes     string
-	FileCount int
-	TotalSize int64
-	BranchID  string
+	BranchID  string // associates the snapshot with a branch; "" for unscoped snapshots
+	SourceDir string
+	SessionID string // agent session attribution (see `avc timeline`)
+	Task      string // one-line task description for the session
 }
 
 // Create walks sourceDir, hashes all tracked files, and persists a snapshot
@@ -40,6 +58,19 @@ type Result struct {
 //
 // branchID associates the snapshot with a branch; pass "" for unscoped snapshots.
 func Create(projectRoot, label, agentName, notes, branchID, sourceDir string) (*Result, error) {
+	return CreateWithOptions(projectRoot, Options{
+		Label:     label,
+		AgentName: agentName,
+		Notes:     notes,
+		BranchID:  branchID,
+		SourceDir: sourceDir,
+	})
+}
+
+// CreateWithOptions is Create with session attribution (session_id/task).
+func CreateWithOptions(projectRoot string, opts Options) (*Result, error) {
+	label, agentName, notes := opts.Label, opts.AgentName, opts.Notes
+	branchID, sourceDir := opts.BranchID, opts.SourceDir
 	if sourceDir == "" {
 		sourceDir = projectRoot
 	}
@@ -63,7 +94,7 @@ func Create(projectRoot, label, agentName, notes, branchID, sourceDir string) (*
 		}
 	}
 
-	ignore, err := fileutil.LoadIgnoreRules(projectRoot)
+	ignore, err := loadIgnoreRulesForSource(projectRoot, sourceDir)
 	if err != nil {
 		return nil, fmt.Errorf("load ignore rules: %w", err)
 	}
@@ -111,7 +142,14 @@ func Create(projectRoot, label, agentName, notes, branchID, sourceDir string) (*
 	snapID := newSnapID()
 	now := time.Now().Unix()
 
+	maxFileSizeMB := config.DefaultMaxFileSizeMB
+	if cfg != nil && cfg.Snapshot.MaxFileSizeMB > 0 {
+		maxFileSizeMB = cfg.Snapshot.MaxFileSizeMB
+	}
+	maxFileSizeBytes := int64(maxFileSizeMB) * 1024 * 1024
+
 	var totalSize int64
+	var skippedLarge []string
 	files := make([]*db.File, 0, len(paths))
 
 	for _, absPath := range paths {
@@ -121,6 +159,18 @@ func Create(projectRoot, label, agentName, notes, branchID, sourceDir string) (*
 		info, err := os.Stat(absPath)
 		if err != nil {
 			return nil, fmt.Errorf("stat file %s: %w", absPath, err)
+		}
+
+		// Files larger than the configured cap are skipped entirely (not
+		// read, not hashed, not stored) rather than risking an
+		// out-of-memory read on an accidentally-tracked large binary.
+		if info.Size() > maxFileSizeBytes {
+			skippedLarge = append(skippedLarge, rel)
+			fmt.Fprintf(os.Stderr,
+				"[avc] warning: skipping %s (%.1f MB exceeds the %d MB snapshot limit; set [snapshot] max_file_size_mb in .avc/config.toml to change this)\n",
+				rel, float64(info.Size())/(1024*1024), maxFileSizeMB,
+			)
+			continue
 		}
 
 		var hash string
@@ -150,8 +200,21 @@ func Create(projectRoot, label, agentName, notes, branchID, sourceDir string) (*
 			RelativePath: rel,
 			FileHash:     hash,
 			FileSize:     size,
+			FileMode:     uint32(info.Mode().Perm()),
 		})
 		totalSize += size
+	}
+
+	// Baseline for the heuristic change summary: the branch HEAD before this
+	// snapshot, falling back to the branch's base snapshot for the first
+	// snapshot on a fresh branch. Empty = no baseline, no summary.
+	summaryBaseID := ""
+	if branchID != "" {
+		if head, headErr := store.GetHeadSnapshot(branchID); headErr == nil {
+			summaryBaseID = head.ID
+		} else if b, branchErr := store.GetBranchByID(branchID); branchErr == nil {
+			summaryBaseID = b.BaseSnapshotID
+		}
 	}
 
 	snap := &db.Snapshot{
@@ -164,13 +227,22 @@ func Create(projectRoot, label, agentName, notes, branchID, sourceDir string) (*
 		FileCount: len(files),
 		TotalSize: totalSize,
 		BranchID:  branchID,
+		SessionID: opts.SessionID,
+		Task:      opts.Task,
 	}
 
-	if err := store.InsertSnapshot(snap); err != nil {
+	if err := store.InsertSnapshotWithFiles(snap, files); err != nil {
 		return nil, fmt.Errorf("insert snapshot: %w", err)
 	}
-	if err := store.InsertFilesBatch(files); err != nil {
-		return nil, fmt.Errorf("insert files: %w", err)
+
+	// Generate and cache the change summary vs the baseline. Best-effort: a
+	// snapshot that succeeded must not fail because its summary could not be
+	// computed, and `avc timeline` recomputes missing summaries lazily.
+	summary := ""
+	if summaryBaseID != "" {
+		if diffFiles, sumErr := diffpkg.CacheSummaries(projectRoot, summaryBaseID, snapID); sumErr == nil {
+			summary = diffpkg.Summarize(diffFiles)
+		}
 	}
 
 	// Persist updated cache — best-effort.
@@ -184,14 +256,18 @@ func Create(projectRoot, label, agentName, notes, branchID, sourceDir string) (*
 	}
 
 	result := &Result{
-		ID:        snapID,
-		Label:     label,
-		Timestamp: now,
-		AgentName: agentName,
-		Notes:     notes,
-		FileCount: len(files),
-		TotalSize: totalSize,
-		BranchID:  branchID,
+		ID:           snapID,
+		Label:        label,
+		Timestamp:    now,
+		AgentName:    agentName,
+		Notes:        notes,
+		FileCount:    len(files),
+		TotalSize:    totalSize,
+		BranchID:     branchID,
+		SessionID:    opts.SessionID,
+		Task:         opts.Task,
+		Summary:      summary,
+		SkippedLarge: skippedLarge,
 	}
 
 	// Apply retention policy (best-effort).
@@ -205,4 +281,20 @@ func Create(projectRoot, label, agentName, notes, branchID, sourceDir string) (*
 	}
 
 	return result, nil
+}
+
+// loadIgnoreRulesForSource loads .avcignore from sourceDir when it differs
+// from projectRoot (i.e. this snapshot is walking a branch workspace) and a
+// copy exists there; otherwise it falls back to the project root's rules.
+// A workspace's .avcignore can diverge from the root's (an agent may edit it
+// as part of its work), and a snapshot should honor the rules of the
+// directory it is actually walking, not always the root's.
+func loadIgnoreRulesForSource(projectRoot, sourceDir string) (*fileutil.IgnoreRules, error) {
+	if sourceDir != "" && sourceDir != projectRoot {
+		wsIgnorePath := filepath.Join(sourceDir, ".avcignore")
+		if _, err := os.Stat(wsIgnorePath); err == nil {
+			return fileutil.LoadIgnoreRulesFrom(wsIgnorePath)
+		}
+	}
+	return fileutil.LoadIgnoreRules(projectRoot)
 }

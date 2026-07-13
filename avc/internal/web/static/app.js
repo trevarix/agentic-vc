@@ -46,9 +46,22 @@ function timeAgo(unix) {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+// getSessionToken reads the avc_token cookie the server sets on first load.
+// Every /api/ request must present it (as an Authorization header here) —
+// the server rejects requests without it, so a page from another origin
+// that doesn't have this cookie cannot call the API even if it guesses the
+// port AVC is running on.
+function getSessionToken() {
+  const m = document.cookie.match(/(?:^|;\s*)avc_token=([^;]+)/);
+  return m ? decodeURIComponent(m[1]) : '';
+}
+
 async function api(path, opts = {}) {
   const res = await fetch(path, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${getSessionToken()}`,
+    },
     ...opts,
   });
   if (!res.ok) {

@@ -8,20 +8,30 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/trevarix/agentic-vc/avc/internal/config"
 	"github.com/trevarix/agentic-vc/avc/internal/db"
 	"github.com/trevarix/agentic-vc/avc/internal/fileutil"
 	"github.com/trevarix/agentic-vc/avc/internal/hooks"
+	"github.com/trevarix/agentic-vc/avc/internal/objstore"
 	"github.com/trevarix/agentic-vc/avc/internal/statcache"
+	"github.com/trevarix/agentic-vc/avc/internal/trash"
 )
+
+// trashAutoEmptyAge is how long quarantined files sit in .avc/trash/ before a
+// restore opportunistically sweeps them away. Best-effort — never blocks restore.
+const trashAutoEmptyAge = 7 * 24 * time.Hour
 
 // Result is returned by Restore on success.
 type Result struct {
-	SnapshotID    string
-	RestoredFiles int
-	RestoredSize  int64
+	SnapshotID       string
+	RestoredFiles    int
+	RestoredSize     int64
+	QuarantinedFiles int    // untracked files moved to trash instead of deleted
+	TrashOpID        string // trash session ID; "" if nothing was quarantined
 }
 
 // Restore rolls the project back to the state captured in snapshotID.
@@ -79,26 +89,48 @@ func RestoreToDir(projectRoot, snapshotID, targetDir string) (*Result, error) {
 		targetPaths[f.RelativePath] = true
 	}
 
-	// Walk targetDir and remove any file not in the target snapshot.
+	// Ignored files (.env, node_modules/, local DBs, ...) are by definition
+	// never captured in a snapshot. They must never be touched by the
+	// deletion sweep below, or every restore would delete them.
+	ignore, err := fileutil.LoadIgnoreRules(projectRoot)
+	if err != nil {
+		return nil, fmt.Errorf("load ignore rules: %w", err)
+	}
+
+	// Untracked-but-not-ignored files are quarantined rather than deleted —
+	// defense in depth so a restore can never destroy data irrecoverably.
+	session := trash.NewSession(projectRoot, "restore")
+	quarantined := 0
+
+	// Walk targetDir and quarantine any file not in the target snapshot.
 	// This cleans up files added after the snapshot was taken.
 	_ = filepath.WalkDir(targetDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
+		rel, relErr := filepath.Rel(targetDir, path)
+		if relErr != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+
 		if d.IsDir() {
 			switch d.Name() {
 			case ".avc", ".git", ".hg", ".svn", ".bzr":
 				return filepath.SkipDir
 			}
+			if ignore.MatchesDir(rel) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
-		rel, err := filepath.Rel(targetDir, path)
-		if err != nil {
-			return nil
+		if ignore.Matches(rel) {
+			return nil // ignored file — never touch it
 		}
-		rel = filepath.ToSlash(rel)
 		if !targetPaths[rel] {
-			_ = os.Remove(path)
+			if err := session.Move(targetDir, rel); err == nil {
+				quarantined++
+			}
 		}
 		return nil
 	})
@@ -124,6 +156,12 @@ func RestoreToDir(projectRoot, snapshotID, targetDir string) (*Result, error) {
 		if err := fileutil.WriteFile(absPath, data); err != nil {
 			return nil, fmt.Errorf("write file %s: %w", f.RelativePath, err)
 		}
+		// Restore the recorded permission bits (notably the executable bit).
+		// f.FileMode is 0 for rows written before mode tracking existed —
+		// WriteFile's own default (0644) already applies in that case.
+		if f.FileMode != 0 {
+			_ = os.Chmod(absPath, os.FileMode(f.FileMode))
+		}
 		restoredSize += f.FileSize
 
 		if isWorkspace {
@@ -145,42 +183,66 @@ func RestoreToDir(projectRoot, snapshotID, targetDir string) (*Result, error) {
 		statcache.Invalidate(projectRoot)
 	}
 
+	// Quarantining files can leave their now-empty parent directories behind
+	// (e.g. a workspace subdirectory whose only file was untracked).
+	removeEmptyDirs(targetDir)
+
+	// Opportunistically sweep trash entries older than the retention window.
+	// Best-effort — a failure here must never fail the restore itself.
+	if removed, err := trash.Empty(projectRoot, trashAutoEmptyAge); err == nil && removed > 0 {
+		fmt.Fprintf(os.Stderr, "[avc] Cleared %d trash entr(ies) older than %s\n", removed, trashAutoEmptyAge)
+	}
+
 	return &Result{
-		SnapshotID:    snapshotID,
-		RestoredFiles: len(targetFiles),
-		RestoredSize:  restoredSize,
+		SnapshotID:       snapshotID,
+		RestoredFiles:    len(targetFiles),
+		RestoredSize:     restoredSize,
+		QuarantinedFiles: quarantined,
+		TrashOpID:        session.OpID(),
 	}, nil
 }
 
-// objectPath returns the path inside .avc/objects/ where a file's content is stored.
-func objectPath(projectRoot, hash string) string {
-	return filepath.Join(projectRoot, ".avc", "objects", hash[:2], hash[2:])
-}
-
 // ReadObject reads a stored file blob by its hash. Exported for use by merge.
+// Thin wrapper over the objstore package, which owns the on-disk format.
 func ReadObject(projectRoot, hash string) ([]byte, error) {
-	return readObject(projectRoot, hash)
+	return objstore.Read(projectRoot, hash)
 }
 
 // readObject reads a stored file blob by its hash.
 func readObject(projectRoot, hash string) ([]byte, error) {
-	path := objectPath(projectRoot, hash)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("object %s not found: %w", hash[:8], err)
-	}
-	return data, nil
+	return objstore.Read(projectRoot, hash)
 }
 
 // StoreObject writes file content to the object store under its hash.
-// Called during snapshot creation to persist actual file bytes.
+// Called during snapshot creation to persist actual file bytes. Thin wrapper
+// over the objstore package, which owns the on-disk format (atomic writes,
+// transparent zstd compression, legacy raw objects).
 func StoreObject(projectRoot, hash string, data []byte) error {
-	path := objectPath(projectRoot, hash)
-	if _, err := os.Stat(path); err == nil {
-		return nil // already stored (content-addressed deduplication)
+	return objstore.Store(projectRoot, hash, data)
+}
+
+// removeEmptyDirs removes every directory under root that ends up empty,
+// deepest first so a parent that becomes empty only after its child is
+// removed is caught in the same pass. Used after a restore's deletion sweep
+// so quarantining files doesn't leave orphaned empty directories behind.
+// Best-effort: a directory that can't be removed is simply left in place.
+func removeEmptyDirs(root string) {
+	var dirs []string
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || !d.IsDir() || path == root {
+			return nil
+		}
+		switch d.Name() {
+		case ".avc", ".git", ".hg", ".svn", ".bzr":
+			return filepath.SkipDir
+		}
+		dirs = append(dirs, path)
+		return nil
+	})
+	sort.Slice(dirs, func(i, j int) bool { return len(dirs[i]) > len(dirs[j]) })
+	for _, dir := range dirs {
+		if entries, err := os.ReadDir(dir); err == nil && len(entries) == 0 {
+			os.Remove(dir) //nolint:errcheck
+		}
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0644)
 }

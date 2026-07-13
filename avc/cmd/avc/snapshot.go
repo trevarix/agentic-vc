@@ -16,8 +16,10 @@ import (
 )
 
 var (
-	snapshotAgent string
-	snapshotNotes string
+	snapshotAgent   string
+	snapshotNotes   string
+	snapshotSession string
+	snapshotTask    string
 )
 
 var snapshotCmd = &cobra.Command{
@@ -50,6 +52,8 @@ var snapshotUntagCmd = &cobra.Command{
 func init() {
 	snapshotCmd.Flags().StringVar(&snapshotAgent, "agent", "", "Name of the agent creating this snapshot")
 	snapshotCmd.Flags().StringVar(&snapshotNotes, "notes", "", "Optional notes for this snapshot")
+	snapshotCmd.Flags().StringVar(&snapshotSession, "session", "", "Agent session ID this snapshot belongs to (see avc timeline)")
+	snapshotCmd.Flags().StringVar(&snapshotTask, "task", "", "One-line description of the session's task")
 	snapshotCmd.AddCommand(snapshotTagCmd, snapshotUntagCmd)
 }
 
@@ -71,7 +75,15 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 	branchName := branchpkg.GetActiveBranchName(projectPath)
 	sourceDir := branchpkg.WorkspacePath(projectPath, branchName) // "" for main
 
-	snap, err := snapshot.Create(projectPath, label, snapshotAgent, snapshotNotes, branchID, sourceDir)
+	snap, err := snapshot.CreateWithOptions(projectPath, snapshot.Options{
+		Label:     label,
+		AgentName: snapshotAgent,
+		Notes:     snapshotNotes,
+		BranchID:  branchID,
+		SourceDir: sourceDir,
+		SessionID: snapshotSession,
+		Task:      snapshotTask,
+	})
 	if err != nil {
 		return fmt.Errorf("snapshot failed: %w", err)
 	}
@@ -86,6 +98,10 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 			"total_size":    snap.TotalSize,
 			"notes":         snap.Notes,
 			"branch_id":     snap.BranchID,
+			"session_id":    snap.SessionID,
+			"task":          snap.Task,
+			"summary":       snap.Summary,
+			"skipped_large": snap.SkippedLarge,
 			"success":       true,
 		})
 	}
@@ -95,6 +111,10 @@ func runSnapshot(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  %s %s\n", prop("Branch: "), green(branchpkg.GetActiveBranchName(projectPath)))
 	fmt.Printf("  %s %s\n", prop("Files:  "), yellow(fmt.Sprintf("%d", snap.FileCount)))
 	fmt.Printf("  %s %s\n", prop("Size:   "), dim(fmt.Sprintf("%d bytes", snap.TotalSize)))
+	if len(snap.SkippedLarge) > 0 {
+		fmt.Printf("  %s %s\n", prop("Skipped:"),
+			yellow(fmt.Sprintf("%d file(s) exceeded the size limit (see stderr)", len(snap.SkippedLarge))))
+	}
 	return nil
 }
 

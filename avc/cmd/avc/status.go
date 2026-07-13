@@ -6,8 +6,10 @@ import (
 	"os"
 
 	branchpkg "github.com/trevarix/agentic-vc/avc/internal/branch"
+	"github.com/trevarix/agentic-vc/avc/internal/config"
 	"github.com/trevarix/agentic-vc/avc/internal/db"
 	"github.com/trevarix/agentic-vc/avc/internal/diff"
+	"github.com/trevarix/agentic-vc/avc/internal/policy"
 	"github.com/spf13/cobra"
 )
 
@@ -59,18 +61,22 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 	if jsonOutput {
 		type fileDiffJSON struct {
-			Path         string `json:"path"`
-			Type         string `json:"type"`
-			LinesAdded   int    `json:"lines_added"`
-			LinesRemoved int    `json:"lines_removed"`
+			Path            string `json:"path"`
+			Type            string `json:"type"`
+			LinesAdded      int    `json:"lines_added"`
+			LinesRemoved    int    `json:"lines_removed"`
+			Binary          bool   `json:"binary,omitempty"`
+			CountsEstimated bool   `json:"counts_estimated,omitempty"`
 		}
 		files := make([]fileDiffJSON, len(result.Files))
 		for i, f := range result.Files {
 			files[i] = fileDiffJSON{
-				Path:         f.Path,
-				Type:         string(f.Type),
-				LinesAdded:   f.LinesAdded,
-				LinesRemoved: f.LinesRemoved,
+				Path:            f.Path,
+				Type:            string(f.Type),
+				LinesAdded:      f.LinesAdded,
+				LinesRemoved:    f.LinesRemoved,
+				Binary:          f.Binary,
+				CountsEstimated: f.CountsEstimated,
 			}
 		}
 		return json.NewEncoder(os.Stdout).Encode(map[string]any{
@@ -88,6 +94,20 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// Protected-path early warning: a changed file matching [protect] is
+	// marked with "!" so the collision is visible long before merge time.
+	cfg, _ := config.Load(projectPath)
+	protectedSet := map[string]bool{}
+	if policy.Enabled(cfg) {
+		var paths []string
+		for _, f := range result.Files {
+			paths = append(paths, f.Path)
+		}
+		for _, p := range policy.Check(cfg, paths) {
+			protectedSet[p] = true
+		}
+	}
+
 	fmt.Printf("%s %s  %s %s\n\n",
 		accent("◆ Status:"), cyan(branchName),
 		dim("·  last snapshot:"), dim(fmt.Sprintf("%q", head.Label)))
@@ -99,8 +119,16 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 	for _, f := range result.Files {
 		sym := symbols[string(f.Type)]
-		fmt.Printf("  %s  %-40s  %s %s\n",
-			sym, f.Path,
+		mark := " "
+		if protectedSet[f.Path] {
+			mark = failure("!")
+		}
+		if f.Binary {
+			fmt.Printf(" %s%s  %-40s  %s\n", mark, sym, f.Path, dim("binary file"))
+			continue
+		}
+		fmt.Printf(" %s%s  %-40s  %s %s\n",
+			mark, sym, f.Path,
 			green(fmt.Sprintf("+%d", f.LinesAdded)),
 			red(fmt.Sprintf("-%d", f.LinesRemoved)),
 		)
@@ -109,5 +137,11 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		yellow(fmt.Sprintf("%d file(s) changed.", len(result.Files))),
 		cyan(fmt.Sprintf("avc snapshot \"<label>\"")),
 	)
+	if len(protectedSet) > 0 {
+		fmt.Printf("%s\n", warn(fmt.Sprintf(
+			"⚠ %d changed file(s) marked ! are protected ([protect] in .avc/config.toml) — a merge touching them will be gated.",
+			len(protectedSet),
+		)))
+	}
 	return nil
 }

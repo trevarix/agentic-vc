@@ -79,7 +79,12 @@ func ensureMainBranchSetup(projectRoot string) error {
 		return fmt.Errorf("branch setup: %w", err)
 	}
 
-	cfg, _ := config.Load(projectRoot)
+	cfg, err := config.Load(projectRoot)
+	if err != nil {
+		// A malformed config.toml must be a loud, actionable error — not a
+		// nil-pointer panic, and not silently-dropped ignore/protect rules.
+		return fmt.Errorf(".avc/config.toml is malformed: %w", err)
+	}
 	if cfg.Branch.Active == "" {
 		return config.SetActiveBranch(projectRoot, "main")
 	}

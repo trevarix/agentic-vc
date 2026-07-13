@@ -229,12 +229,11 @@ func TestMerge_Skip_FilesUnchangedInBranch(t *testing.T) {
 	}
 }
 
-// TestMerge_Abort_AfterConflict verifies the abort flow after a conflicting
-// merge. merge.Abort() locates the last merge by looking up the main branch ID
-// in the merges table. merge.Merge() currently stores the merge record under
-// the feature branch ID, so Abort returns "no merge in progress." This test
-// documents the current behavior; when the lookup is fixed the assertions
-// below can be strengthened.
+// TestMerge_Abort_AfterConflict verifies that aborting a conflicted merge
+// restores main to its exact pre-merge state and clears the conflict
+// markers. merge.Abort locates the last merge by project ID — a lookup by
+// main's branch ID would never match, since merges are recorded under the
+// *agent* branch's ID (see docs/plans/02-merge-integrity.md).
 func TestMerge_Abort_AfterConflict(t *testing.T) {
 	projectRoot, mainBranchID := setupProjectWithMain(t)
 
@@ -254,33 +253,73 @@ func TestMerge_Abort_AfterConflict(t *testing.T) {
 
 	// Advance main so the merge produces a conflict.
 	time.Sleep(time.Second)
-	writeFile(t, projectRoot, "file.go", "main-version — also longer\n")
+	const mainContent = "main-version — also longer\n"
+	writeFile(t, projectRoot, "file.go", mainContent)
 	createMainSnap(t, projectRoot, mainBranchID, "main advance")
 
 	mergeResult, err := merge.Merge(projectRoot, "feat/abort")
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
+	if mergeResult.Conflicts == 0 {
+		t.Fatal("expected a conflict from two divergent edits to the same file, got none")
+	}
 
-	if mergeResult.Conflicts > 0 {
-		// Conflict markers are present. Abort should restore the pre-merge state.
-		// merge.Abort currently fails to find the merge record (it looks up by
-		// mainBranch.ID but records are stored under agentBranch.ID). If this
-		// error disappears, strengthen the assertions to verify file content.
-		abortErr := merge.Abort(projectRoot)
-		if abortErr == nil {
-			// Abort succeeded — verify conflict markers are gone.
-			data, err := os.ReadFile(filepath.Join(projectRoot, "file.go"))
-			if err != nil {
-				t.Fatalf("read file after abort: %v", err)
-			}
-			if strings.Contains(string(data), "<<<<<<<") {
-				t.Error("conflict markers still present after successful abort")
-			}
-		}
-		// Abort returning an error is the known current behavior — not a test failure.
-	} else {
-		t.Skip("merge produced no conflicts — cannot test conflict abort")
+	if err := merge.Abort(projectRoot); err != nil {
+		t.Fatalf("abort: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(projectRoot, "file.go"))
+	if err != nil {
+		t.Fatalf("read file after abort: %v", err)
+	}
+	if strings.Contains(string(data), "<<<<<<<") {
+		t.Error("conflict markers still present after abort")
+	}
+	if string(data) != mainContent {
+		t.Errorf("main content after abort = %q, want %q (pre-merge state)", data, mainContent)
+	}
+}
+
+// TestMerge_Abort_AfterFailure verifies that a merge which fails partway
+// through applying its plan marks the merge record "failed" (not stuck at
+// "in_progress" forever), and that abort can find and roll back that failed
+// attempt just like it does for conflicts.
+func TestMerge_Abort_AfterFailure(t *testing.T) {
+	projectRoot, mainBranchID := setupProjectWithMain(t)
+	writeFile(t, projectRoot, "file.go", "original\n")
+	baseSnap := createMainSnap(t, projectRoot, mainBranchID, "base")
+
+	b, err := branch.Create(projectRoot, "feat/inject-failure", baseSnap.ID)
+	if err != nil {
+		t.Fatalf("create branch: %v", err)
+	}
+	ws := branch.WorkspacePath(projectRoot, b.Name)
+	writeFile(t, ws, "newfile.txt", "branch added this\n")
+	if _, err := snapshot.Create(projectRoot, "branch-adds-file", "", "", b.ID, ws); err != nil {
+		t.Fatalf("branch snapshot: %v", err)
+	}
+
+	// Sabotage the merge: pre-create a directory at the exact path the
+	// branch's new file would be written to, so applyPlan's write fails.
+	if err := os.MkdirAll(filepath.Join(projectRoot, "newfile.txt"), 0755); err != nil {
+		t.Fatalf("sabotage setup: %v", err)
+	}
+
+	if _, err := merge.Merge(projectRoot, "feat/inject-failure"); err == nil {
+		t.Fatal("expected merge to fail because the destination path is a directory")
+	}
+
+	if err := merge.Abort(projectRoot); err != nil {
+		t.Fatalf("abort after failed merge: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(projectRoot, "file.go"))
+	if err != nil {
+		t.Fatalf("read file.go after abort: %v", err)
+	}
+	if string(data) != "original\n" {
+		t.Errorf("file.go after abort = %q, want %q (pre-merge state)", data, "original\n")
 	}
 }
 
@@ -307,7 +346,12 @@ func TestMerge_ErrorOnUnknownBranch(t *testing.T) {
 
 // TestMerge_ErrorWhenBranchHasNoSnapshots verifies that attempting to merge a
 // branch that exists but has no snapshots returns an error.
-func TestMerge_ErrorWhenBranchHasNoSnapshots(t *testing.T) {
+// TestMerge_AutoSnapshotsUnsnapshottedBranchBeforeMerging verifies that
+// merging a branch which was created but never explicitly snapshotted still
+// succeeds: Merge's dirty-workspace guard (Plan 02 item 3) captures the
+// workspace's current state first rather than silently dropping it or
+// erroring out. Before that guard existed, this used to be an error.
+func TestMerge_AutoSnapshotsUnsnapshottedBranchBeforeMerging(t *testing.T) {
 	projectRoot, mainBranchID := setupProjectWithMain(t)
 
 	writeFile(t, projectRoot, "file.go", "v1")
@@ -319,9 +363,12 @@ func TestMerge_ErrorWhenBranchHasNoSnapshots(t *testing.T) {
 		t.Fatalf("create branch: %v", err)
 	}
 
-	_, err = merge.Merge(projectRoot, b.Name)
-	if err == nil {
-		t.Error("expected error when branch has no snapshots, got nil")
+	result, err := merge.Merge(projectRoot, b.Name)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	if result.AutoSnapshotID == "" {
+		t.Error("expected an auto-snapshot to be recorded for the previously un-snapshotted branch")
 	}
 }
 

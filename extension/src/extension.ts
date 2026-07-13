@@ -10,6 +10,7 @@ import { showDiff, showDiffResult } from './diffViewer';
 import { showInfo } from './infoViewer';
 import { showTimeline } from './timelineViewer';
 import { AutoSnapshotManager } from './autoSnapshot';
+import { WatchManager } from './watchManager';
 import { AvcScmProvider } from './scmProvider';
 import { GutterAnnotationProvider } from './gutterAnnotations';
 import { SnapshotContentProvider, SNAPSHOT_SCHEME, snapshotUri } from './snapshotContentProvider';
@@ -67,6 +68,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // ─── Auto-snapshot on save ──────────────────────────────────────────────────
   context.subscriptions.push(new AutoSnapshotManager());
+
+  // ─── Continuous checkpointing (avc watch) ───────────────────────────────────
+  context.subscriptions.push(new WatchManager());
 
   // ─── SCM integration ───────────────────────────────────────────────────────
   const scmProvider = new AvcScmProvider();

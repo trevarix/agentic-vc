@@ -72,12 +72,24 @@ is placed on the agent via its instruction context.
 
 ### Sandbox model
 
-Commands are executed through two security isolation layers and one operational layer.
+> **This is a hygiene layer, not a security boundary.** Every layer below reduces
+> *accidental* host pollution by a cooperative command — it does not contain an
+> adversarial one. The command still runs with the invoking user's full filesystem
+> and network access. `classify()` inspects only the first token of the command, so
+> a command that chains around it (`env sudo ...`, `bash -c "..."`, a pipe, a `python
+> -c "os.system(...)"`) is not stopped. Do not run untrusted or unreviewed code
+> through `avc_run_in_workspace` expecting it to be contained — see
+> `docs/plans/07-sandbox-containment.md` for what real OS-level containment
+> (namespaces, `sandbox-exec`, restricted job objects/tokens) would require, and
+> when it's actually worth building.
 
-The **security layers** protect the host system from the subprocess:
+Commands are executed through two isolation layers and one operational layer.
+
+The **isolation layers** reduce accidental host pollution by the subprocess:
 - **Layer 1** — credential leakage prevention (env scrubbing, PATH restriction)
 - **Layer 3** — process tree kill (no orphan processes after timeout or teardown)
-- **Blocked command list** — system-level installs and privilege escalation rejected before execution
+- **Blocked command list** — obviously wrong commands (system-level installs, `sudo`)
+  are rejected before execution with a friendly error, as a courtesy — not as containment
 
 The **operational layer** keeps the tool functional:
 - **Layer 2** — timeout and output cap (prevents hangs and context window overflow)

@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/trevarix/agentic-vc/avc/internal/api"
@@ -16,45 +17,55 @@ import (
 	"github.com/trevarix/agentic-vc/avc/internal/db"
 	"github.com/trevarix/agentic-vc/avc/internal/diff"
 	mergepkg "github.com/trevarix/agentic-vc/avc/internal/merge"
+	"github.com/trevarix/agentic-vc/avc/internal/oplog"
 	"github.com/trevarix/agentic-vc/avc/internal/restore"
+	"github.com/trevarix/agentic-vc/avc/internal/snapshot"
+	"github.com/trevarix/agentic-vc/avc/internal/timeline"
 )
 
 // Serve starts the HTTP server. Blocks until the server stops.
 func Serve(addr, projectPath string) error {
 	mux := http.NewServeMux()
 
-	// Static assets (embedded into the binary).
+	token := newSessionToken()
+	// auth wraps a /api/ handler with the session-token + Origin check (see auth.go).
+	auth := func(h http.HandlerFunc) http.HandlerFunc { return withAuth(token, addr, h) }
+
+	// Static assets (embedded into the binary). The session cookie is set
+	// here so the frontend picks it up on first load with no change to how
+	// the server's URL is opened.
 	sub, err := fs.Sub(staticFS, "static")
 	if err != nil {
 		return fmt.Errorf("static FS: %w", err)
 	}
-	mux.Handle("/", http.FileServer(http.FS(sub)))
+	mux.Handle("/", withSessionCookie(token, http.FileServer(http.FS(sub))))
 
 	// API endpoints — snapshots.
-	mux.HandleFunc("/api/project", projectInfoHandler(projectPath))
-	mux.HandleFunc("/api/snapshots", listSnapshotsHandler(projectPath))
-	mux.HandleFunc("/api/snapshots/create", createSnapshotHandler(projectPath))
-	mux.HandleFunc("/api/snapshots/", snapshotByIDHandler(projectPath))
-	mux.HandleFunc("/api/diff", diffHandler(projectPath))
-	mux.HandleFunc("/api/diff-current", diffCurrentHandler(projectPath))
-	mux.HandleFunc("/api/restore", restoreHandler(projectPath))
-	mux.HandleFunc("/api/restore-file", restoreFileHandler(projectPath))
+	mux.HandleFunc("/api/project", auth(projectInfoHandler(projectPath)))
+	mux.HandleFunc("/api/snapshots", auth(listSnapshotsHandler(projectPath)))
+	mux.HandleFunc("/api/snapshots/create", auth(createSnapshotHandler(projectPath)))
+	mux.HandleFunc("/api/snapshots/", auth(snapshotByIDHandler(projectPath)))
+	mux.HandleFunc("/api/diff", auth(diffHandler(projectPath)))
+	mux.HandleFunc("/api/diff-current", auth(diffCurrentHandler(projectPath)))
+	mux.HandleFunc("/api/restore", auth(restoreHandler(projectPath)))
+	mux.HandleFunc("/api/restore-file", auth(restoreFileHandler(projectPath)))
 
 	// API endpoints — branches.
 	// Note: /api/branches/switch must be registered before /api/branches/ so the
 	// more-specific pattern wins in Go's default mux.
-	mux.HandleFunc("/api/branches/switch", branchSwitchHandler(projectPath))
-	mux.HandleFunc("/api/branches/", branchByNameHandler(projectPath))
-	mux.HandleFunc("/api/branches", branchesHandler(projectPath))
+	mux.HandleFunc("/api/branches/switch", auth(branchSwitchHandler(projectPath)))
+	mux.HandleFunc("/api/branches/", auth(branchByNameHandler(projectPath)))
+	mux.HandleFunc("/api/branches", auth(branchesHandler(projectPath)))
 
 	// API endpoints — merge.
-	mux.HandleFunc("/api/merge/preview", mergePreviewHandler(projectPath))
-	mux.HandleFunc("/api/merge/abort", mergeAbortHandler(projectPath))
-	mux.HandleFunc("/api/merge", mergeHandler(projectPath))
+	mux.HandleFunc("/api/merge/preview", auth(mergePreviewHandler(projectPath)))
+	mux.HandleFunc("/api/merge/abort", auth(mergeAbortHandler(projectPath)))
+	mux.HandleFunc("/api/merge", auth(mergeHandler(projectPath)))
 
 	// API endpoints — status & storage.
-	mux.HandleFunc("/api/status", statusHandler(projectPath))
-	mux.HandleFunc("/api/storage", storageHandler(projectPath))
+	mux.HandleFunc("/api/status", auth(statusHandler(projectPath)))
+	mux.HandleFunc("/api/storage", auth(storageHandler(projectPath)))
+	mux.HandleFunc("/api/timeline", auth(timelineHandler(projectPath)))
 
 	srv := &http.Server{Addr: addr, Handler: mux}
 	return srv.ListenAndServe()
@@ -86,6 +97,8 @@ func snapshotToMap(s *db.Snapshot) map[string]any {
 		"total_size":    s.TotalSize,
 		"notes":         s.Notes,
 		"branch_id":     s.BranchID,
+		"session_id":    s.SessionID,
+		"task":          s.Task,
 	}
 }
 
@@ -103,13 +116,15 @@ func diffFilesToMap(files []*diff.FileDiff) []map[string]any {
 	out := make([]map[string]any, len(files))
 	for i, f := range files {
 		out[i] = map[string]any{
-			"path":          f.Path,
-			"type":          string(f.Type),
-			"old_hash":      f.OldHash,
-			"new_hash":      f.NewHash,
-			"lines_added":   f.LinesAdded,
-			"lines_removed": f.LinesRemoved,
-			"diff_preview":  f.DiffPreview,
+			"path":             f.Path,
+			"type":             string(f.Type),
+			"old_hash":         f.OldHash,
+			"new_hash":         f.NewHash,
+			"lines_added":      f.LinesAdded,
+			"lines_removed":    f.LinesRemoved,
+			"diff_preview":     f.DiffPreview,
+			"binary":           f.Binary,
+			"counts_estimated": f.CountsEstimated,
 		}
 	}
 	return out
@@ -229,6 +244,7 @@ func createSnapshotHandler(projectPath string) http.HandlerFunc {
 			"total_size":    snap.TotalSize,
 			"notes":         snap.Notes,
 			"branch_id":     snap.BranchID,
+			"skipped_large": snap.SkippedLarge,
 			"success":       true,
 		})
 	}
@@ -334,16 +350,40 @@ func restoreHandler(projectPath string) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "id is required")
 			return
 		}
+
+		activeBranchID, err := branchpkg.GetActiveBranchID(projectPath)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		// Safety net: capture un-snapshotted changes before they are
+		// overwritten. A failure here aborts the restore.
+		preSnap, err := snapshot.CreateBeforeRestore(projectPath, projectPath, activeBranchID, req.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "pre-restore safety snapshot failed: "+err.Error())
+			return
+		}
+
 		result, err := restore.Restore(projectPath, req.ID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		undoID := ""
+		if preSnap != nil {
+			undoID = preSnap.ID
+		}
+		// Record in the operations log so avc undo can reverse this restore.
+		_ = oplog.Record(projectPath, activeBranchID, oplog.KindRestore, undoID,
+			fmt.Sprintf("restored snapshot %s", req.ID))
 		writeJSON(w, http.StatusOK, map[string]any{
-			"id":             result.SnapshotID,
-			"restored_files": result.RestoredFiles,
-			"restored_size":  result.RestoredSize,
-			"success":        true,
+			"id":                result.SnapshotID,
+			"restored_files":    result.RestoredFiles,
+			"restored_size":     result.RestoredSize,
+			"quarantined_files": result.QuarantinedFiles,
+			"trash_op_id":       result.TrashOpID,
+			"undo_snapshot_id":  undoID,
+			"success":           true,
 		})
 	}
 }
@@ -605,10 +645,12 @@ func statusHandler(projectPath string) http.HandlerFunc {
 		files := make([]map[string]any, len(result.Files))
 		for i, f := range result.Files {
 			files[i] = map[string]any{
-				"path":          f.Path,
-				"type":          string(f.Type),
-				"lines_added":   f.LinesAdded,
-				"lines_removed": f.LinesRemoved,
+				"path":             f.Path,
+				"type":             string(f.Type),
+				"lines_added":      f.LinesAdded,
+				"lines_removed":    f.LinesRemoved,
+				"binary":           f.Binary,
+				"counts_estimated": f.CountsEstimated,
 			}
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -631,6 +673,35 @@ func storageHandler(projectPath string) http.HandlerFunc {
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	}
+}
+
+// GET /api/timeline?branch=<name>&session=<id>&limit=<n>
+// branch defaults to the active branch.
+func timelineHandler(projectPath string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w)
+			return
+		}
+		q := r.URL.Query()
+		branchName := q.Get("branch")
+		if branchName == "" {
+			branchName = branchpkg.GetActiveBranchName(projectPath)
+		}
+		limit := 0
+		if l := q.Get("limit"); l != "" {
+			limit, _ = strconv.Atoi(l)
+		}
+		result, err := timeline.Build(projectPath, branchName, q.Get("session"), limit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if result.Sessions == nil {
+			result.Sessions = []timeline.Session{}
 		}
 		writeJSON(w, http.StatusOK, result)
 	}
