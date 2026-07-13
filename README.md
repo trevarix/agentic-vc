@@ -56,6 +56,24 @@ AVC also runs as an **MCP server** so any agent framework (Claude Code, Cursor, 
 
 ### 1. Install
 
+**Windows (Scoop):**
+
+Don't have [Scoop](https://scoop.sh) yet? Install it first, in PowerShell (no admin needed):
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+Invoke-RestMethod get.scoop.sh | Invoke-Expression
+```
+
+Then add the AVC bucket and install:
+
+```powershell
+scoop bucket add trevarix https://github.com/trevarix/scoop-bucket
+scoop install avc
+```
+
+**Build from source** (any platform, requires Go 1.22+):
+
 ```bash
 git clone <repo-url>
 cd agentic-vc/avc
@@ -64,9 +82,13 @@ go install .
 
 This builds `avc` and places it in `$GOPATH/bin` (usually `~/go/bin`). Make sure that directory is on your `PATH`.
 
+Verify the install:
+
 ```bash
 avc --help
 ```
+
+> For macOS (Homebrew), Linux (direct download), and the VSCode extension, see the [full installation guide](https://avc.trevarix.com/install/).
 
 ### 2. Initialize a project
 
