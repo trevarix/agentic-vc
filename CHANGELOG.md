@@ -7,6 +7,41 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-12
+
+### Added
+
+- `avc watch` — a continuous checkpointing daemon that watches your project and every active branch workspace, automatically snapshotting real changes while skipping ignored churn and idle periods. Checkpoints are debounced and rate-limited, with their own retention cap, and the VSCode extension can start and stop the daemon alongside the editor.
+- `avc timeline` — a session-based activity report showing what agents did while you were away: snapshots grouped by session and task, each with a short change summary, interleaved with restores, merges, and undos.
+- `avc bisect` — automated regression hunting via binary search between a known-good and known-bad snapshot, running your test command in a freshly materialized workspace at each step. Uses git-compatible exit codes and is also available as an MCP tool for agents.
+- Stacked branches (`avc branch create --from-branch <parent>`) and `avc branch diff a..b` for comparing two branches directly, enabling merge-queue-style workflows across fleets of agents.
+- Session and task attribution: `avc snapshot --session/--task` groups related snapshots together and records what an agent was working on, feeding directly into `avc timeline`.
+- Line-level three-way merge: files edited on both main and a branch now merge automatically when the edits don't overlap, instead of always producing a whole-file conflict. Overlapping edits still get clear, hunk-level conflict markers. This is a major improvement for multi-agent workflows where several branches touch the same file.
+- Protected paths: a new `[protect]` config setting blocks or warns on merges that touch sensitive files, enforced automatically at merge time and surfaced early in `avc status`.
+- Universal undo: `avc undo` reverses the most recent restore or merge with no arguments needed — running it twice acts as redo. `avc trash restore` brings back quarantined files without ever overwriting live ones.
+- `avc verify` (renamed from `avc fsck`) checks the integrity of every stored file, and can repair or quarantine anything corrupted. Stored files are now compressed automatically where it saves space, and `avc storage` reports the resulting savings.
+
+### Fixed
+
+- Restoring the working tree no longer deletes ignored files — anything that would have been removed is safely quarantined instead of destroyed.
+- Snapshotting and file storage are now crash-safe: writes are atomic, and a crash partway through a snapshot can no longer be mistaken for "delete everything" on restore.
+- Multiple tools — the CLI, MCP server, extension, and web UI — can now read and write at the same time without "database is locked" errors.
+- Workspace creation no longer risks silently mutating your real project files.
+- Merging a branch that deleted a file no longer crashes; deletions and edit conflicts are now handled and clearly reported.
+- `avc merge --abort` now actually works, and a failed merge can no longer get stuck in a permanent "in progress" state.
+- Uncommitted workspace changes are now captured automatically before a merge or restore, instead of being silently lost.
+- Snapshots that are still in use — an active branch's base, a tagged snapshot, or part of the latest merge — can no longer be deleted or garbage-collected by accident.
+- Diffing very large files no longer risks hanging, and binary files are now detected instead of producing meaningless line counts.
+- `.avcignore` now correctly supports `**` and negation (`!`) patterns at any directory depth.
+- The web UI now requires authentication and validates request origin, closing a gap that let any browser tab call the local API.
+- The MCP server no longer drops the whole session on a single oversized request, and sandboxed commands no longer hang after producing more output than the configured limit.
+- A malformed `config.toml` no longer crashes every command, and no longer silently disables protected-path enforcement.
+- Database migrations no longer silently swallow errors, and no longer re-run on every startup.
+
+### Changed
+- Snapshot and restore now preserve the Unix executable bit and clean up empty directories left behind after a restore.
+- Documentation refreshed to cover the new commands and updated project links.
+
 ## [0.2.1] - 2026-06-28
 
 ### Fixed
