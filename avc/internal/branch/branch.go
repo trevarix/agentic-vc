@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -75,6 +76,16 @@ func copyToWorkspace(projectRoot, ws, branchName string) error {
 		return fmt.Errorf("walk project: %w", err)
 	}
 
+	// Files above the snapshot size cap are stream-copied without hashing or
+	// storing a blob: snapshots skip them entirely (skippedLarge), so a hash
+	// or blob for them would never be referenced — and with parallel workers,
+	// buffering them would multiply the peak-memory spike by the worker count.
+	maxFileSizeMB := config.DefaultMaxFileSizeMB
+	if cfg, err := config.Load(projectRoot); err == nil && cfg != nil && cfg.Snapshot.MaxFileSizeMB > 0 {
+		maxFileSizeMB = cfg.Snapshot.MaxFileSizeMB
+	}
+	maxFileSizeBytes := int64(maxFileSizeMB) * 1024 * 1024
+
 	type entry struct {
 		rel  string
 		info os.FileInfo // nil when the post-write stat failed — no cache entry
@@ -86,6 +97,13 @@ func copyToWorkspace(projectRoot, ws, branchName string) error {
 		rel, _ := filepath.Rel(projectRoot, paths[i])
 		rel = filepath.ToSlash(rel)
 		dest := filepath.Join(ws, filepath.FromSlash(rel))
+
+		if info, err := os.Stat(paths[i]); err == nil && info.Size() > maxFileSizeBytes {
+			if err := streamCopyFile(paths[i], dest); err != nil {
+				return fmt.Errorf("copy %s: %w", rel, err)
+			}
+			return nil // no cache entry — the snapshot's own size check skips this file first
+		}
 
 		data, hash, err := fileutil.ReadAndHash(paths[i])
 		if err != nil {
@@ -115,6 +133,31 @@ func copyToWorkspace(projectRoot, ws, branchName string) error {
 	}
 	_ = cache.SaveToPath(statcache.WorkspaceCachePath(projectRoot, branchName))
 	return nil
+}
+
+// streamCopyFile copies src to dst without buffering the whole file in
+// memory. Used for files above the snapshot size cap, which are copied into
+// the workspace but never hashed or stored.
+func streamCopyFile(src, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return err
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Close()
 }
 
 // RemoveWorkspace deletes the workspace directory and its stat cache for a branch.

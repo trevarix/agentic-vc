@@ -10,8 +10,11 @@
 package tests
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/trevarix/agentic-vc/avc/internal/branch"
@@ -118,6 +121,58 @@ func TestBranch_NoMainSnapshot_DiffCountsAreExact(t *testing.T) {
 	// edit must count exactly one added and one removed line.
 	if fd.Type != diff.Modified || fd.LinesAdded != 1 || fd.LinesRemoved != 1 {
 		t.Errorf("main.go: type=%s +%d -%d, want modified +1 -1", fd.Type, fd.LinesAdded, fd.LinesRemoved)
+	}
+}
+
+// TestBranch_OversizedFile_CopiedButNotStored verifies that files above the
+// snapshot size cap are stream-copied into the workspace without creating a
+// blob: snapshots skip such files entirely, so a blob would be an orphan —
+// and buffering the file across parallel workers is the RAM spike to avoid.
+func TestBranch_OversizedFile_CopiedButNotStored(t *testing.T) {
+	projectRoot, _ := setupProjectWithMain(t)
+
+	// Cap snapshots at 1 MB, then track a 2 MB file and a small file.
+	writeFile(t, projectRoot, ".avc/config.toml", "[snapshot]\nmax_file_size_mb = 1\n")
+	big := strings.Repeat("B", 2*1024*1024)
+	writeFile(t, projectRoot, "big.bin", big)
+	writeFile(t, projectRoot, "small.go", "package small\n")
+
+	b, err := branch.Create(projectRoot, "feat/oversized", "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	ws := branch.WorkspacePath(projectRoot, b.Name)
+
+	// The oversized file must be present in the workspace, byte-for-byte.
+	got, err := os.ReadFile(filepath.Join(ws, "big.bin"))
+	if err != nil {
+		t.Fatalf("read workspace big.bin: %v", err)
+	}
+	if string(got) != big {
+		t.Error("workspace big.bin content mismatch")
+	}
+
+	// But no blob may exist for it — it would be an orphan.
+	sum := sha256.Sum256([]byte(big))
+	if objstore.Exists(projectRoot, hex.EncodeToString(sum[:])) {
+		t.Error("oversized file was stored as a blob — snapshots never reference it")
+	}
+
+	// The first snapshot on the branch skips it and records the small file.
+	snap, err := snapshot.Create(projectRoot, "baseline", "", "", b.ID, ws)
+	if err != nil {
+		t.Fatalf("snapshot.Create: %v", err)
+	}
+	if len(snap.SkippedLarge) != 1 || snap.SkippedLarge[0] != "big.bin" {
+		t.Errorf("SkippedLarge = %v, want [big.bin]", snap.SkippedLarge)
+	}
+	for _, f := range branchSnapshotFiles(t, projectRoot, snap.ID) {
+		if f.RelativePath == "big.bin" {
+			t.Error("oversized file recorded in snapshot despite size cap")
+		}
+		if !objstore.Exists(projectRoot, f.FileHash) {
+			t.Errorf("object missing for %s", f.RelativePath)
+		}
 	}
 }
 
