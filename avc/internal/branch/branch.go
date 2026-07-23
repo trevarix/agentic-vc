@@ -83,9 +83,16 @@ func copyToWorkspace(projectRoot, ws, branchName string) error {
 		}
 		// Hash the file for the stat cache. We read after copy so that the
 		// stat-cache entry matches the actual inode on disk.
-		_, hash, err := fileutil.ReadAndHash(dest)
+		data, hash, err := fileutil.ReadAndHash(dest)
 		if err != nil {
 			return fmt.Errorf("hash %s: %w", rel, err)
+		}
+		// Store the blob now: the warm cache makes the first snapshot on the
+		// branch a stat-only pass, so it will never read or store this file
+		// itself. Without this, snapshots reference objects that don't exist
+		// and neither restore nor diff can recover the content.
+		if err := restore.StoreObject(projectRoot, hash, data); err != nil {
+			return fmt.Errorf("store object %s: %w", rel, err)
 		}
 		if info, err := os.Stat(dest); err == nil {
 			cache.Set(rel, info, hash)
