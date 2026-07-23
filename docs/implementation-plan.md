@@ -41,7 +41,7 @@ Progress key: ✅ done · 🔧 scaffolded (code exists but incomplete) · ⬜ no
 - ✅ Creates `.avc/` directory and `avc.db`, runs migrations
 - ✅ Writes `.avc/config.toml`
 - ✅ Writes `.avcignore` to project root (if absent) with cross-stack patterns
-- ✅ Appends `.avc/` and `.avcignore` to root `.gitignore` if one exists
+- ✅ Adds `.avc/` and `.avcignore` to root `.gitignore` — appends if one exists, creates it when the project is inside a git repository
 
 ### Bug fixes (resolved during testing)
 - ✅ Diff line counts wrong — set-based approach replaced with LCS algorithm

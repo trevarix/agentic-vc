@@ -213,9 +213,10 @@ func TestConfig_WriteDefault_Idempotent(t *testing.T) {
 	}
 }
 
-// TestConfig_WriteDefault_NoGitignore_IsNoOp verifies that WriteDefault does
-// not create a .gitignore if one does not already exist.
-func TestConfig_WriteDefault_NoGitignore_IsNoOp(t *testing.T) {
+// TestConfig_WriteDefault_NoGitignore_NoGit_IsNoOp verifies that WriteDefault
+// does not create a .gitignore when none exists and the project is not inside
+// a git repository.
+func TestConfig_WriteDefault_NoGitignore_NoGit_IsNoOp(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, ".avc"), 0755); err != nil {
 		t.Fatalf("mkdir .avc: %v", err)
@@ -227,6 +228,55 @@ func TestConfig_WriteDefault_NoGitignore_IsNoOp(t *testing.T) {
 
 	gitignorePath := filepath.Join(dir, ".gitignore")
 	if _, err := os.Stat(gitignorePath); !os.IsNotExist(err) {
-		t.Error("WriteDefault should not create .gitignore when none existed")
+		t.Error("WriteDefault should not create .gitignore outside a git repository")
+	}
+}
+
+// TestConfig_WriteDefault_NoGitignore_GitRepo_Creates verifies that WriteDefault
+// creates a .gitignore with the AVC entries when the project has a .git directory.
+func TestConfig_WriteDefault_NoGitignore_GitRepo_Creates(t *testing.T) {
+	dir := t.TempDir()
+	for _, sub := range []string{".avc", ".git"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0755); err != nil {
+			t.Fatalf("mkdir %s: %v", sub, err)
+		}
+	}
+
+	if err := config.WriteDefault(dir); err != nil {
+		t.Fatalf("WriteDefault: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	if err != nil {
+		t.Fatalf("read created .gitignore: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, ".avc/") || !strings.Contains(content, ".avcignore") {
+		t.Errorf(".gitignore missing AVC entries:\n%s", content)
+	}
+	if strings.HasPrefix(content, "\n") {
+		t.Error("created .gitignore starts with a blank line")
+	}
+}
+
+// TestConfig_WriteDefault_NoGitignore_GitInParent_Creates verifies that .git
+// discovery walks up: a project nested inside a git repository still gets a
+// .gitignore at the project root.
+func TestConfig_WriteDefault_NoGitignore_GitInParent_Creates(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	dir := filepath.Join(repo, "nested", "project")
+	if err := os.MkdirAll(filepath.Join(dir, ".avc"), 0755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+
+	if err := config.WriteDefault(dir); err != nil {
+		t.Fatalf("WriteDefault: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, ".gitignore")); err != nil {
+		t.Errorf(".gitignore not created for project nested in git repo: %v", err)
 	}
 }
