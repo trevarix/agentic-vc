@@ -145,16 +145,21 @@ func RestoreToDir(projectRoot, snapshotID, targetDir string) (*Result, error) {
 		wsCache = statcache.Empty()
 	}
 
-	var restoredSize int64
-	for _, f := range targetFiles {
+	// Write back every file in parallel — reads, writes, and chmods are
+	// independent per file. Stat infos are collected per index and the cache
+	// populated after the join, so the (unsynchronized) cache is only touched
+	// from this goroutine.
+	infos := make([]os.FileInfo, len(targetFiles))
+	err = fileutil.ParallelForEach(fileutil.DefaultWorkers(), len(targetFiles), func(i int) error {
+		f := targetFiles[i]
 		absPath := filepath.Join(targetDir, filepath.FromSlash(f.RelativePath))
 
 		data, err := readObject(projectRoot, f.FileHash)
 		if err != nil {
-			return nil, fmt.Errorf("read object for %s: %w", f.RelativePath, err)
+			return fmt.Errorf("read object for %s: %w", f.RelativePath, err)
 		}
 		if err := fileutil.WriteFile(absPath, data); err != nil {
-			return nil, fmt.Errorf("write file %s: %w", f.RelativePath, err)
+			return fmt.Errorf("write file %s: %w", f.RelativePath, err)
 		}
 		// Restore the recorded permission bits (notably the executable bit).
 		// f.FileMode is 0 for rows written before mode tracking existed —
@@ -162,12 +167,22 @@ func RestoreToDir(projectRoot, snapshotID, targetDir string) (*Result, error) {
 		if f.FileMode != 0 {
 			_ = os.Chmod(absPath, os.FileMode(f.FileMode))
 		}
-		restoredSize += f.FileSize
-
 		if isWorkspace {
 			if info, err := os.Stat(absPath); err == nil {
-				wsCache.Set(f.RelativePath, info, f.FileHash)
+				infos[i] = info
 			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var restoredSize int64
+	for i, f := range targetFiles {
+		restoredSize += f.FileSize
+		if isWorkspace && infos[i] != nil {
+			wsCache.Set(f.RelativePath, infos[i], f.FileHash)
 		}
 	}
 
