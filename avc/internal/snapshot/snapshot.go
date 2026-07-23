@@ -16,6 +16,7 @@ import (
 	diffpkg "github.com/trevarix/agentic-vc/avc/internal/diff"
 	"github.com/trevarix/agentic-vc/avc/internal/fileutil"
 	"github.com/trevarix/agentic-vc/avc/internal/hooks"
+	"github.com/trevarix/agentic-vc/avc/internal/objstore"
 	"github.com/trevarix/agentic-vc/avc/internal/restore"
 	"github.com/trevarix/agentic-vc/avc/internal/retention"
 	"github.com/trevarix/agentic-vc/avc/internal/statcache"
@@ -176,8 +177,10 @@ func CreateWithOptions(projectRoot string, opts Options) (*Result, error) {
 		var hash string
 		var size int64
 
-		if h, hit := cache.Lookup(rel, info); hit {
-			// File unchanged since the last snapshot — object already stored.
+		// A cache hit is only trusted when the object it points to actually
+		// exists — a stale or corrupted cache must never produce a snapshot
+		// that references content the store doesn't hold.
+		if h, hit := cache.Lookup(rel, info); hit && objstore.Exists(projectRoot, h) {
 			hash = h
 			size = info.Size()
 		} else {
