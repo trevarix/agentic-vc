@@ -49,19 +49,18 @@ type WriteResult struct {
 }
 
 // Write installs MCP config and agent instructions for the given framework.
-// MCP configs are project-level by default (claude-code: .mcp.json, cursor:
-// .cursor/mcp.json); global=true writes the framework's home-directory config
-// instead. claude-desktop and windsurf have no project-level config and
-// always write globally.
-func Write(projectRoot, framework string, global bool) (*WriteResult, error) {
+// MCP configs are project-level where the framework supports it (claude-code:
+// .mcp.json, cursor: .cursor/mcp.json); claude-desktop and windsurf have no
+// project-level config and write to their global config file.
+func Write(projectRoot, framework string) (*WriteResult, error) {
 	r := &WriteResult{Framework: framework}
 
 	// Warn about any project-level paths we will write into that are gitignored.
-	checkGitignoreWarnings(projectRoot, framework, global, r)
+	checkGitignoreWarnings(projectRoot, framework, r)
 
 	switch framework {
 	case FrameworkClaudeCode:
-		if err := writeClaudeCode(projectRoot, global, r); err != nil {
+		if err := writeClaudeCode(projectRoot, r); err != nil {
 			return nil, err
 		}
 	case FrameworkClaudeDesktop:
@@ -69,7 +68,7 @@ func Write(projectRoot, framework string, global bool) (*WriteResult, error) {
 			return nil, err
 		}
 	case FrameworkCursor:
-		if err := writeCursor(projectRoot, global, r); err != nil {
+		if err := writeCursor(projectRoot, r); err != nil {
 			return nil, err
 		}
 	case FrameworkWindsurf:
@@ -89,33 +88,21 @@ func Write(projectRoot, framework string, global bool) (*WriteResult, error) {
 
 // ─── Framework writers ────────────────────────────────────────────────────────
 
-func writeClaudeCode(projectRoot string, global bool, r *WriteResult) error {
-	// MCP config — project-level .mcp.json by default; ~/.claude.json with --global.
-	if global {
-		globalSettings, err := claudeGlobalSettingsPath()
-		if err != nil {
-			return err
-		}
-		action, err := mergeMCPConfig(globalSettings, "avc", resolveGlobalCommand(r), nil)
-		if err != nil {
-			return err
-		}
-		r.Actions = append(r.Actions, fileAction(globalSettings, action))
-	} else {
-		projectMCP := filepath.Join(projectRoot, projectMCPFile)
-		action, err := mergeMCPConfig(projectMCP, "avc", resolveProjectCommand(r), nil)
-		if err != nil {
-			return err
-		}
-		r.Actions = append(r.Actions, fileAction(projectMCPFile, action))
-		if globalSettings, err := claudeGlobalSettingsPath(); err == nil {
-			warnStaleGlobalEntry(globalSettings, "avc", r)
-		}
+func writeClaudeCode(projectRoot string, r *WriteResult) error {
+	// MCP config — project-level .mcp.json, auto-discovered by Claude Code.
+	projectMCP := filepath.Join(projectRoot, projectMCPFile)
+	action, err := mergeMCPConfig(projectMCP, "avc", resolveProjectCommand(r), nil)
+	if err != nil {
+		return err
+	}
+	r.Actions = append(r.Actions, fileAction(projectMCPFile, action))
+	if globalSettings, err := claudeGlobalSettingsPath(); err == nil {
+		warnStaleGlobalEntry(globalSettings, "avc", r)
 	}
 
 	// CLAUDE.md — always-loaded context (append, idempotent)
 	claudeMDPath := filepath.Join(projectRoot, "CLAUDE.md")
-	action, err := appendRulesBlock(claudeMDPath, claudeMDBlock)
+	action, err = appendRulesBlock(claudeMDPath, claudeMDBlock)
 	if err != nil {
 		return err
 	}
@@ -171,33 +158,21 @@ func writeClaudeDesktop(projectRoot string, r *WriteResult) error {
 	return nil
 }
 
-func writeCursor(projectRoot string, global bool, r *WriteResult) error {
-	// MCP config — project-level .cursor/mcp.json by default; ~/.cursor/mcp.json with --global.
-	if global {
-		globalMCP, err := cursorGlobalMCPPath()
-		if err != nil {
-			return err
-		}
-		action, err := mergeMCPConfig(globalMCP, "avc", resolveGlobalCommand(r), nil)
-		if err != nil {
-			return err
-		}
-		r.Actions = append(r.Actions, fileAction(globalMCP, action))
-	} else {
-		rel := filepath.Join(".cursor", "mcp.json")
-		action, err := mergeMCPConfig(filepath.Join(projectRoot, rel), "avc", resolveProjectCommand(r), nil)
-		if err != nil {
-			return err
-		}
-		r.Actions = append(r.Actions, fileAction(filepath.ToSlash(rel), action))
-		if globalMCP, err := cursorGlobalMCPPath(); err == nil {
-			warnStaleGlobalEntry(globalMCP, "avc", r)
-		}
+func writeCursor(projectRoot string, r *WriteResult) error {
+	// MCP config — project-level .cursor/mcp.json
+	rel := filepath.Join(".cursor", "mcp.json")
+	action, err := mergeMCPConfig(filepath.Join(projectRoot, rel), "avc", resolveProjectCommand(r), nil)
+	if err != nil {
+		return err
+	}
+	r.Actions = append(r.Actions, fileAction(filepath.ToSlash(rel), action))
+	if globalMCP, err := cursorGlobalMCPPath(); err == nil {
+		warnStaleGlobalEntry(globalMCP, "avc", r)
 	}
 
 	// Rules file — .cursor/rules/avc.mdc (project-level, checked into repo)
 	rulesPath := filepath.Join(projectRoot, ".cursor", "rules", "avc.mdc")
-	action, err := writeFileIfAbsent(rulesPath, cursorRulesContent)
+	action, err = writeFileIfAbsent(rulesPath, cursorRulesContent)
 	if err != nil {
 		return err
 	}
@@ -505,7 +480,7 @@ func writeJSON(path string, root map[string]any) error {
 }
 
 // warnStaleGlobalEntry warns when serverKey is still registered in a global
-// config file (from an older AVC version or a previous --global run), which
+// config file (from an older AVC version that wrote global configs), which
 // would register the server twice.
 func warnStaleGlobalEntry(globalPath, serverKey string, r *WriteResult) {
 	data, err := os.ReadFile(globalPath)
@@ -522,7 +497,7 @@ func warnStaleGlobalEntry(globalPath, serverKey string, r *WriteResult) {
 	}
 	if _, exists := servers[serverKey]; exists {
 		r.Warnings = append(r.Warnings, fmt.Sprintf(
-			"a global '%s' MCP entry also exists in %s — the server would be registered twice; remove that entry, or re-run with --global to keep only the global config", serverKey, globalPath))
+			"a global '%s' MCP entry also exists in %s — the server would be registered twice; remove that entry", serverKey, globalPath))
 	}
 }
 
@@ -596,11 +571,8 @@ var frameworkPaths = map[string][]string{
 
 // checkGitignoreWarnings reads .gitignore and adds a warning to r for any
 // path we are about to write into that is covered by a gitignore pattern.
-func checkGitignoreWarnings(projectRoot, framework string, global bool, r *WriteResult) {
+func checkGitignoreWarnings(projectRoot, framework string, r *WriteResult) {
 	paths := frameworkPaths[framework]
-	if global && framework == FrameworkClaudeCode {
-		paths = []string{".claude"} // .mcp.json is not written in global mode
-	}
 	if len(paths) == 0 {
 		return
 	}

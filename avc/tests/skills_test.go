@@ -56,7 +56,7 @@ func TestSkillsClaudeCodeProjectLevel(t *testing.T) {
 	home := fakeHome(t)
 	project := t.TempDir()
 
-	r, err := skills.Write(project, skills.FrameworkClaudeCode, false)
+	r, err := skills.Write(project, skills.FrameworkClaudeCode)
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -74,9 +74,9 @@ func TestSkillsClaudeCodeProjectLevel(t *testing.T) {
 		t.Errorf("unexpected args: %v", args)
 	}
 
-	// Global config must not be created in project mode.
+	// Global config must never be created.
 	if _, err := os.Stat(filepath.Join(home, ".claude.json")); !os.IsNotExist(err) {
-		t.Error("project-mode write created ~/.claude.json")
+		t.Error("Write created ~/.claude.json")
 	}
 
 	// Skill files and CLAUDE.md still written.
@@ -91,28 +91,11 @@ func TestSkillsClaudeCodeProjectLevel(t *testing.T) {
 	}
 }
 
-func TestSkillsClaudeCodeGlobal(t *testing.T) {
-	home := fakeHome(t)
-	project := t.TempDir()
-
-	if _, err := skills.Write(project, skills.FrameworkClaudeCode, true); err != nil {
-		t.Fatalf("Write: %v", err)
-	}
-
-	servers := readMCPServers(t, filepath.Join(home, ".claude.json"))
-	if _, ok := servers["avc"]; !ok {
-		t.Fatal("~/.claude.json has no avc server entry")
-	}
-	if _, err := os.Stat(filepath.Join(project, ".mcp.json")); !os.IsNotExist(err) {
-		t.Error("global-mode write created project .mcp.json")
-	}
-}
-
 func TestSkillsCursorProjectLevel(t *testing.T) {
 	fakeHome(t)
 	project := t.TempDir()
 
-	if _, err := skills.Write(project, skills.FrameworkCursor, false); err != nil {
+	if _, err := skills.Write(project, skills.FrameworkCursor); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
@@ -140,7 +123,7 @@ func TestSkillsProjectConfigIdempotentAndMergePreserving(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := skills.Write(project, skills.FrameworkClaudeCode, false); err != nil {
+	if _, err := skills.Write(project, skills.FrameworkClaudeCode); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 	servers := readMCPServers(t, filepath.Join(project, ".mcp.json"))
@@ -152,7 +135,7 @@ func TestSkillsProjectConfigIdempotentAndMergePreserving(t *testing.T) {
 	}
 
 	// Second run must skip, not rewrite.
-	r, err := skills.Write(project, skills.FrameworkClaudeCode, false)
+	r, err := skills.Write(project, skills.FrameworkClaudeCode)
 	if err != nil {
 		t.Fatalf("second Write: %v", err)
 	}
@@ -175,7 +158,7 @@ func TestSkillsWarnsOnStaleGlobalEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r, err := skills.Write(project, skills.FrameworkClaudeCode, false)
+	r, err := skills.Write(project, skills.FrameworkClaudeCode)
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -198,7 +181,7 @@ func TestSkillsGitignoreWarningForProjectMCP(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r, err := skills.Write(project, skills.FrameworkClaudeCode, false)
+	r, err := skills.Write(project, skills.FrameworkClaudeCode)
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}

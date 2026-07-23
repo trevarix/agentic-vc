@@ -255,8 +255,8 @@ Accepts a comma-separated list: `avc init --skills claude-code,cursor,windsurf`
 
 | Flag | MCP config written | Instruction file written |
 |------|-------------------|--------------------------|
-| `claude-code` | `.mcp.json` (project); `~/.claude.json` with `--global` | `.claude/skills/avc-*/SKILL.md` (4 skill files) |
-| `cursor` | `.cursor/mcp.json` (project); `~/.cursor/mcp.json` with `--global` | `.cursor/rules/avc.mdc` |
+| `claude-code` | `.mcp.json` (project-level) | `.claude/skills/avc-*/SKILL.md` (4 skill files) |
+| `cursor` | `.cursor/mcp.json` (project-level) | `.cursor/rules/avc.mdc` |
 | `windsurf` | `~/.codeium/windsurf/mcp_config.json` (global only) | `.windsurfrules` AVC block appended |
 | `generic` | *(none)* | `AGENT_INSTRUCTIONS.md` drop-in prompt block |
 
