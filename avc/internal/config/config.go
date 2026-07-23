@@ -242,8 +242,9 @@ func acquireLock(lockPath string) (func(), error) {
 }
 
 // WriteDefault writes the default config.toml to the project's .avc/ directory,
-// a default .avcignore to the project root, and appends .avc/ and .avcignore
-// to an existing .gitignore if one is present.
+// a default .avcignore to the project root, and adds .avc/ and .avcignore to
+// .gitignore — appending to an existing file, or creating one when the project
+// is inside a git repository.
 func WriteDefault(projectRoot string) error {
 	avcDir := filepath.Join(projectRoot, ".avc")
 	if err := os.MkdirAll(avcDir, 0755); err != nil {
@@ -269,15 +270,18 @@ func writeFileIfAbsent(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0644)
 }
 
-// appendToGitignore adds .avc/ and .avcignore entries to an existing .gitignore.
-// If no .gitignore is present, this is a no-op.
+// appendToGitignore adds .avc/ and .avcignore entries to .gitignore.
+// If no .gitignore is present, one is created — but only when the project is
+// inside a git repository; without git the file would be noise.
 func appendToGitignore(projectRoot string) error {
 	gitignorePath := filepath.Join(projectRoot, ".gitignore")
 	data, err := os.ReadFile(gitignorePath)
 	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
+		if !insideGitRepo(projectRoot) {
+			return nil
+		}
+		data = nil
+	} else if err != nil {
 		return err
 	}
 
@@ -296,18 +300,37 @@ func appendToGitignore(projectRoot string) error {
 		return nil
 	}
 
-	f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(gitignorePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
-	block := "\n# Agentic Version Control\n"
+	block := "# Agentic Version Control\n"
+	if len(data) > 0 {
+		block = "\n" + block
+	}
 	for _, entry := range toAppend {
 		block += entry + "\n"
 	}
 	_, err = f.WriteString(block)
 	return err
+}
+
+// insideGitRepo reports whether dir is inside a git repository — a .git
+// directory (or file, for worktrees and submodules) exists in dir or any
+// parent.
+func insideGitRepo(dir string) bool {
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return false
+		}
+		dir = parent
+	}
 }
 
 func splitLines(s string) []string {
