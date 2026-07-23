@@ -212,10 +212,13 @@ avc mcp serve
 
 | Framework | MCP config written | Instructions written |
 |-----------|--------------------|----------------------|
-| `claude-code` | `.claude/settings.json` | `.claude/skills/avc-*/SKILL.md` |
-| `cursor` | `.cursor/mcp.json` | `.cursor/rules/avc.mdc` |
-| `windsurf` | `.codeium/windsurf/mcp_config.json` | `.windsurfrules` |
+| `claude-code` | `.mcp.json` (project-level) | `.claude/skills/avc-*/SKILL.md` |
+| `claude-desktop` | Claude Desktop config (global, with `AVC_PROJECT` env) | `.claude/skills/avc-*/SKILL.md` |
+| `cursor` | `.cursor/mcp.json` (project-level) | `.cursor/rules/avc.mdc` |
+| `windsurf` | `~/.codeium/windsurf/mcp_config.json` (global) | `.windsurfrules` |
 | `generic` | — | `AGENT_INSTRUCTIONS.md` |
+
+Project-level configs are safe to commit and are auto-discovered by the framework in that project — the AVC server is never registered machine-wide for frameworks that support project scope.
 
 Running `--skills` multiple times is safe — existing files are never overwritten, JSON configs are merged (not replaced), and rules files are append-only with a deduplication marker. If a target directory is gitignored, AVC warns you so you know the files won't be committed.
 
