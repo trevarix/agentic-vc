@@ -173,25 +173,151 @@ func TestSkillsWarnsOnStaleGlobalEntry(t *testing.T) {
 	}
 }
 
-func TestSkillsGitignoreWarningForProjectMCP(t *testing.T) {
-	fakeHome(t)
+// gitProject returns a temp project containing a .git directory, so
+// AVC's gitignore logic treats it as a git repository.
+func gitProject(t *testing.T) string {
+	t.Helper()
 	project := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(project, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	return project
+}
 
-	if err := os.WriteFile(filepath.Join(project, ".gitignore"), []byte(".mcp.json\n"), 0644); err != nil {
+func readGitignore(t *testing.T, project string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(project, ".gitignore"))
+	if err != nil {
+		t.Fatalf("read .gitignore: %v", err)
+	}
+	return string(data)
+}
+
+// TestSkills_CreatedFilesAreGitignored verifies that every project file AVC
+// creates is added to .gitignore — generated agent files are local tooling.
+func TestSkills_CreatedFilesAreGitignored(t *testing.T) {
+	fakeHome(t)
+	project := gitProject(t)
+
+	if _, err := skills.Write(project, skills.FrameworkClaudeCode); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	content := readGitignore(t, project)
+	for _, entry := range []string{".mcp.json", "CLAUDE.md", ".claude/skills/avc-*/"} {
+		if !strings.Contains(content, entry+"\n") {
+			t.Errorf(".gitignore missing %q:\n%s", entry, content)
+		}
+	}
+	if strings.Count(content, "# Agentic Version Control") != 1 {
+		t.Errorf("expected exactly one AVC header:\n%s", content)
+	}
+}
+
+// TestSkills_PreexistingFilesAreNotGitignored verifies the ownership rule:
+// when the user authored the project's .gitignore, files that existed before
+// AVC ran (user-owned, merely appended to or merged into) and were not
+// gitignored must not become gitignored.
+func TestSkills_PreexistingFilesAreNotGitignored(t *testing.T) {
+	fakeHome(t)
+	project := gitProject(t)
+
+	// The user authored the .gitignore — their tracking policy stands.
+	if err := os.WriteFile(filepath.Join(project, ".gitignore"), []byte("node_modules/\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// User-owned CLAUDE.md and .mcp.json exist before AVC runs.
+	if err := os.WriteFile(filepath.Join(project, "CLAUDE.md"), []byte("# My project\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	pre := `{"mcpServers":{"other":{"command":"other-tool"}}}`
+	if err := os.WriteFile(filepath.Join(project, ".mcp.json"), []byte(pre), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	r, err := skills.Write(project, skills.FrameworkClaudeCode)
-	if err != nil {
+	if _, err := skills.Write(project, skills.FrameworkClaudeCode); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
-	found := false
-	for _, w := range r.Warnings {
-		if containsAll(w, ".mcp.json", "gitignored") {
-			found = true
+
+	content := readGitignore(t, project)
+	for _, entry := range []string{"CLAUDE.md", ".mcp.json"} {
+		if strings.Contains(content, entry+"\n") {
+			t.Errorf("pre-existing %q must not be gitignored:\n%s", entry, content)
 		}
 	}
-	if !found {
-		t.Errorf("expected gitignore warning for .mcp.json, got: %v", r.Warnings)
+	// Skill files were still created by AVC — they are gitignored.
+	if !strings.Contains(content, ".claude/skills/avc-*/\n") {
+		t.Errorf(".gitignore missing skill-dir pattern:\n%s", content)
+	}
+
+	// The merge preserved the user's server, and the append kept their content.
+	servers := readMCPServers(t, filepath.Join(project, ".mcp.json"))
+	if _, ok := servers["other"]; !ok {
+		t.Error("merge dropped the user's pre-existing server entry")
+	}
+	claudeMD, err := os.ReadFile(filepath.Join(project, "CLAUDE.md"))
+	if err != nil || !strings.Contains(string(claudeMD), "# My project") {
+		t.Error("append lost the user's CLAUDE.md content")
+	}
+}
+
+// TestSkills_NoUserGitignore_PreexistingFilesAreGitignored verifies that when
+// the user has no .gitignore of their own (none, or only the AVC-created one),
+// there is no expressed tracking policy — so ALL AVC-touched project files are
+// gitignored, including pre-existing ones AVC appended to.
+func TestSkills_NoUserGitignore_PreexistingFilesAreGitignored(t *testing.T) {
+	fakeHome(t)
+	project := gitProject(t)
+
+	if err := os.WriteFile(filepath.Join(project, "CLAUDE.md"), []byte("# My project\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := skills.Write(project, skills.FrameworkClaudeCode); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	content := readGitignore(t, project)
+	for _, entry := range []string{"CLAUDE.md", ".mcp.json", ".claude/skills/avc-*/"} {
+		if !strings.Contains(content, entry+"\n") {
+			t.Errorf(".gitignore missing %q with no user gitignore:\n%s", entry, content)
+		}
+	}
+	// The user's CLAUDE.md content is still preserved (append, not overwrite).
+	claudeMD, err := os.ReadFile(filepath.Join(project, "CLAUDE.md"))
+	if err != nil || !strings.Contains(string(claudeMD), "# My project") {
+		t.Error("append lost the user's CLAUDE.md content")
+	}
+}
+
+// TestSkills_CursorCreatedFilesAreGitignored covers the cursor framework's
+// created files.
+func TestSkills_CursorCreatedFilesAreGitignored(t *testing.T) {
+	fakeHome(t)
+	project := gitProject(t)
+
+	if _, err := skills.Write(project, skills.FrameworkCursor); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	content := readGitignore(t, project)
+	for _, entry := range []string{".cursor/mcp.json", ".cursor/rules/avc.mdc"} {
+		if !strings.Contains(content, entry+"\n") {
+			t.Errorf(".gitignore missing %q:\n%s", entry, content)
+		}
+	}
+}
+
+// TestSkills_NoGit_NoGitignoreCreated verifies that outside a git repository
+// no .gitignore is created.
+func TestSkills_NoGit_NoGitignoreCreated(t *testing.T) {
+	fakeHome(t)
+	project := t.TempDir()
+
+	if _, err := skills.Write(project, skills.FrameworkClaudeCode); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(project, ".gitignore")); !os.IsNotExist(err) {
+		t.Error("Write created .gitignore outside a git repository")
 	}
 }

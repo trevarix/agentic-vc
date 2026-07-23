@@ -14,6 +14,8 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+
+	"github.com/trevarix/agentic-vc/avc/internal/config"
 )
 
 // Supported framework identifiers.
@@ -55,9 +57,6 @@ type WriteResult struct {
 func Write(projectRoot, framework string) (*WriteResult, error) {
 	r := &WriteResult{Framework: framework}
 
-	// Warn about any project-level paths we will write into that are gitignored.
-	checkGitignoreWarnings(projectRoot, framework, r)
-
 	switch framework {
 	case FrameworkClaudeCode:
 		if err := writeClaudeCode(projectRoot, r); err != nil {
@@ -83,7 +82,51 @@ func Write(projectRoot, framework string) (*WriteResult, error) {
 		return nil, fmt.Errorf("unknown framework '%s'; supported: %s",
 			framework, strings.Join(SupportedFrameworks, ", "))
 	}
+
+	// Gitignore the AVC agent files — generated agent files are local tooling,
+	// not repo content. When the user authored the project's .gitignore, only
+	// files AVC created are added: a pre-existing file the user tracks (and
+	// AVC merely appended to or merged into) keeps its tracked status. When
+	// the .gitignore is AVC's own (or absent), the user has no expressed
+	// tracking policy, so every AVC-touched project file is added.
+	createdOnly := config.UserOwnsGitignore(projectRoot)
+	if entries := gitignoreEntriesFor(r.Actions, createdOnly); len(entries) > 0 {
+		action, err := config.AppendToGitignore(projectRoot, entries)
+		if err != nil {
+			return nil, err
+		}
+		if action != "" {
+			r.Actions = append(r.Actions, FileAction{Path: ".gitignore", Status: action})
+		}
+	}
 	return r, nil
+}
+
+// skillsDirPattern gitignores every generated skill directory with one entry.
+const skillsDirPattern = ".claude/skills/avc-*/"
+
+// gitignoreEntriesFor maps project files AVC wrote to .gitignore entries.
+// With createdOnly, only status "created" qualifies — pre-existing files the
+// user already tracks must not become ignored because AVC appended to them.
+// Global config paths (absolute, outside the project) never produce entries.
+func gitignoreEntriesFor(actions []FileAction, createdOnly bool) []string {
+	var entries []string
+	seen := map[string]bool{}
+	for _, a := range actions {
+		if (createdOnly && a.Status != "created") || filepath.IsAbs(a.Path) {
+			continue
+		}
+		entry := a.Path
+		if strings.HasPrefix(entry, ".claude/skills/") {
+			entry = skillsDirPattern
+		}
+		if seen[entry] {
+			continue
+		}
+		seen[entry] = true
+		entries = append(entries, entry)
+	}
+	return entries
 }
 
 // ─── Framework writers ────────────────────────────────────────────────────────
@@ -555,72 +598,6 @@ func writeFileIfAbsent(path, content string) (string, error) {
 		return "", err
 	}
 	return "created", nil
-}
-
-// ─── Gitignore detection ──────────────────────────────────────────────────────
-
-// frameworkPaths maps each framework to project-level paths it writes into.
-// Global config paths (home directory) are excluded — they exist outside the project.
-var frameworkPaths = map[string][]string{
-	FrameworkClaudeCode:    {".claude", projectMCPFile},
-	FrameworkClaudeDesktop: {".claude"},
-	FrameworkCursor:        {".cursor"},
-	FrameworkWindsurf:      {}, // .windsurfrules is at project root; MCP config is global
-	FrameworkGeneric:       {}, // writes to project root — no subdirectory to check
-}
-
-// checkGitignoreWarnings reads .gitignore and adds a warning to r for any
-// path we are about to write into that is covered by a gitignore pattern.
-func checkGitignoreWarnings(projectRoot, framework string, r *WriteResult) {
-	paths := frameworkPaths[framework]
-	if len(paths) == 0 {
-		return
-	}
-
-	data, err := os.ReadFile(filepath.Join(projectRoot, ".gitignore"))
-	if err != nil {
-		return // no .gitignore — nothing to warn about
-	}
-
-	ignored := gitignorePatterns(string(data))
-	for _, p := range paths {
-		if isIgnored(p, ignored) {
-			r.Warnings = append(r.Warnings,
-				fmt.Sprintf("%s is gitignored — files will be written but won't be committed or shared with the team", p))
-		}
-	}
-}
-
-// gitignorePatterns extracts normalized non-comment, non-empty patterns.
-func gitignorePatterns(content string) []string {
-	var patterns []string
-	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		patterns = append(patterns, line)
-	}
-	return patterns
-}
-
-// isIgnored reports whether dirName (e.g. ".claude") matches any gitignore pattern.
-// Handles common forms: ".claude", ".claude/", "/.claude", "/.claude/".
-func isIgnored(dirName string, patterns []string) bool {
-	variants := []string{
-		dirName,
-		dirName + "/",
-		"/" + dirName,
-		"/" + dirName + "/",
-	}
-	for _, p := range patterns {
-		for _, v := range variants {
-			if p == v {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // ─── Content: Claude Code skill files ────────────────────────────────────────
