@@ -18,8 +18,9 @@ import (
 )
 
 var (
-	initSkills []string
-	initYes    bool
+	initSkills       []string
+	initYes          bool
+	initSkillsGlobal bool
 )
 
 var initCmd = &cobra.Command{
@@ -43,6 +44,12 @@ Accepts a comma-separated list of frameworks:
   avc init --skills claude-code,cursor
   avc init --skills claude-code,cursor,windsurf,generic
 
+MCP configs are written at the project level where the framework supports it
+(claude-code: .mcp.json, cursor: .cursor/mcp.json), so the server is scoped to
+this project and the config can be committed. Pass --global to write the
+framework's global (home-directory) config instead. claude-desktop and
+windsurf only support global configs and always write there.
+
 Supported frameworks: claude-code, claude-desktop, cursor, windsurf, generic`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runInit,
@@ -53,6 +60,8 @@ func init() {
 		"Comma-separated list of agent frameworks to configure (claude-code, claude-desktop, cursor, windsurf, generic)")
 	initCmd.Flags().BoolVarP(&initYes, "yes", "y", false,
 		"Skip the confirmation prompt when no AVC project exists at the path yet")
+	initCmd.Flags().BoolVar(&initSkillsGlobal, "global", false,
+		"Write MCP configs to the framework's global config instead of the project level")
 }
 
 // confirmNewProject asks the user whether to create a new AVC project at path.
@@ -84,9 +93,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 	alreadyInit := isAVCDir(absPath)
 
 	// Bootstrapping a brand-new project is consequential — it creates a
-	// directory, a database, and (with --skills) registers global agent
-	// configs. Confirm with the user unless they've opted out via --yes or
-	// --json (machine consumers are presumed to know what they're asking for).
+	// directory, a database, and (with --skills) writes agent configs.
+	// Confirm with the user unless they've opted out via --yes or --json
+	// (machine consumers are presumed to know what they're asking for).
 	if !alreadyInit && !initYes && !jsonOutput {
 		if !confirmNewProject(absPath) {
 			fmt.Println(dim("Aborted — no changes made."))
@@ -121,7 +130,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// Write framework-specific MCP configs and agent instruction files.
 	var skillResults []*skills.WriteResult
 	for _, framework := range initSkills {
-		result, err := skills.Write(absPath, framework)
+		result, err := skills.Write(absPath, framework, initSkillsGlobal)
 		if err != nil {
 			return fmt.Errorf("--skills %s: %w", framework, err)
 		}

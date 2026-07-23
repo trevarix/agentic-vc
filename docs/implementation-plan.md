@@ -255,10 +255,12 @@ Accepts a comma-separated list: `avc init --skills claude-code,cursor,windsurf`
 
 | Flag | MCP config written | Instruction file written |
 |------|-------------------|--------------------------|
-| `claude-code` | `.claude/settings.json` | `.claude/skills/avc-*/SKILL.md` (4 skill files) |
-| `cursor` | `.cursor/mcp.json` | `.cursor/rules/avc.mdc` |
-| `windsurf` | `.codeium/windsurf/mcp_config.json` | `.windsurfrules` AVC block appended |
+| `claude-code` | `.mcp.json` (project); `~/.claude.json` with `--global` | `.claude/skills/avc-*/SKILL.md` (4 skill files) |
+| `cursor` | `.cursor/mcp.json` (project); `~/.cursor/mcp.json` with `--global` | `.cursor/rules/avc.mdc` |
+| `windsurf` | `~/.codeium/windsurf/mcp_config.json` (global only) | `.windsurfrules` AVC block appended |
 | `generic` | *(none)* | `AGENT_INSTRUCTIONS.md` drop-in prompt block |
+
+Project-level configs write the bare `avc` command (portable across machines with avc on PATH); global configs write the absolute binary path.
 
 - ✅ All instruction files include: when to snapshot, when to restore, branch workflow, merge approval rules
 - ✅ JSON config files — **merge operation**: reads existing file, inserts `avc` entry under `mcpServers`, writes back; creates file if absent; no-op if `avc` entry already present
