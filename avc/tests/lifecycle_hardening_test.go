@@ -241,13 +241,14 @@ func TestDiff_DetectsBinaryFiles(t *testing.T) {
 	}
 }
 
-// TestDiff_EstimatesCountsForLargeFiles verifies that a file exceeding the
-// line-count cap reports estimated (not exact) counts instead of running the
-// full O(m*n) LCS computation.
-func TestDiff_EstimatesCountsForLargeFiles(t *testing.T) {
+// TestDiff_ExactCountsUnderProductCap verifies that a fully-changed file over
+// the inline-preview line cap (2000) but well under the counting product cap
+// still reports exact counts — the two-row LCS is cheap in space, so counting
+// scales far beyond what the O(m*n)-space preview can.
+func TestDiff_ExactCountsUnderProductCap(t *testing.T) {
 	projectRoot, mainBranchID := setupProjectWithMain(t)
 
-	oldLines := repeatLines("old", 2500)
+	oldLines := repeatLines("old", 2500) // 2500^2 = 6.25M, under the 1e8 cap
 	newLines := repeatLines("new", 2500)
 
 	writeFile(t, projectRoot, "big.txt", oldLines)
@@ -262,8 +263,39 @@ func TestDiff_EstimatesCountsForLargeFiles(t *testing.T) {
 	if len(result.Files) != 1 {
 		t.Fatalf("expected 1 changed file, got %d", len(result.Files))
 	}
+	fd := result.Files[0]
+	if fd.CountsEstimated {
+		t.Error("expected exact counts for a 2500-line file (under the product cap)")
+	}
+	if fd.LinesAdded != 2500 || fd.LinesRemoved != 2500 {
+		t.Errorf("fully-changed file: +%d -%d, want +2500 -2500", fd.LinesAdded, fd.LinesRemoved)
+	}
+}
+
+// TestDiff_EstimatesCountsBeyondProductCap verifies that a file pair whose
+// m*n exceeds the counting product cap falls back to an upper-bound estimate
+// instead of running an unbounded LCS.
+func TestDiff_EstimatesCountsBeyondProductCap(t *testing.T) {
+	projectRoot, mainBranchID := setupProjectWithMain(t)
+
+	// 12000 x 12000 = 1.44e8 > 1e8 product cap -> estimate path.
+	oldLines := repeatLines("old", 12000)
+	newLines := repeatLines("new", 12000)
+
+	writeFile(t, projectRoot, "huge.txt", oldLines)
+	snap1 := createMainSnap(t, projectRoot, mainBranchID, "v1")
+	writeFile(t, projectRoot, "huge.txt", newLines)
+	snap2 := createMainSnap(t, projectRoot, mainBranchID, "v2")
+
+	result, err := diff.Compare(projectRoot, snap1.ID, snap2.ID)
+	if err != nil {
+		t.Fatalf("diff.Compare: %v", err)
+	}
+	if len(result.Files) != 1 {
+		t.Fatalf("expected 1 changed file, got %d", len(result.Files))
+	}
 	if !result.Files[0].CountsEstimated {
-		t.Error("expected CountsEstimated=true for a file exceeding the line cap")
+		t.Error("expected CountsEstimated=true beyond the product cap")
 	}
 }
 
