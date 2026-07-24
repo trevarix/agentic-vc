@@ -152,15 +152,12 @@ func CreateWithOptions(projectRoot string, opts Options) (*Result, error) {
 	var totalSize int64
 	var skippedLarge []string
 	files := make([]*db.File, 0, len(paths))
+	tracked := make(map[string]bool, len(paths)) // every rel path we've decided on
 
-	for _, absPath := range paths {
-		rel, _ := filepath.Rel(sourceDir, absPath)
-		rel = filepath.ToSlash(rel)
-
-		info, err := os.Stat(absPath)
-		if err != nil {
-			return nil, fmt.Errorf("stat file %s: %w", absPath, err)
-		}
+	// addFile hashes one existing file (info from a prior Stat) and appends it
+	// to the snapshot, or records it as skipped when it exceeds the size cap.
+	addFile := func(absPath, rel string, info os.FileInfo) error {
+		tracked[rel] = true
 
 		// Files larger than the configured cap are skipped entirely (not
 		// read, not hashed, not stored) rather than risking an
@@ -171,12 +168,11 @@ func CreateWithOptions(projectRoot string, opts Options) (*Result, error) {
 				"[avc] warning: skipping %s (%.1f MB exceeds the %d MB snapshot limit; set [snapshot] max_file_size_mb in .avc/config.toml to change this)\n",
 				rel, float64(info.Size())/(1024*1024), maxFileSizeMB,
 			)
-			continue
+			return nil
 		}
 
 		var hash string
 		var size int64
-
 		// A cache hit is only trusted when the object it points to actually
 		// exists — a stale or corrupted cache must never produce a snapshot
 		// that references content the store doesn't hold.
@@ -187,10 +183,10 @@ func CreateWithOptions(projectRoot string, opts Options) (*Result, error) {
 			// File is new or modified — read once, derive hash from bytes.
 			data, h, err := fileutil.ReadAndHash(absPath)
 			if err != nil {
-				return nil, fmt.Errorf("read file %s: %w", absPath, err)
+				return fmt.Errorf("read file %s: %w", absPath, err)
 			}
 			if err := restore.StoreObject(projectRoot, h, data); err != nil {
-				return nil, fmt.Errorf("store object %s: %w", absPath, err)
+				return fmt.Errorf("store object %s: %w", absPath, err)
 			}
 			hash = h
 			size = int64(len(data))
@@ -206,19 +202,41 @@ func CreateWithOptions(projectRoot string, opts Options) (*Result, error) {
 			FileMode:     uint32(info.Mode().Perm()),
 		})
 		totalSize += size
+		return nil
+	}
+
+	for _, absPath := range paths {
+		rel, _ := filepath.Rel(sourceDir, absPath)
+		rel = filepath.ToSlash(rel)
+
+		info, err := os.Stat(absPath)
+		if err != nil {
+			return nil, fmt.Errorf("stat file %s: %w", absPath, err)
+		}
+		if err := addFile(absPath, rel, info); err != nil {
+			return nil, err
+		}
+	}
+
+	// Untrack-vs-delete: an ignore rule must never untrack a file that is still
+	// present on disk (git's rule — .gitignore does not untrack tracked files;
+	// `git rm --cached` does). Without this, adding a path to .avcignore
+	// mid-branch drops its already-tracked files from the snapshot, a later
+	// branch diff reports them [deleted], and a merge would delete the real
+	// files from the project root. So carry forward, with current content, any
+	// previously-tracked file the walk skipped (now ignored) that still exists.
+	if carried, err := carryForwardTrackedFiles(store, branchID, sourceDir, tracked, addFile); err != nil {
+		return nil, err
+	} else if carried > 0 {
+		fmt.Fprintf(os.Stderr,
+			"[avc] note: %d previously-tracked file(s) now match an ignore rule but still exist on disk — kept in the snapshot (ignoring does not untrack; delete the files or use an explicit untrack to stop tracking)\n",
+			carried,
+		)
 	}
 
 	// Baseline for the heuristic change summary: the branch HEAD before this
-	// snapshot, falling back to the branch's base snapshot for the first
-	// snapshot on a fresh branch. Empty = no baseline, no summary.
-	summaryBaseID := ""
-	if branchID != "" {
-		if head, headErr := store.GetHeadSnapshot(branchID); headErr == nil {
-			summaryBaseID = head.ID
-		} else if b, branchErr := store.GetBranchByID(branchID); branchErr == nil {
-			summaryBaseID = b.BaseSnapshotID
-		}
-	}
+	// snapshot, falling back to the branch's base snapshot. Empty = no summary.
+	summaryBaseID := previousSnapshotID(store, branchID)
 
 	snap := &db.Snapshot{
 		ID:        snapID,
@@ -284,6 +302,62 @@ func CreateWithOptions(projectRoot string, opts Options) (*Result, error) {
 	}
 
 	return result, nil
+}
+
+// carryForwardTrackedFiles re-adds files that were tracked in the branch's
+// previous snapshot but were skipped by the current walk (now matched by an
+// ignore rule) and still exist on disk. It calls addFile for each so the
+// current content is captured, and returns how many were carried forward.
+// A file that is genuinely gone from disk is not carried — it is a real
+// deletion. With no prior snapshot (first snapshot, no base) there is nothing
+// to carry, so it returns 0.
+func carryForwardTrackedFiles(
+	store *db.Store,
+	branchID, sourceDir string,
+	tracked map[string]bool,
+	addFile func(absPath, rel string, info os.FileInfo) error,
+) (int, error) {
+	prevID := previousSnapshotID(store, branchID)
+	if prevID == "" {
+		return 0, nil
+	}
+	prevFiles, err := store.GetSnapshotFiles(prevID)
+	if err != nil {
+		return 0, err
+	}
+
+	carried := 0
+	for _, f := range prevFiles {
+		if tracked[f.RelativePath] {
+			continue // already handled by the walk (or intentionally skipped)
+		}
+		absPath := filepath.Join(sourceDir, filepath.FromSlash(f.RelativePath))
+		info, statErr := os.Stat(absPath)
+		if statErr != nil || info.IsDir() {
+			continue // genuinely deleted (or replaced by a dir) — a real removal
+		}
+		if err := addFile(absPath, f.RelativePath, info); err != nil {
+			return carried, err
+		}
+		carried++
+	}
+	return carried, nil
+}
+
+// previousSnapshotID returns the branch's current HEAD (the state before the
+// snapshot in progress), falling back to the branch's base snapshot for the
+// first snapshot on a branch. Empty when there is no baseline.
+func previousSnapshotID(store *db.Store, branchID string) string {
+	if branchID == "" {
+		return ""
+	}
+	if head, err := store.GetHeadSnapshot(branchID); err == nil {
+		return head.ID
+	}
+	if b, err := store.GetBranchByID(branchID); err == nil {
+		return b.BaseSnapshotID
+	}
+	return ""
 }
 
 // loadIgnoreRulesForSource loads .avcignore from sourceDir when it differs
