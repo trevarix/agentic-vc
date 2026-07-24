@@ -481,7 +481,11 @@ node_modules/
 *.tsbuildinfo
 
 # ── Go ────────────────────────────────────────────────────────────────────────
-vendor/
+# Anchored to the repo root: Go's module vendor dir is always at the module
+# root, whereas "vendor" is a common source directory name at other depths
+# (e.g. a frontend feature dir). A bare "vendor/" would match at ANY depth and
+# silently hide that source from every snapshot.
+/vendor/
 
 # ── Rust ──────────────────────────────────────────────────────────────────────
 target/

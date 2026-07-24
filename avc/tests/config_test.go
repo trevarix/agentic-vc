@@ -7,7 +7,62 @@ import (
 	"testing"
 
 	"github.com/trevarix/agentic-vc/avc/internal/config"
+	"github.com/trevarix/agentic-vc/avc/internal/fileutil"
 )
+
+// TestConfig_DefaultAVCIgnore_VendorAnchoredToRoot verifies that the default
+// .avcignore ignores a Go module's root vendor/ but never a source directory
+// named "vendor" nested at any other depth. A bare "vendor/" pattern would
+// match at any depth and silently hide that source from every snapshot.
+func TestConfig_DefaultAVCIgnore_VendorAnchoredToRoot(t *testing.T) {
+	dir := t.TempDir()
+	if err := config.WriteDefault(dir); err != nil {
+		t.Fatalf("WriteDefault: %v", err)
+	}
+	rules, err := fileutil.LoadIgnoreRules(dir)
+	if err != nil {
+		t.Fatalf("LoadIgnoreRules: %v", err)
+	}
+
+	// Directory exclusion is driven by MatchesDir + SkipDir during the walk.
+	// Root-level vendor/ (Go convention) is ignored; a nested source directory
+	// named "vendor" is not.
+	if !rules.MatchesDir("vendor") {
+		t.Error("root vendor/ should be ignored")
+	}
+	for _, p := range []string{
+		"web/features/vendor",
+		"__tests__/unit/features/vendor",
+	} {
+		if rules.MatchesDir(p) {
+			t.Errorf("nested directory %q must not be ignored by the default template", p)
+		}
+	}
+
+	// End-to-end through WalkProject: the root vendor file is excluded, the
+	// nested vendor source file is tracked.
+	writeFile(t, dir, "vendor/modules.txt", "root go vendor")
+	writeFile(t, dir, "web/features/vendor/screen.tsx", "nested source")
+	paths, err := fileutil.WalkProject(dir, rules)
+	if err != nil {
+		t.Fatalf("WalkProject: %v", err)
+	}
+	var gotRootVendor, gotNestedVendor bool
+	for _, p := range paths {
+		switch {
+		case strings.HasSuffix(filepath.ToSlash(p), "vendor/modules.txt"):
+			gotRootVendor = true
+		case strings.HasSuffix(filepath.ToSlash(p), "web/features/vendor/screen.tsx"):
+			gotNestedVendor = true
+		}
+	}
+	if gotRootVendor {
+		t.Error("root vendor/modules.txt should be excluded from the walk")
+	}
+	if !gotNestedVendor {
+		t.Error("nested web/features/vendor/screen.tsx should be tracked by the walk")
+	}
+}
 
 // TestConfig_Load_ReturnsDefaults_WhenFileAbsent verifies that loading from a
 // directory with no config.toml returns sensible defaults without error.
