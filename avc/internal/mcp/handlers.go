@@ -621,7 +621,7 @@ func toolBranchDiff(projectRoot string, args map[string]any) (any, error) {
 		return nil, err
 	}
 
-	text := formatBranchDiff(name, baseSnapshotID, head.ID, result, stat)
+	text := renderBranchDiffBounded(name, baseSnapshotID, head.ID, result, stat)
 
 	// Early warning: flag protected-path changes now, before a merge attempt
 	// gets refused by the [protect] gate.
@@ -683,7 +683,68 @@ func toolCrossBranchDiff(projectRoot, name, against string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return formatBranchDiff(fmt.Sprintf("%s → %s", name, against), fromHead, toHead, result, false), nil
+	return renderBranchDiffBounded(fmt.Sprintf("%s → %s", name, against), fromHead, toHead, result, false), nil
+}
+
+// maxBranchDiffBytes bounds the text an MCP branch-diff tool returns. A full
+// diff with previews can be many MB (769 KB / 12k lines in one report) and
+// exceed the MCP result token limit, which makes the tool fail outright. When
+// the rendered text would exceed this, the renderer degrades gracefully:
+// full → stat summary → truncated stat, always with a note on what to do next.
+// Kept well under typical MCP limits so the enclosing JSON envelope also fits.
+const maxBranchDiffBytes = 120_000
+
+// maxStatFilesWhenTruncated is how many per-file stat lines to keep when even
+// the stat summary exceeds the budget.
+const maxStatFilesWhenTruncated = 400
+
+// renderBranchDiffBounded renders a branch diff that always fits the MCP result
+// budget. It honors an explicit stat request, and otherwise falls back from a
+// full preview to a stat summary (and, if still too large, a truncated one)
+// rather than returning output the tool cannot deliver.
+func renderBranchDiffBounded(branch, fromSnap, toSnap string, result *diffpkg.Result, stat bool) string {
+	text := formatBranchDiff(branch, fromSnap, toSnap, result, stat)
+	if len(text) <= maxBranchDiffBytes {
+		return text
+	}
+
+	// Full output too large — fall back to the stat summary (same result; stat
+	// formatting reads only counts, so no recompute is needed).
+	if !stat {
+		note := fmt.Sprintf(
+			"NOTE: the full diff was %d bytes, over the %d-byte limit — showing a per-file summary instead. "+
+				"To see a specific file's changes, use avc_diff on the two snapshots below, or narrow the branch. "+
+				"A very large diff often means build/test output was tracked; check avc_snapshot's new_files count and avc_check_ignore.\n\n",
+			len(text), maxBranchDiffBytes)
+		stat = true
+		text = note + formatBranchDiff(branch, fromSnap, toSnap, result, true)
+		if len(text) <= maxBranchDiffBytes {
+			return text
+		}
+	}
+
+	// Even the stat summary is too large (very many files) — truncate the list.
+	return truncatedStat(branch, fromSnap, toSnap, result)
+}
+
+// truncatedStat renders a stat summary capped to maxStatFilesWhenTruncated
+// files, with a trailer noting how many were omitted.
+func truncatedStat(branch, fromSnap, toSnap string, result *diffpkg.Result) string {
+	full := result.Files
+	shown := full
+	if len(shown) > maxStatFilesWhenTruncated {
+		shown = shown[:maxStatFilesWhenTruncated]
+	}
+	capped := &diffpkg.Result{FromSnapshotID: fromSnap, ToSnapshotID: toSnap, Files: shown}
+	text := fmt.Sprintf(
+		"NOTE: %d files changed — too many to list in full. Showing the first %d; "+
+			"this usually means build/test output entered tracking (see avc_snapshot new_files and avc_check_ignore).\n\n",
+		len(full), len(shown))
+	text += formatBranchDiff(branch, fromSnap, toSnap, capped, true)
+	if len(full) > len(shown) {
+		text += fmt.Sprintf("  … and %d more file(s) not shown\n", len(full)-len(shown))
+	}
+	return text
 }
 
 // formatBranchDiff renders a branch diff as human-readable markdown text.
