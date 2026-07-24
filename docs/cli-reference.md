@@ -676,12 +676,13 @@ Place a `.avcignore` file in the project root to exclude files and directories f
   *.log
   !keep.log
   ```
-- On a branch, if the workspace has its own `.avcignore` (e.g. an agent added one as part of its task), snapshots taken from that workspace honor the workspace's copy, not the project root's.
+- **Layering on a branch:** the project-root `.avcignore` is read fresh at snapshot time and always applies; a branch workspace's own `.avcignore` (e.g. one an agent added) is layered on top. So a root edit takes effect on live branches immediately, and workspace-specific patterns add to (or, by the last-match-wins rule, override) the root's. Because layering is additive, *relaxing* a pattern already present in the workspace copy — e.g. changing `vendor/` to `/vendor/` — also requires updating the workspace `.avcignore`, not only the root.
+- **Ignoring never untracks.** Adding a pattern that matches an already-tracked file does **not** remove it: if the file still exists on disk it stays in snapshots (mirroring `git`, where `.gitignore` never untracks a tracked file). To stop tracking a file, delete it from the workspace. A snapshot reports how many such files it carried forward via `carried_files`.
 
 **Default patterns (written by `avc init`):**
 ```
 node_modules/
-vendor/
+/vendor/       # anchored: only Go's module-root vendor dir, not a source dir named "vendor"
 dist/
 build/
 .env
@@ -689,6 +690,17 @@ build/
 ```
 
 The `.avc/` directory is always excluded regardless of `.avcignore` contents.
+
+### Diagnosing exclusions — `avc check-ignore`
+
+When an expected file is missing from a snapshot, branch workspace, or diff, use `avc check-ignore` to find out whether — and why — it is excluded. It is AVC's analog of `git check-ignore`, and it names the exact pattern responsible:
+
+```
+avc check-ignore web/features/vendor/screen.tsx
+avc check-ignore --json src/main.go vendor/pkg/x.go
+```
+
+Paths are resolved against the active branch's source directory (the workspace on a branch, the project root on main), using the same layered rules a snapshot sees. Exit code is `0` when at least one given path is ignored and `1` when none are, matching `git check-ignore`.
 
 ### Large files
 

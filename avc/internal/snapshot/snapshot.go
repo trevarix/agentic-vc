@@ -383,45 +383,12 @@ func previousSnapshotID(store *db.Store, branchID string) string {
 	return ""
 }
 
-// loadIgnoreRulesForSource builds the ignore rules for a snapshot walk.
-//
-// When walking a branch workspace, the root .avcignore is layered UNDERNEATH
-// the workspace's own: root patterns are read fresh at snapshot time and
-// always apply, with the workspace's patterns appended after (so the branch
-// can add its own ignores, and gitignore precedence lets a later workspace
-// pattern override an earlier root one). This keeps the project root the
-// single source of truth for baseline ignores — a root edit takes effect on
-// live branches immediately — while preserving workspace-specific additions.
-//
-// Because layering is additive, it cannot *remove* a stale pattern still
-// present in the workspace copy: to relax a pattern on a branch (e.g. change
-// vendor/ to /vendor/), update the workspace .avcignore too, not only the root.
-//
-// On main (sourceDir == projectRoot) there is only the root file.
+// loadIgnoreRulesForSource builds the ignore rules for a snapshot walk: the
+// root .avcignore layered underneath the branch workspace's own. See
+// fileutil.LoadLayeredIgnoreRules for the layering semantics — root rules are
+// read fresh and always apply, so a root edit reaches live branches, while
+// workspace-specific additions still apply. Layering is additive, so relaxing
+// a pattern already in the workspace copy needs that copy updated too.
 func loadIgnoreRulesForSource(projectRoot, sourceDir string) (*fileutil.IgnoreRules, error) {
-	rootLines, err := readIgnoreLines(filepath.Join(projectRoot, ".avcignore"))
-	if err != nil {
-		return nil, err
-	}
-	if sourceDir == "" || sourceDir == projectRoot {
-		return fileutil.CompilePatterns(rootLines), nil
-	}
-	wsLines, err := readIgnoreLines(filepath.Join(sourceDir, ".avcignore"))
-	if err != nil {
-		return nil, err
-	}
-	return fileutil.CompilePatterns(append(rootLines, wsLines...)), nil
-}
-
-// readIgnoreLines returns the raw lines of an ignore file, or nil if it does
-// not exist. Comment and blank filtering is left to CompilePatterns.
-func readIgnoreLines(path string) ([]string, error) {
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return strings.Split(string(data), "\n"), nil
+	return fileutil.LoadLayeredIgnoreRules(projectRoot, sourceDir)
 }
