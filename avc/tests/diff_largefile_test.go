@@ -49,6 +49,44 @@ func TestDiff_LargeFile_OneLineChange_ExactCounts(t *testing.T) {
 	}
 }
 
+// CompareCounts returns line counts but omits unified-diff previews — the
+// engine behind branch-diff --stat / the stat MCP arg, which keeps output
+// small on a large branch.
+func TestDiff_CompareCounts_OmitsPreviews(t *testing.T) {
+	projectRoot, mainBranchID := setupProjectWithMain(t)
+	writeFile(t, projectRoot, "a.go", "line1\nline2\nline3\n")
+	s1 := createMainSnap(t, projectRoot, mainBranchID, "s1")
+	writeFile(t, projectRoot, "a.go", "line1\nCHANGED\nline3\n")
+	s2 := createMainSnap(t, projectRoot, mainBranchID, "s2")
+
+	full, err := diff.Compare(projectRoot, s1.ID, s2.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stat, err := diff.CompareCounts(projectRoot, s1.ID, s2.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(stat.Files) != 1 {
+		t.Fatalf("expected 1 changed file, got %d", len(stat.Files))
+	}
+	// Same counts as the full diff...
+	if stat.Files[0].LinesAdded != full.Files[0].LinesAdded ||
+		stat.Files[0].LinesRemoved != full.Files[0].LinesRemoved {
+		t.Errorf("counts differ: stat +%d -%d vs full +%d -%d",
+			stat.Files[0].LinesAdded, stat.Files[0].LinesRemoved,
+			full.Files[0].LinesAdded, full.Files[0].LinesRemoved)
+	}
+	// ...but no preview.
+	if stat.Files[0].DiffPreview != "" {
+		t.Error("CompareCounts must not populate DiffPreview")
+	}
+	if full.Files[0].DiffPreview == "" {
+		t.Error("Compare (full) should populate DiffPreview for a small file")
+	}
+}
+
 // A pure CRLF->LF change on a large file must count as no change: SplitLines
 // normalizes line endings before counting, and exact counting now runs on
 // large files too.

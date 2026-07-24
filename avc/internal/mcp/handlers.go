@@ -607,12 +607,21 @@ func toolBranchDiff(projectRoot string, args map[string]any) (any, error) {
 		return nil, fmt.Errorf("branch '%s' has no snapshots yet", name)
 	}
 
-	result, err := diffpkg.Compare(projectRoot, baseSnapshotID, head.ID)
+	// stat mode: per-file counts only, no unified-diff previews — keeps the
+	// output small on a large branch (a full diff can be multiple MB).
+	stat, _ := args["stat"].(bool)
+
+	var result *diffpkg.Result
+	if stat {
+		result, err = diffpkg.CompareCounts(projectRoot, baseSnapshotID, head.ID)
+	} else {
+		result, err = diffpkg.Compare(projectRoot, baseSnapshotID, head.ID)
+	}
 	if err != nil {
 		return nil, err
 	}
 
-	text := formatBranchDiff(name, baseSnapshotID, head.ID, result)
+	text := formatBranchDiff(name, baseSnapshotID, head.ID, result, stat)
 
 	// Early warning: flag protected-path changes now, before a merge attempt
 	// gets refused by the [protect] gate.
@@ -674,11 +683,13 @@ func toolCrossBranchDiff(projectRoot, name, against string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return formatBranchDiff(fmt.Sprintf("%s → %s", name, against), fromHead, toHead, result), nil
+	return formatBranchDiff(fmt.Sprintf("%s → %s", name, against), fromHead, toHead, result, false), nil
 }
 
 // formatBranchDiff renders a branch diff as human-readable markdown text.
-func formatBranchDiff(branch, fromSnap, toSnap string, result *diffpkg.Result) string {
+// In stat mode it emits one line per file (path, type, counts) and no unified
+// diff previews — a compact summary suited to agent review of a large branch.
+func formatBranchDiff(branch, fromSnap, toSnap string, result *diffpkg.Result, stat bool) string {
 	var b strings.Builder
 
 	// Header
@@ -696,7 +707,16 @@ func formatBranchDiff(branch, fromSnap, toSnap string, result *diffpkg.Result) s
 	fmt.Fprintf(&b, "%d %s changed  (+%d lines, -%d lines)\n",
 		len(result.Files), fileWord, totalAdded, totalRemoved)
 
-	// Per-file sections
+	if stat {
+		// One compact line per file: type, counts, path.
+		for _, f := range result.Files {
+			fmt.Fprintf(&b, "  %-8s +%-5d -%-5d  %s\n",
+				string(f.Type), f.LinesAdded, f.LinesRemoved, f.Path)
+		}
+		return b.String()
+	}
+
+	// Per-file sections with previews.
 	for _, f := range result.Files {
 		b.WriteString("\n")
 		fmt.Fprintf(&b, "── %s  [%s]  +%d -%d ──\n",

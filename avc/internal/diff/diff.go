@@ -59,6 +59,13 @@ func Compare(projectRoot, fromID, toID string) (*Result, error) {
 	return compare(projectRoot, fromID, toID, enrichFull)
 }
 
+// CompareCounts is Compare with per-file line counts but no unified-diff
+// previews — for stat/summary views that must stay small on a large branch.
+// It also skips building the O(m*n) preview tables, so it is cheaper.
+func CompareCounts(projectRoot, fromID, toID string) (*Result, error) {
+	return compare(projectRoot, fromID, toID, enrichCounts)
+}
+
 func compare(projectRoot, fromID, toID string, mode enrichMode) (*Result, error) {
 	store, err := db.Open(projectRoot)
 	if err != nil {

@@ -231,6 +231,7 @@ func AllTools() []Tool {
 				Properties: map[string]Property{
 					"name":    {Type: "string", Description: "Branch name"},
 					"against": {Type: "string", Description: "Compare this branch's HEAD against another branch's HEAD instead of the base→HEAD diff. Useful to see how two parallel agent branches differ."},
+					"stat":    {Type: "boolean", Description: "Summary mode: one line per file (type and +/- counts) with no inline diff previews. Use for a large branch where the full diff would be too big to review; follow up with a non-stat call on specific files if needed."},
 				},
 				Required: []string{"name"},
 			},
