@@ -5,6 +5,7 @@ package mcp
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/trevarix/agentic-vc/avc/internal/config"
 	"github.com/trevarix/agentic-vc/avc/internal/db"
 	diffpkg "github.com/trevarix/agentic-vc/avc/internal/diff"
+	"github.com/trevarix/agentic-vc/avc/internal/fileutil"
 	mergepkg "github.com/trevarix/agentic-vc/avc/internal/merge"
 	"github.com/trevarix/agentic-vc/avc/internal/oplog"
 	"github.com/trevarix/agentic-vc/avc/internal/policy"
@@ -987,6 +989,17 @@ func toolRunInWorkspace(projectRoot string, args map[string]any) (any, error) {
 		return nil, fmt.Errorf("command is required")
 	}
 
+	// Snapshot the set of tracked-eligible files before the run so we can tell
+	// the agent exactly what the command created. Test suites commonly write
+	// output into the workspace (upload dirs, coverage, caches); those files
+	// would otherwise silently enter the next snapshot and pollute the branch
+	// diff. Surfacing them lets the agent ignore artifacts BEFORE snapshotting.
+	wsPath := branchpkg.WorkspacePath(projectRoot, branch)
+	if wsPath == "" {
+		wsPath = projectRoot
+	}
+	before := trackedFileSet(projectRoot, wsPath)
+
 	result, err := workspacepkg.Run(workspacepkg.RunRequest{
 		ProjectRoot:    projectRoot,
 		BranchName:     branch,
@@ -997,7 +1010,9 @@ func toolRunInWorkspace(projectRoot string, args map[string]any) (any, error) {
 		return nil, err
 	}
 
-	return map[string]any{
+	created := newlyCreatedFiles(before, trackedFileSet(projectRoot, wsPath))
+
+	out := map[string]any{
 		"exit_code":      result.ExitCode,
 		"stdout":         result.Stdout,
 		"stderr":         result.Stderr,
@@ -1015,7 +1030,61 @@ func toolRunInWorkspace(projectRoot string, args map[string]any) (any, error) {
 				"process_tree_kill": result.SandboxInfo.ProcessTreeKill,
 			},
 		},
-	}, nil
+	}
+	if len(created) > 0 {
+		out["files_created_count"] = len(created)
+		out["files_created"] = capStrings(created, maxCreatedFilesReported)
+		out["files_created_note"] = "This command created files that are NOT yet ignored and will enter the next snapshot. " +
+			"If they are build/test artifacts, add their directory to the workspace .avcignore BEFORE calling avc_snapshot, " +
+			"then verify with avc_check_ignore. Ignoring them now keeps them out; ignoring after they are snapshotted will not remove them."
+	}
+	return out, nil
+}
+
+// maxCreatedFilesReported caps the created-file list in the run response so a
+// flood of test output does not itself bloat the tool result.
+const maxCreatedFilesReported = 50
+
+// trackedFileSet returns the set of snapshot-eligible file paths under dir
+// (relative, slash-separated), applying the same layered ignore rules a
+// snapshot would. Best-effort: returns nil on error so a run is never blocked
+// by the diagnostic walk.
+func trackedFileSet(projectRoot, dir string) map[string]bool {
+	rules, err := fileutil.LoadLayeredIgnoreRules(projectRoot, dir)
+	if err != nil {
+		return nil
+	}
+	paths, err := fileutil.WalkProject(dir, rules)
+	if err != nil {
+		return nil
+	}
+	set := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		if rel, err := filepath.Rel(dir, p); err == nil {
+			set[filepath.ToSlash(rel)] = true
+		}
+	}
+	return set
+}
+
+// newlyCreatedFiles returns the sorted paths present in after but not before.
+func newlyCreatedFiles(before, after map[string]bool) []string {
+	var created []string
+	for p := range after {
+		if !before[p] {
+			created = append(created, p)
+		}
+	}
+	sort.Strings(created)
+	return created
+}
+
+// capStrings returns at most n elements of s.
+func capStrings(s []string, n int) []string {
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
 }
 
 // ─── Bisect tool ──────────────────────────────────────────────────────────────

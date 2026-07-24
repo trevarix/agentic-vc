@@ -333,7 +333,10 @@ func AllTools() []Tool {
 				"\n\nREQUIRES [run] enabled = true in .avc/config.toml — this must be set " +
 				"manually by a human. Agents cannot enable it. " +
 				"\n\nIMPORTANT: Always present the full command to the user and obtain " +
-				"explicit approval before calling this tool. Never call it autonomously.",
+				"explicit approval before calling this tool. Never call it autonomously." +
+				"\n\nThe response reports files_created (files the command wrote that are not yet " +
+				"ignored and would enter the next snapshot). If those are build/test artifacts, " +
+				"add their directory to the workspace .avcignore BEFORE calling avc_snapshot.",
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
