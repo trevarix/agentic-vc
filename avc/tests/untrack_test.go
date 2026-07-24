@@ -73,6 +73,42 @@ func TestUntrack_IgnoreAddedMidBranch_KeepsPresentFilesTracked(t *testing.T) {
 	}
 }
 
+// TestSnapshot_NewAndCarriedCounters verifies the snapshot response surfaces
+// how many files are new and how many were carried forward despite an ignore
+// match — the visibility an agent needs to notice unexpected tracking-set
+// changes (e.g. a flood of test-output files, or files kept by untrack-safety).
+func TestSnapshot_NewAndCarriedCounters(t *testing.T) {
+	projectRoot, mainBranchID := setupProjectWithMain(t)
+	writeFile(t, projectRoot, "media/a.jpg", "a")
+	writeFile(t, projectRoot, "app.go", "package main\n")
+	base := createMainSnap(t, projectRoot, mainBranchID, "base")
+
+	b, err := branch.Create(projectRoot, "feat/counters", base.ID)
+	if err != nil {
+		t.Fatalf("create branch: %v", err)
+	}
+	ws := branch.WorkspacePath(projectRoot, b.Name)
+
+	// Two brand-new files, plus a mid-branch ignore of the existing media/.
+	writeFile(t, ws, "new1.go", "package x\n")
+	writeFile(t, ws, "new2.go", "package y\n")
+	writeFile(t, ws, ".avcignore", "media/\n")
+
+	snap, err := snapshot.Create(projectRoot, "add + ignore", "", "", b.ID, ws)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+
+	// new1.go, new2.go, and .avcignore are new -> 3.
+	if snap.NewFiles != 3 {
+		t.Errorf("NewFiles = %d, want 3", snap.NewFiles)
+	}
+	// media/a.jpg was carried forward despite the ignore match -> 1.
+	if snap.CarriedFiles != 1 {
+		t.Errorf("CarriedFiles = %d, want 1", snap.CarriedFiles)
+	}
+}
+
 // TestUntrack_GenuinelyDeletedFileStillDeletes verifies the fix does not
 // over-reach: a file actually removed from disk is still a real deletion, even
 // if an ignore rule would also match it.

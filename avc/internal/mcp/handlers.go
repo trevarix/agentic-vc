@@ -157,7 +157,14 @@ func toolSnapshot(projectRoot string, args map[string]any) (any, error) {
 		"task":          snap.Task,
 		"summary":       snap.Summary,
 		"skipped_large": snap.SkippedLarge,
+		"new_files":     snap.NewFiles,
+		"carried_files": snap.CarriedFiles,
 		"success":       true,
+	}
+	if snap.CarriedFiles > 0 {
+		out["carried_warning"] = fmt.Sprintf(
+			"%d previously-tracked file(s) now match an ignore rule but were kept because they still exist on disk — ignoring does not untrack. Delete the files or use an explicit untrack to stop tracking them.",
+			snap.CarriedFiles)
 	}
 	if protected := protectedChangesBetween(projectRoot, prevHeadID, snap.ID); len(protected) > 0 {
 		out["protected_changes"] = protected

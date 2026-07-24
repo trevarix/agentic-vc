@@ -36,6 +36,8 @@ type Result struct {
 	Task         string
 	Summary      string   // heuristic one-line change summary vs the previous branch HEAD; empty when no baseline exists
 	SkippedLarge []string // relative paths skipped for exceeding the max file size
+	NewFiles     int      // files tracked here but absent from the previous snapshot (all files when no baseline)
+	CarriedFiles int      // previously-tracked files now ignore-matched but kept because they still exist on disk
 }
 
 // Options describes one snapshot to create. Label is required; everything
@@ -218,6 +220,16 @@ func CreateWithOptions(projectRoot string, opts Options) (*Result, error) {
 		}
 	}
 
+	// Load the previous snapshot's files once — the baseline for carry-forward,
+	// the new-file count, and the change summary. Empty when there's none.
+	summaryBaseID := previousSnapshotID(store, branchID)
+	var prevFiles []*db.File
+	if summaryBaseID != "" {
+		if prevFiles, err = store.GetSnapshotFiles(summaryBaseID); err != nil {
+			return nil, err
+		}
+	}
+
 	// Untrack-vs-delete: an ignore rule must never untrack a file that is still
 	// present on disk (git's rule — .gitignore does not untrack tracked files;
 	// `git rm --cached` does). Without this, adding a path to .avcignore
@@ -225,18 +237,21 @@ func CreateWithOptions(projectRoot string, opts Options) (*Result, error) {
 	// branch diff reports them [deleted], and a merge would delete the real
 	// files from the project root. So carry forward, with current content, any
 	// previously-tracked file the walk skipped (now ignored) that still exists.
-	if carried, err := carryForwardTrackedFiles(store, branchID, sourceDir, tracked, addFile); err != nil {
+	carried, err := carryForwardTrackedFiles(prevFiles, sourceDir, tracked, addFile)
+	if err != nil {
 		return nil, err
-	} else if carried > 0 {
+	}
+	if carried > 0 {
 		fmt.Fprintf(os.Stderr,
 			"[avc] note: %d previously-tracked file(s) now match an ignore rule but still exist on disk — kept in the snapshot (ignoring does not untrack; delete the files or use an explicit untrack to stop tracking)\n",
 			carried,
 		)
 	}
 
-	// Baseline for the heuristic change summary: the branch HEAD before this
-	// snapshot, falling back to the branch's base snapshot. Empty = no summary.
-	summaryBaseID := previousSnapshotID(store, branchID)
+	// New-file count: tracked files absent from the previous snapshot. All
+	// files are new when there is no baseline. Surfaced so an agent notices an
+	// unexpected spike (e.g. test output entering tracking).
+	newFiles := countNewFiles(files, prevFiles)
 
 	snap := &db.Snapshot{
 		ID:        snapID,
@@ -289,6 +304,8 @@ func CreateWithOptions(projectRoot string, opts Options) (*Result, error) {
 		Task:         opts.Task,
 		Summary:      summary,
 		SkippedLarge: skippedLarge,
+		NewFiles:     newFiles,
+		CarriedFiles: carried,
 	}
 
 	// Apply retention policy (best-effort).
@@ -304,28 +321,18 @@ func CreateWithOptions(projectRoot string, opts Options) (*Result, error) {
 	return result, nil
 }
 
-// carryForwardTrackedFiles re-adds files that were tracked in the branch's
-// previous snapshot but were skipped by the current walk (now matched by an
-// ignore rule) and still exist on disk. It calls addFile for each so the
-// current content is captured, and returns how many were carried forward.
-// A file that is genuinely gone from disk is not carried — it is a real
-// deletion. With no prior snapshot (first snapshot, no base) there is nothing
-// to carry, so it returns 0.
+// carryForwardTrackedFiles re-adds files that were tracked in prevFiles (the
+// branch's previous snapshot) but were skipped by the current walk (now
+// matched by an ignore rule) and still exist on disk. It calls addFile for
+// each so the current content is captured, and returns how many were carried
+// forward. A file that is genuinely gone from disk is not carried — it is a
+// real deletion. With no prior snapshot, prevFiles is empty and it returns 0.
 func carryForwardTrackedFiles(
-	store *db.Store,
-	branchID, sourceDir string,
+	prevFiles []*db.File,
+	sourceDir string,
 	tracked map[string]bool,
 	addFile func(absPath, rel string, info os.FileInfo) error,
 ) (int, error) {
-	prevID := previousSnapshotID(store, branchID)
-	if prevID == "" {
-		return 0, nil
-	}
-	prevFiles, err := store.GetSnapshotFiles(prevID)
-	if err != nil {
-		return 0, err
-	}
-
 	carried := 0
 	for _, f := range prevFiles {
 		if tracked[f.RelativePath] {
@@ -342,6 +349,22 @@ func carryForwardTrackedFiles(
 		carried++
 	}
 	return carried, nil
+}
+
+// countNewFiles returns how many entries in files have a relative path not
+// present in prevFiles. With no baseline (empty prevFiles) every file is new.
+func countNewFiles(files, prevFiles []*db.File) int {
+	prev := make(map[string]bool, len(prevFiles))
+	for _, f := range prevFiles {
+		prev[f.RelativePath] = true
+	}
+	n := 0
+	for _, f := range files {
+		if !prev[f.RelativePath] {
+			n++
+		}
+	}
+	return n
 }
 
 // previousSnapshotID returns the branch's current HEAD (the state before the
