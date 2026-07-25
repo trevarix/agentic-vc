@@ -24,6 +24,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Editing the project's `.avcignore` now takes effect on active branches immediately, instead of applying only to branches created afterward.
 - Diff line counts are now exact for large files. A one-line change in a big file previously reported the entire file as rewritten; it now shows only the lines that actually changed.
 - The first snapshot taken on a new branch is now always restorable. In some cases it referenced file contents that were never stored, leaving the snapshot impossible to restore or diff — those contents are now saved reliably.
+- VSCode extension: the **Timeline** button in the Snapshots view toolbar now shows its icon. It previously rendered as a blank (but still clickable) button.
 
 ### Changed
 
