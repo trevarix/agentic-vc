@@ -7,6 +7,29 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-25
+
+### Added
+
+- Agent integration is now set up per project instead of machine-wide. `avc init --skills` writes the MCP server config into the project itself — `.mcp.json` for Claude Code, `.cursor/mcp.json` for Cursor — so the AVC server is scoped to that project rather than registered globally for every project on your machine. The generated agent files are added to `.gitignore` automatically (respecting a `.gitignore` you already maintain), and `avc init` now creates a `.gitignore` with AVC's entries when your project is a git repository but doesn't have one yet.
+- `avc check-ignore <path>` reports whether a file is excluded from snapshots and names the exact `.avcignore` rule responsible — the fastest way to answer "why isn't this file being tracked?"
+- Snapshots now report how many files are new and how many were kept despite a newly matching ignore rule, so an unexpected spike — like a flood of test output entering tracking — is visible immediately instead of being discovered at merge time.
+- Running a command in a workspace now reports the files that command created, so build or test artifacts can be excluded before they enter a snapshot.
+- Branch diffs can be requested as a compact per-file summary (file names and line counts, no inline diff), and for agents the branch-diff tool automatically falls back to that summary — and truncates it if needed — when a full diff would be too large to return, so reviewing a large branch no longer fails outright.
+
+### Fixed
+
+- Adding a path to `.avcignore` no longer removes files that are already tracked and still present on disk. Previously this made a branch appear to delete those files, and merging it would have deleted them from your real project. As in git, ignoring a file never stops tracking it — delete the file to do that.
+- The default ignore rules no longer hide application source. A bare `vendor/` pattern matched any folder named `vendor` at any depth, silently leaving first-party source out of every snapshot; it is now limited to the project root, where Go's dependency folder lives.
+- Editing the project's `.avcignore` now takes effect on active branches immediately, instead of applying only to branches created afterward.
+- Diff line counts are now exact for large files. A one-line change in a big file previously reported the entire file as rewritten; it now shows only the lines that actually changed.
+- The first snapshot taken on a new branch is now always restorable. In some cases it referenced file contents that were never stored, leaving the snapshot impossible to restore or diff — those contents are now saved reliably.
+
+### Changed
+
+- Creating a branch is roughly four times faster on large projects, and restoring a snapshot is faster too, by processing files in parallel. Very large files are now copied without being read fully into memory.
+- Installation instructions now cover Scoop on Windows.
+
 ## [0.3.0] - 2026-07-12
 
 ### Added
