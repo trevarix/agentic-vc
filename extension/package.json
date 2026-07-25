@@ -6,8 +6,7 @@
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Other"],
   "activationEvents": [
-    "onStartupFinished",
-    "onView:avcSnapshots"
+    "onStartupFinished"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -96,7 +95,7 @@
       {
         "command": "avc.showTimeline",
         "title": "AVC: Show Timeline",
-        "icon": "$(timeline)"
+        "icon": "$(graph-line)"
       },
       {
         "command": "avc.restoreFile",
