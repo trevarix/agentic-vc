@@ -453,7 +453,14 @@ func runBranchDiff(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("branch '%s' has no snapshots yet", name)
 	}
 
-	result, err := diff.Compare(projectPath, baseSnapshotID, head.ID)
+	// Stat mode shows counts only, so skip building the (potentially large)
+	// unified-diff previews — unless --json is requested, which includes them.
+	var result *diff.Result
+	if branchDiffStatMode && !jsonOutput {
+		result, err = diff.CompareCounts(projectPath, baseSnapshotID, head.ID)
+	} else {
+		result, err = diff.Compare(projectPath, baseSnapshotID, head.ID)
+	}
 	if err != nil {
 		return fmt.Errorf("diff: %w", err)
 	}

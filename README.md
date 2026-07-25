@@ -56,6 +56,24 @@ AVC also runs as an **MCP server** so any agent framework (Claude Code, Cursor, 
 
 ### 1. Install
 
+**Windows (Scoop):**
+
+Don't have [Scoop](https://scoop.sh) yet? Install it first, in PowerShell (no admin needed):
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+Invoke-RestMethod get.scoop.sh | Invoke-Expression
+```
+
+Then add the AVC bucket and install:
+
+```powershell
+scoop bucket add trevarix https://github.com/trevarix/scoop-bucket
+scoop install avc
+```
+
+**Build from source** (any platform, requires Go 1.22+):
+
 ```bash
 git clone <repo-url>
 cd agentic-vc/avc
@@ -64,9 +82,13 @@ go install .
 
 This builds `avc` and places it in `$GOPATH/bin` (usually `~/go/bin`). Make sure that directory is on your `PATH`.
 
+Verify the install:
+
 ```bash
 avc --help
 ```
+
+> For macOS (Homebrew), Linux (direct download), and the VSCode extension, see the [full installation guide](https://avc.trevarix.com/install/).
 
 ### 2. Initialize a project
 
@@ -190,12 +212,17 @@ avc mcp serve
 
 | Framework | MCP config written | Instructions written |
 |-----------|--------------------|----------------------|
-| `claude-code` | `.claude/settings.json` | `.claude/skills/avc-*/SKILL.md` |
-| `cursor` | `.cursor/mcp.json` | `.cursor/rules/avc.mdc` |
-| `windsurf` | `.codeium/windsurf/mcp_config.json` | `.windsurfrules` |
+| `claude-code` | `.mcp.json` (project-level) | `.claude/skills/avc-*/SKILL.md` |
+| `claude-desktop` | Claude Desktop config (global, with `AVC_PROJECT` env) | `.claude/skills/avc-*/SKILL.md` |
+| `cursor` | `.cursor/mcp.json` (project-level) | `.cursor/rules/avc.mdc` |
+| `windsurf` | `~/.codeium/windsurf/mcp_config.json` (global) | `.windsurfrules` |
 | `generic` | — | `AGENT_INSTRUCTIONS.md` |
 
-Running `--skills` multiple times is safe — existing files are never overwritten, JSON configs are merged (not replaced), and rules files are append-only with a deduplication marker. If a target directory is gitignored, AVC warns you so you know the files won't be committed.
+Project-level configs are auto-discovered by the framework in that project — the AVC server is never registered machine-wide for frameworks that support project scope.
+
+Every file AVC creates is added to `.gitignore` automatically (in git projects) — generated agent files are local tooling, not repo content. If you authored the project's `.gitignore`, your tracking policy is respected: a pre-existing `CLAUDE.md` or MCP settings file that AVC appends to or merges into keeps its tracked status, and only files AVC itself created are added. Without a `.gitignore` of your own, AVC creates one and gitignores all the agent files it touched. To share an AVC-generated config with your team, remove its entry from `.gitignore` and commit it.
+
+Running `--skills` multiple times is safe — existing files are never overwritten, JSON configs are merged (not replaced), and rules files are append-only with a deduplication marker.
 
 ### MCP tools
 

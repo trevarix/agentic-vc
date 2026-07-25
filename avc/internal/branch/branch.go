@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -53,15 +54,18 @@ func MaterializeWorkspace(projectRoot string, b *db.Branch) error {
 	return copyToWorkspace(projectRoot, ws, b.Name)
 }
 
-// copyToWorkspace copies all tracked files from projectRoot into ws and writes
-// a warm stat cache so the first snapshot on the branch skips re-hashing.
+// copyToWorkspace copies all tracked files from projectRoot into ws, stores
+// each file's blob in the object store, and writes a warm stat cache so the
+// first snapshot on the branch skips re-hashing.
 //
-// It uses copyFileOptimized, a byte-for-byte copy. Hardlinks are deliberately
-// not used here: agents write to workspace files with ordinary tools (editors,
-// in-place appends, sed -i), and a hardlinked file shares its inode with the
-// project-root original, so such a write would silently mutate the real
-// project root too. A future reflink (copy-on-write) optimisation is safe
-// because the OS breaks the share on first write, unlike a hardlink.
+// Each source file is read once; the same bytes are hashed, written to the
+// workspace, and stored as the blob — without this store, the warm cache would
+// make the first snapshot reference objects that don't exist, and neither
+// restore nor diff could recover the content. Files are processed in parallel:
+// the per-file work is independent, objstore.Store is concurrency-safe, and
+// the stat cache is populated after all workers finish. Workspace files are
+// byte copies, never hardlinks, so an in-place edit in the workspace can never
+// mutate the project-root original through a shared inode.
 func copyToWorkspace(projectRoot, ws, branchName string) error {
 	ignore, err := fileutil.LoadIgnoreRules(projectRoot)
 	if err != nil {
@@ -72,28 +76,88 @@ func copyToWorkspace(projectRoot, ws, branchName string) error {
 		return fmt.Errorf("walk project: %w", err)
 	}
 
-	cache := statcache.Empty()
-	for _, absPath := range paths {
-		rel, _ := filepath.Rel(projectRoot, absPath)
-		rel = filepath.ToSlash(rel)
+	// Files above the snapshot size cap are stream-copied without hashing or
+	// storing a blob: snapshots skip them entirely (skippedLarge), so a hash
+	// or blob for them would never be referenced — and with parallel workers,
+	// buffering them would multiply the peak-memory spike by the worker count.
+	maxFileSizeMB := config.DefaultMaxFileSizeMB
+	if cfg, err := config.Load(projectRoot); err == nil && cfg != nil && cfg.Snapshot.MaxFileSizeMB > 0 {
+		maxFileSizeMB = cfg.Snapshot.MaxFileSizeMB
+	}
+	maxFileSizeBytes := int64(maxFileSizeMB) * 1024 * 1024
 
+	type entry struct {
+		rel  string
+		info os.FileInfo // nil when the post-write stat failed — no cache entry
+		hash string
+	}
+	entries := make([]entry, len(paths))
+
+	err = fileutil.ParallelForEach(fileutil.DefaultWorkers(), len(paths), func(i int) error {
+		rel, _ := filepath.Rel(projectRoot, paths[i])
+		rel = filepath.ToSlash(rel)
 		dest := filepath.Join(ws, filepath.FromSlash(rel))
-		if err := copyFileOptimized(absPath, dest); err != nil {
+
+		if info, err := os.Stat(paths[i]); err == nil && info.Size() > maxFileSizeBytes {
+			if err := streamCopyFile(paths[i], dest); err != nil {
+				return fmt.Errorf("copy %s: %w", rel, err)
+			}
+			return nil // no cache entry — the snapshot's own size check skips this file first
+		}
+
+		data, hash, err := fileutil.ReadAndHash(paths[i])
+		if err != nil {
+			return fmt.Errorf("read %s: %w", rel, err)
+		}
+		if err := fileutil.WriteFile(dest, data); err != nil {
 			return fmt.Errorf("copy %s: %w", rel, err)
 		}
-		// Hash the file for the stat cache. We read after copy so that the
-		// stat-cache entry matches the actual inode on disk.
-		_, hash, err := fileutil.ReadAndHash(dest)
-		if err != nil {
-			return fmt.Errorf("hash %s: %w", rel, err)
+		if err := restore.StoreObject(projectRoot, hash, data); err != nil {
+			return fmt.Errorf("store object %s: %w", rel, err)
 		}
+		entries[i] = entry{rel: rel, hash: hash}
 		if info, err := os.Stat(dest); err == nil {
-			cache.Set(rel, info, hash)
+			entries[i].info = info
 		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
+	cache := statcache.Empty()
+	for _, e := range entries {
+		if e.info != nil {
+			cache.Set(e.rel, e.info, e.hash)
+		}
+	}
 	_ = cache.SaveToPath(statcache.WorkspaceCachePath(projectRoot, branchName))
 	return nil
+}
+
+// streamCopyFile copies src to dst without buffering the whole file in
+// memory. Used for files above the snapshot size cap, which are copied into
+// the workspace but never hashed or stored.
+func streamCopyFile(src, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return err
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Close()
 }
 
 // RemoveWorkspace deletes the workspace directory and its stat cache for a branch.

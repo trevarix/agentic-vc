@@ -242,8 +242,9 @@ func acquireLock(lockPath string) (func(), error) {
 }
 
 // WriteDefault writes the default config.toml to the project's .avc/ directory,
-// a default .avcignore to the project root, and appends .avc/ and .avcignore
-// to an existing .gitignore if one is present.
+// a default .avcignore to the project root, and adds .avc/ and .avcignore to
+// .gitignore — appending to an existing file, or creating one when the project
+// is inside a git repository.
 func WriteDefault(projectRoot string) error {
 	avcDir := filepath.Join(projectRoot, ".avc")
 	if err := os.MkdirAll(avcDir, 0755); err != nil {
@@ -258,7 +259,8 @@ func WriteDefault(projectRoot string) error {
 		return err
 	}
 
-	return appendToGitignore(projectRoot)
+	_, err := AppendToGitignore(projectRoot, []string{".avc/", ".avcignore"})
+	return err
 }
 
 // writeFileIfAbsent writes content to path only if the file does not yet exist.
@@ -269,16 +271,37 @@ func writeFileIfAbsent(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0644)
 }
 
-// appendToGitignore adds .avc/ and .avcignore entries to an existing .gitignore.
-// If no .gitignore is present, this is a no-op.
-func appendToGitignore(projectRoot string) error {
+// gitignoreHeader labels the block of AVC-written .gitignore entries.
+const gitignoreHeader = "# Agentic Version Control"
+
+// UserOwnsGitignore reports whether the project has a .gitignore that AVC did
+// not create. An AVC-created .gitignore always starts with the AVC header;
+// one that starts with anything else was authored by the user, which means
+// the user has an expressed tracking policy that must be respected.
+func UserOwnsGitignore(projectRoot string) bool {
+	data, err := os.ReadFile(filepath.Join(projectRoot, ".gitignore"))
+	if err != nil {
+		return false
+	}
+	return !bytes.HasPrefix(bytes.TrimSpace(data), []byte(gitignoreHeader))
+}
+
+// AppendToGitignore adds the given entries to the project's .gitignore under
+// an "# Agentic Version Control" comment, skipping entries already present.
+// Appends to an existing .gitignore; when none exists, one is created — but
+// only when the project is inside a git repository, since without git the
+// file would be noise. Returns "created", "updated", or "" when nothing was
+// written.
+func AppendToGitignore(projectRoot string, entries []string) (string, error) {
 	gitignorePath := filepath.Join(projectRoot, ".gitignore")
 	data, err := os.ReadFile(gitignorePath)
 	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return err
+		if !insideGitRepo(projectRoot) {
+			return "", nil
+		}
+		data = nil
+	} else if err != nil {
+		return "", err
 	}
 
 	existing := make(map[string]bool)
@@ -287,27 +310,55 @@ func appendToGitignore(projectRoot string) error {
 	}
 
 	var toAppend []string
-	for _, entry := range []string{".avc/", ".avcignore"} {
+	for _, entry := range entries {
 		if !existing[entry] {
 			toAppend = append(toAppend, entry)
 		}
 	}
 	if len(toAppend) == 0 {
-		return nil
+		return "", nil
 	}
 
-	f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(gitignorePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer f.Close()
 
-	block := "\n# Agentic Version Control\n"
+	// Repeat the comment header only if a previous append didn't write it.
+	block := ""
+	if !existing[gitignoreHeader] {
+		block = gitignoreHeader + "\n"
+	}
+	if len(data) > 0 {
+		block = "\n" + block
+	}
 	for _, entry := range toAppend {
 		block += entry + "\n"
 	}
-	_, err = f.WriteString(block)
-	return err
+	if _, err := f.WriteString(block); err != nil {
+		return "", err
+	}
+	if len(data) > 0 {
+		return "updated", nil
+	}
+	return "created", nil
+}
+
+// insideGitRepo reports whether dir is inside a git repository — a .git
+// directory (or file, for worktrees and submodules) exists in dir or any
+// parent.
+func insideGitRepo(dir string) bool {
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return false
+		}
+		dir = parent
+	}
 }
 
 func splitLines(s string) []string {
@@ -430,7 +481,11 @@ node_modules/
 *.tsbuildinfo
 
 # ── Go ────────────────────────────────────────────────────────────────────────
-vendor/
+# Anchored to the repo root: Go's module vendor dir is always at the module
+# root, whereas "vendor" is a common source directory name at other depths
+# (e.g. a frontend feature dir). A bare "vendor/" would match at ANY depth and
+# silently hide that source from every snapshot.
+/vendor/
 
 # ── Rust ──────────────────────────────────────────────────────────────────────
 target/

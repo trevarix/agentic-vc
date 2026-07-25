@@ -5,6 +5,7 @@ package mcp
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/trevarix/agentic-vc/avc/internal/config"
 	"github.com/trevarix/agentic-vc/avc/internal/db"
 	diffpkg "github.com/trevarix/agentic-vc/avc/internal/diff"
+	"github.com/trevarix/agentic-vc/avc/internal/fileutil"
 	mergepkg "github.com/trevarix/agentic-vc/avc/internal/merge"
 	"github.com/trevarix/agentic-vc/avc/internal/oplog"
 	"github.com/trevarix/agentic-vc/avc/internal/policy"
@@ -157,7 +159,14 @@ func toolSnapshot(projectRoot string, args map[string]any) (any, error) {
 		"task":          snap.Task,
 		"summary":       snap.Summary,
 		"skipped_large": snap.SkippedLarge,
+		"new_files":     snap.NewFiles,
+		"carried_files": snap.CarriedFiles,
 		"success":       true,
+	}
+	if snap.CarriedFiles > 0 {
+		out["carried_warning"] = fmt.Sprintf(
+			"%d previously-tracked file(s) now match an ignore rule but were kept because they still exist on disk — ignoring does not untrack. Delete the files or use an explicit untrack to stop tracking them.",
+			snap.CarriedFiles)
 	}
 	if protected := protectedChangesBetween(projectRoot, prevHeadID, snap.ID); len(protected) > 0 {
 		out["protected_changes"] = protected
@@ -600,12 +609,21 @@ func toolBranchDiff(projectRoot string, args map[string]any) (any, error) {
 		return nil, fmt.Errorf("branch '%s' has no snapshots yet", name)
 	}
 
-	result, err := diffpkg.Compare(projectRoot, baseSnapshotID, head.ID)
+	// stat mode: per-file counts only, no unified-diff previews — keeps the
+	// output small on a large branch (a full diff can be multiple MB).
+	stat, _ := args["stat"].(bool)
+
+	var result *diffpkg.Result
+	if stat {
+		result, err = diffpkg.CompareCounts(projectRoot, baseSnapshotID, head.ID)
+	} else {
+		result, err = diffpkg.Compare(projectRoot, baseSnapshotID, head.ID)
+	}
 	if err != nil {
 		return nil, err
 	}
 
-	text := formatBranchDiff(name, baseSnapshotID, head.ID, result)
+	text := renderBranchDiffBounded(name, baseSnapshotID, head.ID, result, stat)
 
 	// Early warning: flag protected-path changes now, before a merge attempt
 	// gets refused by the [protect] gate.
@@ -667,11 +685,74 @@ func toolCrossBranchDiff(projectRoot, name, against string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return formatBranchDiff(fmt.Sprintf("%s → %s", name, against), fromHead, toHead, result), nil
+	return renderBranchDiffBounded(fmt.Sprintf("%s → %s", name, against), fromHead, toHead, result, false), nil
+}
+
+// maxBranchDiffBytes bounds the text an MCP branch-diff tool returns. A full
+// diff with previews can be many MB (769 KB / 12k lines in one report) and
+// exceed the MCP result token limit, which makes the tool fail outright. When
+// the rendered text would exceed this, the renderer degrades gracefully:
+// full → stat summary → truncated stat, always with a note on what to do next.
+// Kept well under typical MCP limits so the enclosing JSON envelope also fits.
+const maxBranchDiffBytes = 120_000
+
+// maxStatFilesWhenTruncated is how many per-file stat lines to keep when even
+// the stat summary exceeds the budget.
+const maxStatFilesWhenTruncated = 400
+
+// renderBranchDiffBounded renders a branch diff that always fits the MCP result
+// budget. It honors an explicit stat request, and otherwise falls back from a
+// full preview to a stat summary (and, if still too large, a truncated one)
+// rather than returning output the tool cannot deliver.
+func renderBranchDiffBounded(branch, fromSnap, toSnap string, result *diffpkg.Result, stat bool) string {
+	text := formatBranchDiff(branch, fromSnap, toSnap, result, stat)
+	if len(text) <= maxBranchDiffBytes {
+		return text
+	}
+
+	// Full output too large — fall back to the stat summary (same result; stat
+	// formatting reads only counts, so no recompute is needed).
+	if !stat {
+		note := fmt.Sprintf(
+			"NOTE: the full diff was %d bytes, over the %d-byte limit — showing a per-file summary instead. "+
+				"To see a specific file's changes, use avc_diff on the two snapshots below, or narrow the branch. "+
+				"A very large diff often means build/test output was tracked; check avc_snapshot's new_files count and avc_check_ignore.\n\n",
+			len(text), maxBranchDiffBytes)
+		stat = true
+		text = note + formatBranchDiff(branch, fromSnap, toSnap, result, true)
+		if len(text) <= maxBranchDiffBytes {
+			return text
+		}
+	}
+
+	// Even the stat summary is too large (very many files) — truncate the list.
+	return truncatedStat(branch, fromSnap, toSnap, result)
+}
+
+// truncatedStat renders a stat summary capped to maxStatFilesWhenTruncated
+// files, with a trailer noting how many were omitted.
+func truncatedStat(branch, fromSnap, toSnap string, result *diffpkg.Result) string {
+	full := result.Files
+	shown := full
+	if len(shown) > maxStatFilesWhenTruncated {
+		shown = shown[:maxStatFilesWhenTruncated]
+	}
+	capped := &diffpkg.Result{FromSnapshotID: fromSnap, ToSnapshotID: toSnap, Files: shown}
+	text := fmt.Sprintf(
+		"NOTE: %d files changed — too many to list in full. Showing the first %d; "+
+			"this usually means build/test output entered tracking (see avc_snapshot new_files and avc_check_ignore).\n\n",
+		len(full), len(shown))
+	text += formatBranchDiff(branch, fromSnap, toSnap, capped, true)
+	if len(full) > len(shown) {
+		text += fmt.Sprintf("  … and %d more file(s) not shown\n", len(full)-len(shown))
+	}
+	return text
 }
 
 // formatBranchDiff renders a branch diff as human-readable markdown text.
-func formatBranchDiff(branch, fromSnap, toSnap string, result *diffpkg.Result) string {
+// In stat mode it emits one line per file (path, type, counts) and no unified
+// diff previews — a compact summary suited to agent review of a large branch.
+func formatBranchDiff(branch, fromSnap, toSnap string, result *diffpkg.Result, stat bool) string {
 	var b strings.Builder
 
 	// Header
@@ -689,7 +770,16 @@ func formatBranchDiff(branch, fromSnap, toSnap string, result *diffpkg.Result) s
 	fmt.Fprintf(&b, "%d %s changed  (+%d lines, -%d lines)\n",
 		len(result.Files), fileWord, totalAdded, totalRemoved)
 
-	// Per-file sections
+	if stat {
+		// One compact line per file: type, counts, path.
+		for _, f := range result.Files {
+			fmt.Fprintf(&b, "  %-8s +%-5d -%-5d  %s\n",
+				string(f.Type), f.LinesAdded, f.LinesRemoved, f.Path)
+		}
+		return b.String()
+	}
+
+	// Per-file sections with previews.
 	for _, f := range result.Files {
 		b.WriteString("\n")
 		fmt.Fprintf(&b, "── %s  [%s]  +%d -%d ──\n",
@@ -899,6 +989,17 @@ func toolRunInWorkspace(projectRoot string, args map[string]any) (any, error) {
 		return nil, fmt.Errorf("command is required")
 	}
 
+	// Snapshot the set of tracked-eligible files before the run so we can tell
+	// the agent exactly what the command created. Test suites commonly write
+	// output into the workspace (upload dirs, coverage, caches); those files
+	// would otherwise silently enter the next snapshot and pollute the branch
+	// diff. Surfacing them lets the agent ignore artifacts BEFORE snapshotting.
+	wsPath := branchpkg.WorkspacePath(projectRoot, branch)
+	if wsPath == "" {
+		wsPath = projectRoot
+	}
+	before := trackedFileSet(projectRoot, wsPath)
+
 	result, err := workspacepkg.Run(workspacepkg.RunRequest{
 		ProjectRoot:    projectRoot,
 		BranchName:     branch,
@@ -909,7 +1010,9 @@ func toolRunInWorkspace(projectRoot string, args map[string]any) (any, error) {
 		return nil, err
 	}
 
-	return map[string]any{
+	created := newlyCreatedFiles(before, trackedFileSet(projectRoot, wsPath))
+
+	out := map[string]any{
 		"exit_code":      result.ExitCode,
 		"stdout":         result.Stdout,
 		"stderr":         result.Stderr,
@@ -927,7 +1030,61 @@ func toolRunInWorkspace(projectRoot string, args map[string]any) (any, error) {
 				"process_tree_kill": result.SandboxInfo.ProcessTreeKill,
 			},
 		},
-	}, nil
+	}
+	if len(created) > 0 {
+		out["files_created_count"] = len(created)
+		out["files_created"] = capStrings(created, maxCreatedFilesReported)
+		out["files_created_note"] = "This command created files that are NOT yet ignored and will enter the next snapshot. " +
+			"If they are build/test artifacts, add their directory to the workspace .avcignore BEFORE calling avc_snapshot, " +
+			"then verify with avc_check_ignore. Ignoring them now keeps them out; ignoring after they are snapshotted will not remove them."
+	}
+	return out, nil
+}
+
+// maxCreatedFilesReported caps the created-file list in the run response so a
+// flood of test output does not itself bloat the tool result.
+const maxCreatedFilesReported = 50
+
+// trackedFileSet returns the set of snapshot-eligible file paths under dir
+// (relative, slash-separated), applying the same layered ignore rules a
+// snapshot would. Best-effort: returns nil on error so a run is never blocked
+// by the diagnostic walk.
+func trackedFileSet(projectRoot, dir string) map[string]bool {
+	rules, err := fileutil.LoadLayeredIgnoreRules(projectRoot, dir)
+	if err != nil {
+		return nil
+	}
+	paths, err := fileutil.WalkProject(dir, rules)
+	if err != nil {
+		return nil
+	}
+	set := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		if rel, err := filepath.Rel(dir, p); err == nil {
+			set[filepath.ToSlash(rel)] = true
+		}
+	}
+	return set
+}
+
+// newlyCreatedFiles returns the sorted paths present in after but not before.
+func newlyCreatedFiles(before, after map[string]bool) []string {
+	var created []string
+	for p := range after {
+		if !before[p] {
+			created = append(created, p)
+		}
+	}
+	sort.Strings(created)
+	return created
+}
+
+// capStrings returns at most n elements of s.
+func capStrings(s []string, n int) []string {
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
 }
 
 // ─── Bisect tool ──────────────────────────────────────────────────────────────

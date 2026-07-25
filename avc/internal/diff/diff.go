@@ -34,7 +34,7 @@ type FileDiff struct {
 	LinesRemoved    int
 	DiffPreview     string // unified diff excerpt
 	Binary          bool   // true if either side looks like binary content — no line counts or preview
-	CountsEstimated bool   // true if either file exceeded maxDiffFileLines — counts are an upper-bound estimate, not exact
+	CountsEstimated bool   // true if the file pair exceeded maxCountProduct — counts are an upper-bound estimate, not exact
 }
 
 // Result is the full diff between two snapshots.
@@ -57,6 +57,13 @@ const (
 // line counts and unified diff previews for every changed file.
 func Compare(projectRoot, fromID, toID string) (*Result, error) {
 	return compare(projectRoot, fromID, toID, enrichFull)
+}
+
+// CompareCounts is Compare with per-file line counts but no unified-diff
+// previews — for stat/summary views that must stay small on a large branch.
+// It also skips building the O(m*n) preview tables, so it is cheaper.
+func CompareCounts(projectRoot, fromID, toID string) (*Result, error) {
+	return compare(projectRoot, fromID, toID, enrichCounts)
 }
 
 func compare(projectRoot, fromID, toID string, mode enrichMode) (*Result, error) {
@@ -198,9 +205,18 @@ func SplitLines(data []byte) []string {
 }
 
 const (
-	// maxDiffFileLines guards the O(m*n) LCS table allocation.
-	// Files larger than this show counts only, no inline diff.
-	maxDiffFileLines = 2000
+	// maxPreviewLines caps the inline unified-diff preview, whose LCS
+	// backtracking needs an O(m*n) table (buildUnifiedDiff / ComputeEdits).
+	// Files larger than this on either side show counts only, no inline diff.
+	maxPreviewLines = 2000
+	// maxCountProduct caps exact line counting. lcsLength needs only two rows
+	// (O(n) space) but O(m*n) time, so counting scales to far larger files
+	// than the preview — the bound here is compute time (m*n comparisons), not
+	// memory. ~1e8 keeps the worst case well under a second; beyond it, counts
+	// fall back to a whole-file estimate. Two 10k-line files (1e8) still count
+	// exactly, so an ordinary large source file with a small edit reports its
+	// true +/- rather than the whole file as changed.
+	maxCountProduct = 100_000_000
 	// diffContextLines is the number of unchanged lines shown around each hunk.
 	diffContextLines = 3
 )
@@ -228,18 +244,17 @@ type EditLine struct {
 // context lines. Skipping the preview avoids the full O(m*n) backtracking
 // table, so counts-only callers (change summaries) stay cheap.
 func computeUnifiedDiff(oldLines, newLines []string, withPreview bool) (added, removed int, preview string, estimated bool) {
-	// lcsLength is O(m*n) — two 300k-line files would be ~9x10^10
-	// comparisons. buildUnifiedDiff already declines to render a preview
-	// beyond maxDiffFileLines; the same cap must gate the count path, or
-	// avc diff/status simply hangs on a large file. Report an upper-bound
-	// estimate instead of a hang.
-	if len(oldLines) > maxDiffFileLines || len(newLines) > maxDiffFileLines {
+	// Exact counts (two-row lcsLength) need only O(n) space, so they scale to
+	// far larger files than the O(m*n)-space preview. Gate them independently:
+	// counts by an m*n time budget, the preview by a line cap. Without this a
+	// large file with a small real change reported the whole file as changed.
+	if int64(len(oldLines))*int64(len(newLines)) > maxCountProduct {
 		return len(newLines), len(oldLines), "", true
 	}
 	lcs := lcsLength(oldLines, newLines)
 	added = len(newLines) - lcs
 	removed = len(oldLines) - lcs
-	if withPreview {
+	if withPreview && len(oldLines) <= maxPreviewLines && len(newLines) <= maxPreviewLines {
 		preview = buildUnifiedDiff(oldLines, newLines)
 	}
 	return added, removed, preview, false
@@ -270,10 +285,10 @@ func lcsLength(a, b []string) int {
 
 // ComputeEdits returns an in-order edit sequence from oldLines to newLines
 // using LCS backtracking (O(m*n) space). Returns nil when either file exceeds
-// maxDiffFileLines.
+// maxPreviewLines.
 func ComputeEdits(oldLines, newLines []string) []EditLine {
 	m, n := len(oldLines), len(newLines)
-	if m > maxDiffFileLines || n > maxDiffFileLines {
+	if m > maxPreviewLines || n > maxPreviewLines {
 		return nil
 	}
 	// Full DP table for backtracking.
@@ -326,7 +341,7 @@ type posEdit struct {
 
 // buildUnifiedDiff produces a unified diff with @@ hunk headers and
 // diffContextLines of context around each changed region.
-// Returns an empty string when files exceed maxDiffFileLines.
+// Returns an empty string when files exceed maxPreviewLines.
 func buildUnifiedDiff(oldLines, newLines []string) string {
 	edits := ComputeEdits(oldLines, newLines)
 	if edits == nil {

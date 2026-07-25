@@ -10,8 +10,64 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 )
+
+// maxParallelWorkers caps DefaultWorkers so at most this many whole-file
+// buffers are held in memory at once during parallel file operations.
+// Benchmarked on Windows: 8 workers ≈ 3.9x over sequential; 16 regresses
+// (oversubscribed I/O), so higher caps don't pay.
+const maxParallelWorkers = 8
+
+// DefaultWorkers returns the worker count for parallel file operations:
+// NumCPU capped at maxParallelWorkers.
+func DefaultWorkers() int {
+	n := runtime.NumCPU()
+	if n > maxParallelWorkers {
+		return maxParallelWorkers
+	}
+	return n
+}
+
+// ParallelForEach runs fn(i) for every i in [0, n) using at most workers
+// goroutines. Returns the first error encountered; items not yet started when
+// an error occurs are skipped, in-flight ones finish.
+func ParallelForEach(workers, n int, fn func(i int) error) error {
+	if workers < 1 {
+		workers = 1
+	}
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		firstErr error
+	)
+	sem := make(chan struct{}, workers)
+	for i := 0; i < n; i++ {
+		mu.Lock()
+		stop := firstErr != nil
+		mu.Unlock()
+		if stop {
+			break
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if err := fn(i); err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+			}
+		}(i)
+	}
+	wg.Wait()
+	return firstErr
+}
 
 // HashFile returns the SHA256 hex digest of the file at path.
 func HashFile(path string) (string, error) {
@@ -94,6 +150,7 @@ func WalkProject(root string, ignore *IgnoreRules) ([]string, error) {
 // ignorePattern is one compiled line from .avcignore, following gitignore
 // syntax and precedence rules.
 type ignorePattern struct {
+	raw      string   // original line (with any "!" / trailing "/"), for diagnostics
 	segments []string // pattern split on "/"; "**" segments match zero or more path segments
 	dirOnly  bool      // true if the pattern ended in "/" — only matches directories
 	negate   bool      // true if the pattern started with "!" — un-ignores a prior match
@@ -106,6 +163,7 @@ type ignorePattern struct {
 // just at the project root. This is implemented by implicitly prefixing such
 // patterns with "**/", which also gives every pattern uniform "**" handling.
 func compilePattern(raw string) ignorePattern {
+	original := raw
 	negate := strings.HasPrefix(raw, "!")
 	if negate {
 		raw = raw[1:]
@@ -122,7 +180,7 @@ func compilePattern(raw string) ignorePattern {
 		body = "**/" + body
 	}
 
-	return ignorePattern{segments: strings.Split(body, "/"), dirOnly: dirOnly, negate: negate}
+	return ignorePattern{raw: original, segments: strings.Split(body, "/"), dirOnly: dirOnly, negate: negate}
 }
 
 // IgnoreRules holds compiled patterns from .avcignore, in file order (later
@@ -190,17 +248,80 @@ func (r *IgnoreRules) MatchesDir(rel string) bool {
 // the last one that matched — this is what makes a later "!pattern" able to
 // un-ignore something an earlier broader pattern excluded.
 func (r *IgnoreRules) matchAny(rel string, isDir bool) bool {
+	_, ignored := r.matchWithPattern(rel, isDir)
+	return ignored
+}
+
+// matchWithPattern is matchAny that also returns the raw text of the last
+// pattern that decided the outcome (empty when nothing matched).
+func (r *IgnoreRules) matchWithPattern(rel string, isDir bool) (pattern string, ignored bool) {
 	segments := strings.Split(rel, "/")
-	matched := false
 	for _, p := range r.patterns {
 		if p.dirOnly && !isDir {
 			continue
 		}
 		if matchSegments(p.segments, segments) {
-			matched = !p.negate
+			ignored = !p.negate
+			pattern = p.raw
 		}
 	}
-	return matched
+	return pattern, ignored
+}
+
+// WhyIgnored reports whether the given file path is excluded from tracking and,
+// if so, the raw ignore pattern responsible. A file is excluded when it matches
+// directly or when any ancestor directory is ignored (the walk skips ignored
+// directories wholesale). The deepest decision wins, mirroring how the walk
+// prunes the tree.
+func (r *IgnoreRules) WhyIgnored(rel string) (pattern string, ignored bool) {
+	// Ancestor directories first (shallow to deep): an ignored ancestor prunes
+	// everything beneath it.
+	segs := strings.Split(rel, "/")
+	for i := 1; i < len(segs); i++ {
+		dir := strings.Join(segs[:i], "/")
+		if pat, ok := r.matchWithPattern(dir, true); ok {
+			return pat, true
+		}
+	}
+	// Then the file itself.
+	if pat, ok := r.matchWithPattern(rel, false); ok {
+		return pat, true
+	}
+	return "", false
+}
+
+// LoadLayeredIgnoreRules builds ignore rules for a snapshot/diagnostic walk of
+// sourceDir. The project-root .avcignore is read fresh and layered first; when
+// sourceDir is a branch workspace (different from projectRoot), that
+// workspace's own .avcignore is appended after, so root rules always apply and
+// workspace-specific patterns add to (or, via gitignore precedence, override)
+// them. Passing sourceDir == "" or == projectRoot uses only the root file.
+func LoadLayeredIgnoreRules(projectRoot, sourceDir string) (*IgnoreRules, error) {
+	rootLines, err := readIgnoreLines(filepath.Join(projectRoot, ".avcignore"))
+	if err != nil {
+		return nil, err
+	}
+	if sourceDir == "" || sourceDir == projectRoot {
+		return CompilePatterns(rootLines), nil
+	}
+	wsLines, err := readIgnoreLines(filepath.Join(sourceDir, ".avcignore"))
+	if err != nil {
+		return nil, err
+	}
+	return CompilePatterns(append(rootLines, wsLines...)), nil
+}
+
+// readIgnoreLines returns the raw lines of an ignore file, or nil if it does
+// not exist. Comment/blank filtering is left to CompilePatterns.
+func readIgnoreLines(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return strings.Split(string(data), "\n"), nil
 }
 
 // matchSegments recursively matches pattern segments against path segments.

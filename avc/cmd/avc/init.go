@@ -43,6 +43,11 @@ Accepts a comma-separated list of frameworks:
   avc init --skills claude-code,cursor
   avc init --skills claude-code,cursor,windsurf,generic
 
+MCP configs are written at the project level where the framework supports it
+(claude-code: .mcp.json, cursor: .cursor/mcp.json), so the server is scoped to
+this project and the config can be committed. claude-desktop and windsurf only
+support global configs and write to their home-directory config file.
+
 Supported frameworks: claude-code, claude-desktop, cursor, windsurf, generic`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runInit,
@@ -84,9 +89,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 	alreadyInit := isAVCDir(absPath)
 
 	// Bootstrapping a brand-new project is consequential — it creates a
-	// directory, a database, and (with --skills) registers global agent
-	// configs. Confirm with the user unless they've opted out via --yes or
-	// --json (machine consumers are presumed to know what they're asking for).
+	// directory, a database, and (with --skills) writes agent configs.
+	// Confirm with the user unless they've opted out via --yes or --json
+	// (machine consumers are presumed to know what they're asking for).
 	if !alreadyInit && !initYes && !jsonOutput {
 		if !confirmNewProject(absPath) {
 			fmt.Println(dim("Aborted — no changes made."))

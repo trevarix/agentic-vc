@@ -86,9 +86,9 @@ avc init --skills cursor,windsurf,generic   # all non-Claude frameworks</code></
           <table>
             <thead><tr><th>Framework</th><th>What it writes</th></tr></thead>
             <tbody>
-              <tr><td><code>claude-code</code></td><td>MCP entry in <code>~/.claude.json</code> (global, picked up by CLI, VSCode extension, and desktop app); <code>CLAUDE.md</code> block; skill files in <code>.claude/skills/</code></td></tr>
+              <tr><td><code>claude-code</code></td><td>MCP entry in project-level <code>.mcp.json</code> (auto-discovered by Claude Code); <code>CLAUDE.md</code> block; skill files in <code>.claude/skills/</code></td></tr>
               <tr><td><code>claude-desktop</code></td><td>MCP entry in the Claude Desktop config file with <code>AVC_PROJECT</code> env var set — required because Claude Desktop spawns the server without a project CWD</td></tr>
-              <tr><td><code>cursor</code></td><td>MCP entry in <code>~/.cursor/mcp.json</code>; rules file in <code>.cursor/rules/avc.mdc</code></td></tr>
+              <tr><td><code>cursor</code></td><td>MCP entry in project-level <code>.cursor/mcp.json</code>; rules file in <code>.cursor/rules/avc.mdc</code></td></tr>
               <tr><td><code>windsurf</code></td><td>MCP entry in <code>~/.codeium/windsurf/mcp_config.json</code>; rules block appended to <code>.windsurfrules</code></td></tr>
               <tr><td><code>generic</code></td><td>Writes <code>AGENT_INSTRUCTIONS.md</code> to the project root — framework-agnostic instructions for any MCP-capable agent</td></tr>
             </tbody>
