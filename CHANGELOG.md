@@ -28,6 +28,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Line annotations are now readable and show authorship. Both `avc annotate` and the VSCode extension's inline annotations group lines blame-style — one annotation per block of lines from the same snapshot, instead of repeating on every line — and label each block by who made the change: `you` for your own edits (including automatic save-snapshots), or the agent's name for AI-authored blocks. Blank lines are no longer annotated.
 - Creating a branch is roughly four times faster on large projects, and restoring a snapshot is faster too, by processing files in parallel. Very large files are now copied without being read fully into memory.
 - Installation instructions now cover Scoop on Windows.
 
