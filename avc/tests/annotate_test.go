@@ -185,3 +185,56 @@ func TestAnnotate_TotalLines_MatchesFileContent(t *testing.T) {
 		t.Errorf("TotalLines=%d does not match len(Lines)=%d", result.TotalLines, len(result.Lines))
 	}
 }
+
+func ann(line int, snap string) *annotate.LineAnnotation {
+	return &annotate.LineAnnotation{Line: line, SnapshotID: snap}
+}
+
+// TestCollapseBlocks_GroupsContiguousSameSnapshot verifies the blame-style
+// grouping used by both the CLI output and the VSCode annotations.
+func TestCollapseBlocks_GroupsContiguousSameSnapshot(t *testing.T) {
+	blocks := annotate.CollapseBlocks([]*annotate.LineAnnotation{
+		ann(1, "A"), ann(2, "A"), ann(3, "A"),
+		ann(4, "B"),
+		ann(5, "A"), ann(6, "A"), // later run of A is its own block
+	})
+	if len(blocks) != 3 {
+		t.Fatalf("expected 3 blocks, got %d", len(blocks))
+	}
+	want := [][3]interface{}{{1, 3, "A"}, {4, 4, "B"}, {5, 6, "A"}}
+	for i, w := range want {
+		if blocks[i].Start != w[0] || blocks[i].End != w[1] || blocks[i].Line.SnapshotID != w[2] {
+			t.Errorf("block %d = {%d,%d,%q}, want %v", i, blocks[i].Start, blocks[i].End, blocks[i].Line.SnapshotID, w)
+		}
+	}
+}
+
+func TestCollapseBlocks_NonContiguousBreaksBlock(t *testing.T) {
+	blocks := annotate.CollapseBlocks([]*annotate.LineAnnotation{ann(1, "A"), ann(2, "A"), ann(9, "A")})
+	if len(blocks) != 2 || blocks[1].Start != 9 {
+		t.Fatalf("expected a break at the line-number gap, got %+v", blocks)
+	}
+}
+
+// TestClassifyAuthor verifies agent-vs-human classification. Empty and the
+// "auto" save-snapshot agent are human-origin; named agents are not.
+func TestClassifyAuthor(t *testing.T) {
+	cases := []struct {
+		agent     string
+		wantLabel string
+		wantAgent bool
+	}{
+		{"", "you", false},
+		{"auto", "you", false},
+		{"AUTO", "you", false},
+		{"claude", "claude", true},
+		{"agent", "agent", true},
+		{"cursor", "cursor", true},
+	}
+	for _, c := range cases {
+		label, isAgent := annotate.ClassifyAuthor(c.agent)
+		if label != c.wantLabel || isAgent != c.wantAgent {
+			t.Errorf("ClassifyAuthor(%q) = (%q,%v), want (%q,%v)", c.agent, label, isAgent, c.wantLabel, c.wantAgent)
+		}
+	}
+}

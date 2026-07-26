@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 	"unicode/utf8"
 
 	"github.com/trevarix/agentic-vc/avc/internal/annotate"
@@ -41,26 +42,59 @@ func runAnnotate(cmd *cobra.Command, args []string) error {
 		return json.NewEncoder(os.Stdout).Encode(result)
 	}
 
+	// Blame-style: one row per contiguous block of lines from the same snapshot,
+	// rather than repeating the label on every line.
 	fmt.Printf("%s  %s\n\n", accent(result.FilePath), dim(fmt.Sprintf("(%d lines)", result.TotalLines)))
-	for _, line := range result.Lines {
-		lbl := line.Label
-		if utf8.RuneCountInString(lbl) > 24 {
-			lbl = string([]rune(lbl)[:21]) + "..."
+	for _, b := range annotate.CollapseBlocks(result.Lines) {
+		rangeStr := fmt.Sprintf("%d", b.Start)
+		if b.End != b.Start {
+			rangeStr = fmt.Sprintf("%d-%d", b.Start, b.End)
 		}
-		agent := ""
-		if line.AgentName != "" {
-			agent = "  " + blue(line.AgentName)
+		lineCol := dim(fmt.Sprintf("%9s", rangeStr))
+
+		// Untracked lines have no snapshot to attribute.
+		if b.Line.SnapshotID == "" {
+			fmt.Printf("%s %s %s\n", lineCol, dim("│"), dim("(untracked)"))
+			continue
 		}
-		labelColor := cyan
-		if lbl == "(untracked)" {
-			labelColor = dim
+
+		lbl := b.Line.Label
+		if utf8.RuneCountInString(lbl) > 28 {
+			lbl = string([]rune(lbl)[:25]) + "..."
 		}
-		fmt.Printf("%s %s %s%s\n",
-			dim(fmt.Sprintf("%4d", line.Line)),
+		author, isAgent := annotate.ClassifyAuthor(b.Line.AgentName)
+		authorCol := dim(fmt.Sprintf("%-8s", author))
+		if isAgent {
+			authorCol = blue(fmt.Sprintf("%-8s", author))
+		}
+		fmt.Printf("%s %s %s  %s  %s\n",
+			lineCol,
 			dim("│"),
-			labelColor(fmt.Sprintf("%-24s", lbl)),
-			agent,
+			cyan(fmt.Sprintf("%-28s", lbl)),
+			authorCol,
+			dim(relativeTime(b.Line.Timestamp)),
 		)
 	}
 	return nil
+}
+
+// relativeTime renders a Unix timestamp as a short "3d ago" style string.
+// Returns "" for a zero timestamp (no known time).
+func relativeTime(ts int64) string {
+	if ts == 0 {
+		return ""
+	}
+	d := time.Since(time.Unix(ts, 0))
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	default:
+		return fmt.Sprintf("%dmo ago", int(d.Hours()/(24*30)))
+	}
 }
