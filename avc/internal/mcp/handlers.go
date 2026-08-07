@@ -5,16 +5,23 @@ package mcp
 
 import (
 	"fmt"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/trevarix/agentic-vc/avc/internal/annotate"
+	"github.com/trevarix/agentic-vc/avc/internal/bisect"
 	branchpkg "github.com/trevarix/agentic-vc/avc/internal/branch"
 	"github.com/trevarix/agentic-vc/avc/internal/config"
 	"github.com/trevarix/agentic-vc/avc/internal/db"
 	diffpkg "github.com/trevarix/agentic-vc/avc/internal/diff"
+	"github.com/trevarix/agentic-vc/avc/internal/fileutil"
 	mergepkg "github.com/trevarix/agentic-vc/avc/internal/merge"
+	"github.com/trevarix/agentic-vc/avc/internal/oplog"
+	"github.com/trevarix/agentic-vc/avc/internal/policy"
 	"github.com/trevarix/agentic-vc/avc/internal/restore"
 	"github.com/trevarix/agentic-vc/avc/internal/snapshot"
+	undopkg "github.com/trevarix/agentic-vc/avc/internal/undo"
 	workspacepkg "github.com/trevarix/agentic-vc/avc/internal/workspace"
 )
 
@@ -62,12 +69,18 @@ func dispatchTool(projectRoot string, compact bool, name string, args map[string
 		result, err = toolMergePreview(projectRoot, args)
 	case "avc_merge":
 		result, err = toolMerge(projectRoot, args)
+	case "avc_merge_train":
+		result, err = toolMergeTrain(projectRoot, args)
 	case "avc_merge_abort":
 		result, err = toolMergeAbort(projectRoot)
 	case "avc_run_in_workspace":
 		result, err = toolRunInWorkspace(projectRoot, args)
+	case "avc_bisect":
+		result, err = toolBisect(projectRoot, args)
 	case "avc_status":
 		result, err = toolStatus(projectRoot)
+	case "avc_undo":
+		result, err = toolUndo(projectRoot)
 	case "avc_restore_file":
 		result, err = toolRestoreFile(projectRoot, args)
 	case "avc_annotate":
@@ -110,28 +123,105 @@ func toolSnapshot(projectRoot string, args map[string]any) (any, error) {
 	branchName := branchpkg.GetActiveBranchName(projectRoot)
 	sourceDir := branchpkg.WorkspacePath(projectRoot, branchName) // "" for main
 
-	snap, err := snapshot.Create(
-		projectRoot,
-		label,
-		agentName,
-		strArg(args, "notes"),
-		branchID,
-		sourceDir,
-	)
+	// Remember the branch HEAD before snapshotting so protected-path changes
+	// in this snapshot can be reported (early warning — the hard gate is at
+	// merge time).
+	prevHeadID := ""
+	if store, dbErr := db.Open(projectRoot); dbErr == nil {
+		if head, headErr := store.GetHeadSnapshot(branchID); headErr == nil {
+			prevHeadID = head.ID
+		}
+		store.Close()
+	}
+
+	snap, err := snapshot.CreateWithOptions(projectRoot, snapshot.Options{
+		Label:     label,
+		AgentName: agentName,
+		Notes:     strArg(args, "notes"),
+		BranchID:  branchID,
+		SourceDir: sourceDir,
+		SessionID: strArg(args, "session_id"),
+		Task:      strArg(args, "task"),
+	})
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{
-		"id":         snap.ID,
-		"label":      snap.Label,
-		"timestamp":  snap.Timestamp,
-		"agent_name": snap.AgentName,
-		"file_count": snap.FileCount,
-		"total_size": snap.TotalSize,
-		"notes":      snap.Notes,
-		"branch_id":  snap.BranchID,
-		"success":    true,
-	}, nil
+	out := map[string]any{
+		"id":            snap.ID,
+		"label":         snap.Label,
+		"timestamp":     snap.Timestamp,
+		"agent_name":    snap.AgentName,
+		"file_count":    snap.FileCount,
+		"total_size":    snap.TotalSize,
+		"notes":         snap.Notes,
+		"branch_id":     snap.BranchID,
+		"session_id":    snap.SessionID,
+		"task":          snap.Task,
+		"summary":       snap.Summary,
+		"skipped_large": snap.SkippedLarge,
+		"new_files":     snap.NewFiles,
+		"carried_files": snap.CarriedFiles,
+		"success":       true,
+	}
+	if snap.CarriedFiles > 0 {
+		out["carried_warning"] = fmt.Sprintf(
+			"%d previously-tracked file(s) now match an ignore rule but were kept because they still exist on disk — ignoring does not untrack. Delete the files or use an explicit untrack to stop tracking them.",
+			snap.CarriedFiles)
+	}
+	if protected := protectedChangesBetween(projectRoot, prevHeadID, snap.ID); len(protected) > 0 {
+		out["protected_changes"] = protected
+		out["protected_warning"] = "This snapshot changes paths listed under [protect] in .avc/config.toml. " +
+			"A merge touching them will be refused (or flagged in warn mode) — surface this to the user now rather than at merge time."
+	}
+	return out, nil
+}
+
+// protectedChangesBetween returns the paths whose content differs between
+// two snapshots and matches the [protect] globs. Hash-only comparison — no
+// object reads or line diffs — so it adds negligible cost to a snapshot.
+// Either snapshot ID may be "" (treated as an empty file set).
+func protectedChangesBetween(projectRoot, fromID, toID string) []string {
+	cfg, _ := config.Load(projectRoot)
+	if !policy.Enabled(cfg) {
+		return nil
+	}
+	store, err := db.Open(projectRoot)
+	if err != nil {
+		return nil
+	}
+	defer store.Close()
+
+	hashesOf := func(id string) map[string]string {
+		m := map[string]string{}
+		if id == "" {
+			return m
+		}
+		files, err := store.GetSnapshotFiles(id)
+		if err != nil {
+			return m
+		}
+		for _, f := range files {
+			m[f.RelativePath] = f.FileHash
+		}
+		return m
+	}
+	from := hashesOf(fromID)
+	to := hashesOf(toID)
+
+	var changed []string
+	for p, h := range to {
+		if from[p] != h {
+			changed = append(changed, p)
+		}
+	}
+	for p := range from {
+		if _, ok := to[p]; !ok {
+			changed = append(changed, p)
+		}
+	}
+	matched := policy.Check(cfg, changed)
+	sort.Strings(matched)
+	return matched
 }
 
 func toolList(projectRoot string, args map[string]any) (any, error) {
@@ -194,24 +284,28 @@ func toolDiff(projectRoot string, args map[string]any) (any, error) {
 	}
 
 	type fileDiffJSON struct {
-		Path         string `json:"path"`
-		Type         string `json:"type"`
-		OldHash      string `json:"old_hash,omitempty"`
-		NewHash      string `json:"new_hash,omitempty"`
-		LinesAdded   int    `json:"lines_added"`
-		LinesRemoved int    `json:"lines_removed"`
-		DiffPreview  string `json:"diff_preview,omitempty"`
+		Path            string `json:"path"`
+		Type            string `json:"type"`
+		OldHash         string `json:"old_hash,omitempty"`
+		NewHash         string `json:"new_hash,omitempty"`
+		LinesAdded      int    `json:"lines_added"`
+		LinesRemoved    int    `json:"lines_removed"`
+		DiffPreview     string `json:"diff_preview,omitempty"`
+		Binary          bool   `json:"binary,omitempty"`
+		CountsEstimated bool   `json:"counts_estimated,omitempty"`
 	}
 	files := make([]fileDiffJSON, len(result.Files))
 	for i, f := range result.Files {
 		files[i] = fileDiffJSON{
-			Path:         f.Path,
-			Type:         string(f.Type),
-			OldHash:      f.OldHash,
-			NewHash:      f.NewHash,
-			LinesAdded:   f.LinesAdded,
-			LinesRemoved: f.LinesRemoved,
-			DiffPreview:  f.DiffPreview,
+			Path:            f.Path,
+			Type:            string(f.Type),
+			OldHash:         f.OldHash,
+			NewHash:         f.NewHash,
+			LinesAdded:      f.LinesAdded,
+			LinesRemoved:    f.LinesRemoved,
+			DiffPreview:     f.DiffPreview,
+			Binary:          f.Binary,
+			CountsEstimated: f.CountsEstimated,
 		}
 	}
 	return map[string]any{
@@ -234,16 +328,42 @@ func toolRestore(projectRoot string, args map[string]any) (any, error) {
 		targetDir = ws
 	}
 
+	activeBranchID, err := branchpkg.GetActiveBranchID(projectRoot)
+	if err != nil {
+		return nil, fmt.Errorf("could not determine active branch: %w", err)
+	}
+
+	// Safety net: capture un-snapshotted changes before they are overwritten.
+	// A failure here aborts the restore rather than risking silent data loss.
+	preSnap, err := snapshot.CreateBeforeRestore(projectRoot, targetDir, activeBranchID, id)
+	if err != nil {
+		return nil, fmt.Errorf("pre-restore safety snapshot failed (restore aborted to avoid data loss): %w", err)
+	}
+
 	result, err := restore.RestoreToDir(projectRoot, id, targetDir)
 	if err != nil {
 		return nil, err
 	}
+
+	undoID := ""
+	if preSnap != nil {
+		undoID = preSnap.ID
+	}
+
+	// Record in the operations log so avc_undo can reverse this restore.
+	// Best-effort: the restore already succeeded.
+	_ = oplog.Record(projectRoot, activeBranchID, oplog.KindRestore, undoID,
+		fmt.Sprintf("restored snapshot %s", id))
+
 	return map[string]any{
-		"id":             result.SnapshotID,
-		"restored_files": result.RestoredFiles,
-		"restored_size":  result.RestoredSize,
-		"target_dir":     targetDir,
-		"success":        true,
+		"id":                result.SnapshotID,
+		"restored_files":    result.RestoredFiles,
+		"restored_size":     result.RestoredSize,
+		"quarantined_files": result.QuarantinedFiles,
+		"trash_op_id":       result.TrashOpID,
+		"undo_snapshot_id":  undoID,
+		"target_dir":        targetDir,
+		"success":           true,
 	}, nil
 }
 
@@ -302,6 +422,28 @@ func toolDelete(projectRoot string, args map[string]any) (any, error) {
 	}
 	defer store.Close()
 
+	if _, err := store.GetSnapshot(id); err != nil {
+		return nil, fmt.Errorf("snapshot '%s' not found", id)
+	}
+
+	proj, err := store.GetProject(projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	// Unlike the CLI, MCP has no --force override: an agent must never be
+	// able to delete a branch base, a tagged snapshot, or part of the last
+	// merge record on its own judgment.
+	protected, err := store.IsSnapshotProtected(proj.ID, id)
+	if err != nil {
+		return nil, err
+	}
+	if protected {
+		return nil, fmt.Errorf(
+			"snapshot '%s' is protected (a branch base, tagged, or part of the last merge record) and cannot be deleted via this tool; "+
+				"ask the user to run `avc delete %s --force` if this is intentional", id, id,
+		)
+	}
+
 	if err := store.DeleteSnapshot(id); err != nil {
 		return nil, err
 	}
@@ -320,7 +462,14 @@ func toolBranchCreate(projectRoot string, args map[string]any) (any, error) {
 	}
 
 	fromSnapshotID := strArg(args, "from_snapshot_id")
-	b, err := branchpkg.Create(projectRoot, name, fromSnapshotID)
+	fromBranch := strArg(args, "from_branch")
+	createBranch := func() (*db.Branch, error) {
+		if fromBranch != "" {
+			return branchpkg.CreateFromBranch(projectRoot, name, fromBranch)
+		}
+		return branchpkg.Create(projectRoot, name, fromSnapshotID)
+	}
+	b, err := createBranch()
 	if err != nil {
 		// On a freshly-initialised project main has no snapshots yet. Take one
 		// automatically and retry rather than surfacing a confusing error.
@@ -342,7 +491,7 @@ func toolBranchCreate(projectRoot string, args map[string]any) (any, error) {
 			if _, snapErr := snapshot.Create(projectRoot, "auto: initial project state", "agent", "baseline snapshot before first branch", mainID, ""); snapErr != nil {
 				return nil, fmt.Errorf("project has no snapshots and auto-snapshot failed: %w", snapErr)
 			}
-			b, err = branchpkg.Create(projectRoot, name, fromSnapshotID)
+			b, err = createBranch()
 		}
 		if err != nil {
 			return nil, err
@@ -418,6 +567,11 @@ func toolBranchDiff(projectRoot string, args map[string]any) (any, error) {
 		return nil, fmt.Errorf("name is required")
 	}
 
+	// Cross-branch mode: HEAD of `name` vs HEAD of `against`.
+	if against := strArg(args, "against"); against != "" {
+		return toolCrossBranchDiff(projectRoot, name, against)
+	}
+
 	branches, err := branchpkg.ListByStatus(projectRoot, "")
 	if err != nil {
 		return nil, err
@@ -455,16 +609,150 @@ func toolBranchDiff(projectRoot string, args map[string]any) (any, error) {
 		return nil, fmt.Errorf("branch '%s' has no snapshots yet", name)
 	}
 
-	result, err := diffpkg.Compare(projectRoot, baseSnapshotID, head.ID)
+	// stat mode: per-file counts only, no unified-diff previews — keeps the
+	// output small on a large branch (a full diff can be multiple MB).
+	stat, _ := args["stat"].(bool)
+
+	var result *diffpkg.Result
+	if stat {
+		result, err = diffpkg.CompareCounts(projectRoot, baseSnapshotID, head.ID)
+	} else {
+		result, err = diffpkg.Compare(projectRoot, baseSnapshotID, head.ID)
+	}
 	if err != nil {
 		return nil, err
 	}
 
-	return formatBranchDiff(name, baseSnapshotID, head.ID, result), nil
+	text := renderBranchDiffBounded(name, baseSnapshotID, head.ID, result, stat)
+
+	// Early warning: flag protected-path changes now, before a merge attempt
+	// gets refused by the [protect] gate.
+	cfg, _ := config.Load(projectRoot)
+	if policy.Enabled(cfg) {
+		var paths []string
+		for _, f := range result.Files {
+			paths = append(paths, f.Path)
+		}
+		if protected := policy.Check(cfg, paths); len(protected) > 0 {
+			sort.Strings(protected)
+			consequence := "a merge will be refused unless a human overrides with --allow-protected"
+			if policy.Mode(cfg) == policy.ModeWarn {
+				consequence = "a merge will be flagged with a warning"
+			}
+			text = fmt.Sprintf(
+				"⚠ PROTECTED PATHS CHANGED: this branch changes %d path(s) listed under [protect] in .avc/config.toml (%s) — %s. Tell the user before offering to merge.\n\n",
+				len(protected), strings.Join(protected, ", "), consequence,
+			) + text
+		}
+	}
+
+	return text, nil
+}
+
+// toolCrossBranchDiff compares the HEAD snapshots of two branches — how two
+// parallel lines of work differ, rather than what one changed since its base.
+func toolCrossBranchDiff(projectRoot, name, against string) (any, error) {
+	headOf := func(branchName string) (string, error) {
+		store, err := db.Open(projectRoot)
+		if err != nil {
+			return "", err
+		}
+		defer store.Close()
+		proj, err := store.GetProject(projectRoot)
+		if err != nil {
+			return "", err
+		}
+		b, err := store.GetBranchByName(proj.ID, branchName)
+		if err != nil {
+			return "", fmt.Errorf("branch '%s' not found", branchName)
+		}
+		head, err := store.GetHeadSnapshot(b.ID)
+		if err != nil {
+			return "", fmt.Errorf("branch '%s' has no snapshots yet", branchName)
+		}
+		return head.ID, nil
+	}
+
+	fromHead, err := headOf(name)
+	if err != nil {
+		return nil, err
+	}
+	toHead, err := headOf(against)
+	if err != nil {
+		return nil, err
+	}
+	result, err := diffpkg.Compare(projectRoot, fromHead, toHead)
+	if err != nil {
+		return nil, err
+	}
+	return renderBranchDiffBounded(fmt.Sprintf("%s → %s", name, against), fromHead, toHead, result, false), nil
+}
+
+// maxBranchDiffBytes bounds the text an MCP branch-diff tool returns. A full
+// diff with previews can be many MB (769 KB / 12k lines in one report) and
+// exceed the MCP result token limit, which makes the tool fail outright. When
+// the rendered text would exceed this, the renderer degrades gracefully:
+// full → stat summary → truncated stat, always with a note on what to do next.
+// Kept well under typical MCP limits so the enclosing JSON envelope also fits.
+const maxBranchDiffBytes = 120_000
+
+// maxStatFilesWhenTruncated is how many per-file stat lines to keep when even
+// the stat summary exceeds the budget.
+const maxStatFilesWhenTruncated = 400
+
+// renderBranchDiffBounded renders a branch diff that always fits the MCP result
+// budget. It honors an explicit stat request, and otherwise falls back from a
+// full preview to a stat summary (and, if still too large, a truncated one)
+// rather than returning output the tool cannot deliver.
+func renderBranchDiffBounded(branch, fromSnap, toSnap string, result *diffpkg.Result, stat bool) string {
+	text := formatBranchDiff(branch, fromSnap, toSnap, result, stat)
+	if len(text) <= maxBranchDiffBytes {
+		return text
+	}
+
+	// Full output too large — fall back to the stat summary (same result; stat
+	// formatting reads only counts, so no recompute is needed).
+	if !stat {
+		note := fmt.Sprintf(
+			"NOTE: the full diff was %d bytes, over the %d-byte limit — showing a per-file summary instead. "+
+				"To see a specific file's changes, use avc_diff on the two snapshots below, or narrow the branch. "+
+				"A very large diff often means build/test output was tracked; check avc_snapshot's new_files count and avc_check_ignore.\n\n",
+			len(text), maxBranchDiffBytes)
+		stat = true
+		text = note + formatBranchDiff(branch, fromSnap, toSnap, result, true)
+		if len(text) <= maxBranchDiffBytes {
+			return text
+		}
+	}
+
+	// Even the stat summary is too large (very many files) — truncate the list.
+	return truncatedStat(branch, fromSnap, toSnap, result)
+}
+
+// truncatedStat renders a stat summary capped to maxStatFilesWhenTruncated
+// files, with a trailer noting how many were omitted.
+func truncatedStat(branch, fromSnap, toSnap string, result *diffpkg.Result) string {
+	full := result.Files
+	shown := full
+	if len(shown) > maxStatFilesWhenTruncated {
+		shown = shown[:maxStatFilesWhenTruncated]
+	}
+	capped := &diffpkg.Result{FromSnapshotID: fromSnap, ToSnapshotID: toSnap, Files: shown}
+	text := fmt.Sprintf(
+		"NOTE: %d files changed — too many to list in full. Showing the first %d; "+
+			"this usually means build/test output entered tracking (see avc_snapshot new_files and avc_check_ignore).\n\n",
+		len(full), len(shown))
+	text += formatBranchDiff(branch, fromSnap, toSnap, capped, true)
+	if len(full) > len(shown) {
+		text += fmt.Sprintf("  … and %d more file(s) not shown\n", len(full)-len(shown))
+	}
+	return text
 }
 
 // formatBranchDiff renders a branch diff as human-readable markdown text.
-func formatBranchDiff(branch, fromSnap, toSnap string, result *diffpkg.Result) string {
+// In stat mode it emits one line per file (path, type, counts) and no unified
+// diff previews — a compact summary suited to agent review of a large branch.
+func formatBranchDiff(branch, fromSnap, toSnap string, result *diffpkg.Result, stat bool) string {
 	var b strings.Builder
 
 	// Header
@@ -482,7 +770,16 @@ func formatBranchDiff(branch, fromSnap, toSnap string, result *diffpkg.Result) s
 	fmt.Fprintf(&b, "%d %s changed  (+%d lines, -%d lines)\n",
 		len(result.Files), fileWord, totalAdded, totalRemoved)
 
-	// Per-file sections
+	if stat {
+		// One compact line per file: type, counts, path.
+		for _, f := range result.Files {
+			fmt.Fprintf(&b, "  %-8s +%-5d -%-5d  %s\n",
+				string(f.Type), f.LinesAdded, f.LinesRemoved, f.Path)
+		}
+		return b.String()
+	}
+
+	// Per-file sections with previews.
 	for _, f := range result.Files {
 		b.WriteString("\n")
 		fmt.Fprintf(&b, "── %s  [%s]  +%d -%d ──\n",
@@ -548,7 +845,7 @@ func mergeResultToMap(result *mergepkg.Result, preview bool) map[string]any {
 		Path     string `json:"path"`
 		Decision string `json:"decision"`
 	}
-	// Only include files that require attention (clean or conflict).
+	// Only include files that require attention (clean, delete, or conflict).
 	// Skipped files (unchanged since branch base) are omitted — listing all
 	// 200+ unchanged files adds noise without useful information.
 	var files []fileJSON
@@ -565,12 +862,33 @@ func mergeResultToMap(result *mergepkg.Result, preview bool) map[string]any {
 		"branch":    result.BranchName,
 		"preview":   preview,
 		"clean":     result.Clean,
+		"merged":    result.Merged,
+		"deleted":   result.Deleted,
 		"conflicts": result.Conflicts,
 		"skipped":   result.Skipped,
 		"files":     files,
 	}
 	if result.PostMergeSnapshotID != "" {
 		m["post_merge_snapshot_id"] = result.PostMergeSnapshotID
+	}
+	if result.AutoSnapshotID != "" {
+		m["auto_snapshot_id"] = result.AutoSnapshotID
+	}
+	if preview && result.WorkspaceDirtyFiles > 0 {
+		m["workspace_dirty_files"] = result.WorkspaceDirtyFiles
+		m["warning"] = fmt.Sprintf(
+			"%d file(s) in the workspace have changed since the last snapshot on this branch and are NOT reflected in this preview. Call avc_snapshot first if you want them included.",
+			result.WorkspaceDirtyFiles,
+		)
+	}
+	if len(result.ProtectedChanges) > 0 {
+		m["protected_changes"] = result.ProtectedChanges
+		m["protected_mode"] = result.ProtectedMode
+		if result.ProtectedMode == "block" {
+			m["protected_warning"] = "This merge changes protected paths ([protect] in .avc/config.toml) and will be refused. " +
+				"Only a human can override, by running `avc merge --allow-protected` from the CLI. " +
+				"Tell the user which paths are affected and let them decide."
+		}
 	}
 	return m
 }
@@ -615,6 +933,31 @@ func toolMerge(projectRoot string, args map[string]any) (any, error) {
 	return mergeResultToMap(result, false), nil
 }
 
+func toolMergeTrain(projectRoot string, args map[string]any) (any, error) {
+	raw := strArg(args, "branches")
+	if raw == "" {
+		return nil, fmt.Errorf("branches is required (comma-separated, in merge order)")
+	}
+	var branches []string
+	for _, b := range strings.Split(raw, ",") {
+		if b = strings.TrimSpace(b); b != "" {
+			branches = append(branches, b)
+		}
+	}
+	// allowProtected is always false here — the [protect] override stays
+	// CLI-only, exactly as it is for avc_merge.
+	result, err := mergepkg.Train(projectRoot, branches, strArg(args, "validate"), false)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"results":    result.Results,
+		"completed":  result.Completed,
+		"stopped_at": result.StoppedAt,
+		"success":    result.StoppedAt == "",
+	}, nil
+}
+
 func toolMergeAbort(projectRoot string) (any, error) {
 	if err := mergepkg.Abort(projectRoot); err != nil {
 		return nil, err
@@ -646,6 +989,17 @@ func toolRunInWorkspace(projectRoot string, args map[string]any) (any, error) {
 		return nil, fmt.Errorf("command is required")
 	}
 
+	// Snapshot the set of tracked-eligible files before the run so we can tell
+	// the agent exactly what the command created. Test suites commonly write
+	// output into the workspace (upload dirs, coverage, caches); those files
+	// would otherwise silently enter the next snapshot and pollute the branch
+	// diff. Surfacing them lets the agent ignore artifacts BEFORE snapshotting.
+	wsPath := branchpkg.WorkspacePath(projectRoot, branch)
+	if wsPath == "" {
+		wsPath = projectRoot
+	}
+	before := trackedFileSet(projectRoot, wsPath)
+
 	result, err := workspacepkg.Run(workspacepkg.RunRequest{
 		ProjectRoot:    projectRoot,
 		BranchName:     branch,
@@ -656,7 +1010,9 @@ func toolRunInWorkspace(projectRoot string, args map[string]any) (any, error) {
 		return nil, err
 	}
 
-	return map[string]any{
+	created := newlyCreatedFiles(before, trackedFileSet(projectRoot, wsPath))
+
+	out := map[string]any{
 		"exit_code":      result.ExitCode,
 		"stdout":         result.Stdout,
 		"stderr":         result.Stderr,
@@ -674,6 +1030,107 @@ func toolRunInWorkspace(projectRoot string, args map[string]any) (any, error) {
 				"process_tree_kill": result.SandboxInfo.ProcessTreeKill,
 			},
 		},
+	}
+	if len(created) > 0 {
+		out["files_created_count"] = len(created)
+		out["files_created"] = capStrings(created, maxCreatedFilesReported)
+		out["files_created_note"] = "This command created files that are NOT yet ignored and will enter the next snapshot. " +
+			"If they are build/test artifacts, add their directory to the workspace .avcignore BEFORE calling avc_snapshot, " +
+			"then verify with avc_check_ignore. Ignoring them now keeps them out; ignoring after they are snapshotted will not remove them."
+	}
+	return out, nil
+}
+
+// maxCreatedFilesReported caps the created-file list in the run response so a
+// flood of test output does not itself bloat the tool result.
+const maxCreatedFilesReported = 50
+
+// trackedFileSet returns the set of snapshot-eligible file paths under dir
+// (relative, slash-separated), applying the same layered ignore rules a
+// snapshot would. Best-effort: returns nil on error so a run is never blocked
+// by the diagnostic walk.
+func trackedFileSet(projectRoot, dir string) map[string]bool {
+	rules, err := fileutil.LoadLayeredIgnoreRules(projectRoot, dir)
+	if err != nil {
+		return nil
+	}
+	paths, err := fileutil.WalkProject(dir, rules)
+	if err != nil {
+		return nil
+	}
+	set := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		if rel, err := filepath.Rel(dir, p); err == nil {
+			set[filepath.ToSlash(rel)] = true
+		}
+	}
+	return set
+}
+
+// newlyCreatedFiles returns the sorted paths present in after but not before.
+func newlyCreatedFiles(before, after map[string]bool) []string {
+	var created []string
+	for p := range after {
+		if !before[p] {
+			created = append(created, p)
+		}
+	}
+	sort.Strings(created)
+	return created
+}
+
+// capStrings returns at most n elements of s.
+func capStrings(s []string, n int) []string {
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
+}
+
+// ─── Bisect tool ──────────────────────────────────────────────────────────────
+
+func toolBisect(projectRoot string, args map[string]any) (any, error) {
+	// bisect.Run enforces the [run] enabled gate itself (it executes the
+	// command through the same sandbox as toolRunInWorkspace).
+	command := strArg(args, "cmd")
+	if command == "" {
+		return nil, fmt.Errorf("cmd is required")
+	}
+	good := strArg(args, "good")
+	if good == "" {
+		return nil, fmt.Errorf("good is required")
+	}
+
+	var steps []map[string]any
+	result, err := bisect.Run(projectRoot, bisect.Options{
+		BranchName:     strArg(args, "branch"),
+		GoodID:         good,
+		BadID:          strArg(args, "bad"),
+		Command:        command,
+		TimeoutSeconds: intArg(args, "timeout_seconds"),
+		OnStep: func(s bisect.Step) {
+			steps = append(steps, map[string]any{
+				"snapshot_id": s.SnapshotID,
+				"label":       s.Label,
+				"exit_code":   s.ExitCode,
+				"verdict":     s.Verdict,
+			})
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"first_bad_id":    result.FirstBadID,
+		"first_bad_label": result.FirstBadLabel,
+		"predecessor_id":  result.PredecessorID,
+		"steps":           result.Steps,
+		"step_log":        steps,
+		"skipped":         result.Skipped,
+		"summary":         result.Summary,
+		"ambiguous":       result.Ambiguous,
+		"message":         result.Message,
+		"success":         true,
 	}, nil
 }
 
@@ -715,26 +1172,60 @@ func toolStatus(projectRoot string) (any, error) {
 	}
 
 	type fileDiffJSON struct {
-		Path         string `json:"path"`
-		Type         string `json:"type"`
-		LinesAdded   int    `json:"lines_added"`
-		LinesRemoved int    `json:"lines_removed"`
+		Path            string `json:"path"`
+		Type            string `json:"type"`
+		LinesAdded      int    `json:"lines_added"`
+		LinesRemoved    int    `json:"lines_removed"`
+		Binary          bool   `json:"binary,omitempty"`
+		CountsEstimated bool   `json:"counts_estimated,omitempty"`
 	}
 	files := make([]fileDiffJSON, len(result.Files))
 	for i, f := range result.Files {
 		files[i] = fileDiffJSON{
-			Path:         f.Path,
-			Type:         string(f.Type),
-			LinesAdded:   f.LinesAdded,
-			LinesRemoved: f.LinesRemoved,
+			Path:            f.Path,
+			Type:            string(f.Type),
+			LinesAdded:      f.LinesAdded,
+			LinesRemoved:    f.LinesRemoved,
+			Binary:          f.Binary,
+			CountsEstimated: f.CountsEstimated,
 		}
 	}
-	return map[string]any{
+	out := map[string]any{
 		"branch":         branchName,
 		"snapshot_id":    head.ID,
 		"snapshot_label": head.Label,
 		"files":          files,
 		"changed_count":  len(result.Files),
+	}
+	cfg, _ := config.Load(projectRoot)
+	if policy.Enabled(cfg) {
+		var paths []string
+		for _, f := range result.Files {
+			paths = append(paths, f.Path)
+		}
+		if protected := policy.Check(cfg, paths); len(protected) > 0 {
+			sort.Strings(protected)
+			out["protected_changes"] = protected
+		}
+	}
+	return out, nil
+}
+
+// ─── Undo tool ────────────────────────────────────────────────────────────────
+
+func toolUndo(projectRoot string) (any, error) {
+	result, err := undopkg.Undo(projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"undone_kind":          result.UndoneKind,
+		"undone_details":       result.UndoneDetails,
+		"restored_snapshot_id": result.RestoredSnapshotID,
+		"redo_snapshot_id":     result.RedoSnapshotID,
+		"branch":               result.BranchName,
+		"reactivated_branch":   result.ReactivatedBranch,
+		"success":              true,
 	}, nil
 }
 

@@ -7,7 +7,62 @@ import (
 	"testing"
 
 	"github.com/trevarix/agentic-vc/avc/internal/config"
+	"github.com/trevarix/agentic-vc/avc/internal/fileutil"
 )
+
+// TestConfig_DefaultAVCIgnore_VendorAnchoredToRoot verifies that the default
+// .avcignore ignores a Go module's root vendor/ but never a source directory
+// named "vendor" nested at any other depth. A bare "vendor/" pattern would
+// match at any depth and silently hide that source from every snapshot.
+func TestConfig_DefaultAVCIgnore_VendorAnchoredToRoot(t *testing.T) {
+	dir := t.TempDir()
+	if err := config.WriteDefault(dir); err != nil {
+		t.Fatalf("WriteDefault: %v", err)
+	}
+	rules, err := fileutil.LoadIgnoreRules(dir)
+	if err != nil {
+		t.Fatalf("LoadIgnoreRules: %v", err)
+	}
+
+	// Directory exclusion is driven by MatchesDir + SkipDir during the walk.
+	// Root-level vendor/ (Go convention) is ignored; a nested source directory
+	// named "vendor" is not.
+	if !rules.MatchesDir("vendor") {
+		t.Error("root vendor/ should be ignored")
+	}
+	for _, p := range []string{
+		"web/features/vendor",
+		"__tests__/unit/features/vendor",
+	} {
+		if rules.MatchesDir(p) {
+			t.Errorf("nested directory %q must not be ignored by the default template", p)
+		}
+	}
+
+	// End-to-end through WalkProject: the root vendor file is excluded, the
+	// nested vendor source file is tracked.
+	writeFile(t, dir, "vendor/modules.txt", "root go vendor")
+	writeFile(t, dir, "web/features/vendor/screen.tsx", "nested source")
+	paths, err := fileutil.WalkProject(dir, rules)
+	if err != nil {
+		t.Fatalf("WalkProject: %v", err)
+	}
+	var gotRootVendor, gotNestedVendor bool
+	for _, p := range paths {
+		switch {
+		case strings.HasSuffix(filepath.ToSlash(p), "vendor/modules.txt"):
+			gotRootVendor = true
+		case strings.HasSuffix(filepath.ToSlash(p), "web/features/vendor/screen.tsx"):
+			gotNestedVendor = true
+		}
+	}
+	if gotRootVendor {
+		t.Error("root vendor/modules.txt should be excluded from the walk")
+	}
+	if !gotNestedVendor {
+		t.Error("nested web/features/vendor/screen.tsx should be tracked by the walk")
+	}
+}
 
 // TestConfig_Load_ReturnsDefaults_WhenFileAbsent verifies that loading from a
 // directory with no config.toml returns sensible defaults without error.
@@ -213,9 +268,10 @@ func TestConfig_WriteDefault_Idempotent(t *testing.T) {
 	}
 }
 
-// TestConfig_WriteDefault_NoGitignore_IsNoOp verifies that WriteDefault does
-// not create a .gitignore if one does not already exist.
-func TestConfig_WriteDefault_NoGitignore_IsNoOp(t *testing.T) {
+// TestConfig_WriteDefault_NoGitignore_NoGit_IsNoOp verifies that WriteDefault
+// does not create a .gitignore when none exists and the project is not inside
+// a git repository.
+func TestConfig_WriteDefault_NoGitignore_NoGit_IsNoOp(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, ".avc"), 0755); err != nil {
 		t.Fatalf("mkdir .avc: %v", err)
@@ -227,6 +283,55 @@ func TestConfig_WriteDefault_NoGitignore_IsNoOp(t *testing.T) {
 
 	gitignorePath := filepath.Join(dir, ".gitignore")
 	if _, err := os.Stat(gitignorePath); !os.IsNotExist(err) {
-		t.Error("WriteDefault should not create .gitignore when none existed")
+		t.Error("WriteDefault should not create .gitignore outside a git repository")
+	}
+}
+
+// TestConfig_WriteDefault_NoGitignore_GitRepo_Creates verifies that WriteDefault
+// creates a .gitignore with the AVC entries when the project has a .git directory.
+func TestConfig_WriteDefault_NoGitignore_GitRepo_Creates(t *testing.T) {
+	dir := t.TempDir()
+	for _, sub := range []string{".avc", ".git"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0755); err != nil {
+			t.Fatalf("mkdir %s: %v", sub, err)
+		}
+	}
+
+	if err := config.WriteDefault(dir); err != nil {
+		t.Fatalf("WriteDefault: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	if err != nil {
+		t.Fatalf("read created .gitignore: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, ".avc/") || !strings.Contains(content, ".avcignore") {
+		t.Errorf(".gitignore missing AVC entries:\n%s", content)
+	}
+	if strings.HasPrefix(content, "\n") {
+		t.Error("created .gitignore starts with a blank line")
+	}
+}
+
+// TestConfig_WriteDefault_NoGitignore_GitInParent_Creates verifies that .git
+// discovery walks up: a project nested inside a git repository still gets a
+// .gitignore at the project root.
+func TestConfig_WriteDefault_NoGitignore_GitInParent_Creates(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	dir := filepath.Join(repo, "nested", "project")
+	if err := os.MkdirAll(filepath.Join(dir, ".avc"), 0755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+
+	if err := config.WriteDefault(dir); err != nil {
+		t.Fatalf("WriteDefault: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, ".gitignore")); err != nil {
+		t.Errorf(".gitignore not created for project nested in git repo: %v", err)
 	}
 }

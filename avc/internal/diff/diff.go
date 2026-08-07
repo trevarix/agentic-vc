@@ -5,12 +5,13 @@
 package diff
 
 import (
+	"bytes"
 	"fmt"
-	"os"
-	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/trevarix/agentic-vc/avc/internal/db"
+	"github.com/trevarix/agentic-vc/avc/internal/objstore"
 )
 
 
@@ -25,13 +26,15 @@ const (
 
 // FileDiff describes the change to a single file.
 type FileDiff struct {
-	Path         string
-	Type         ChangeType
-	OldHash      string
-	NewHash      string
-	LinesAdded   int
-	LinesRemoved int
-	DiffPreview  string // unified diff excerpt
+	Path            string
+	Type            ChangeType
+	OldHash         string
+	NewHash         string
+	LinesAdded      int
+	LinesRemoved    int
+	DiffPreview     string // unified diff excerpt
+	Binary          bool   // true if either side looks like binary content — no line counts or preview
+	CountsEstimated bool   // true if the file pair exceeded maxCountProduct — counts are an upper-bound estimate, not exact
 }
 
 // Result is the full diff between two snapshots.
@@ -41,8 +44,29 @@ type Result struct {
 	Files          []*FileDiff
 }
 
-// Compare computes the diff between fromID and toID snapshots.
+// enrichMode controls how much per-file detail compare computes.
+type enrichMode int
+
+const (
+	enrichFull   enrichMode = iota // line counts + unified diff preview
+	enrichCounts                   // line counts only (no preview) — cheaper
+	enrichNone                     // hash comparison only — no object reads
+)
+
+// Compare computes the diff between fromID and toID snapshots, including
+// line counts and unified diff previews for every changed file.
 func Compare(projectRoot, fromID, toID string) (*Result, error) {
+	return compare(projectRoot, fromID, toID, enrichFull)
+}
+
+// CompareCounts is Compare with per-file line counts but no unified-diff
+// previews — for stat/summary views that must stay small on a large branch.
+// It also skips building the O(m*n) preview tables, so it is cheaper.
+func CompareCounts(projectRoot, fromID, toID string) (*Result, error) {
+	return compare(projectRoot, fromID, toID, enrichCounts)
+}
+
+func compare(projectRoot, fromID, toID string, mode enrichMode) (*Result, error) {
 	store, err := db.Open(projectRoot)
 	if err != nil {
 		return nil, err
@@ -78,7 +102,7 @@ func Compare(projectRoot, fromID, toID string) (*Result, error) {
 				Type:    Added,
 				NewHash: toFile.FileHash,
 			}
-			enrichWithLineCounts(projectRoot, fd)
+			enrichWithLineCounts(projectRoot, fd, mode)
 			diffs = append(diffs, fd)
 			continue
 		}
@@ -89,7 +113,7 @@ func Compare(projectRoot, fromID, toID string) (*Result, error) {
 				OldHash: fromFile.FileHash,
 				NewHash: toFile.FileHash,
 			}
-			enrichWithLineCounts(projectRoot, fd)
+			enrichWithLineCounts(projectRoot, fd, mode)
 			diffs = append(diffs, fd)
 		}
 	}
@@ -101,7 +125,7 @@ func Compare(projectRoot, fromID, toID string) (*Result, error) {
 				Type:    Deleted,
 				OldHash: fromFile.FileHash,
 			}
-			enrichWithLineCounts(projectRoot, fd)
+			enrichWithLineCounts(projectRoot, fd, mode)
 			diffs = append(diffs, fd)
 		}
 	}
@@ -123,24 +147,43 @@ func filesByPath(files []*db.File) map[string]*db.File {
 	return m
 }
 
-func enrichWithLineCounts(projectRoot string, fd *FileDiff) {
+func enrichWithLineCounts(projectRoot string, fd *FileDiff, mode enrichMode) {
+	if mode == enrichNone {
+		return
+	}
 	oldData := ReadObjectSafe(projectRoot, fd.OldHash)
 	newData := ReadObjectSafe(projectRoot, fd.NewHash)
 
-	added, removed, preview := computeUnifiedDiff(SplitLines(oldData), SplitLines(newData))
+	if IsBinary(oldData) || IsBinary(newData) {
+		fd.Binary = true
+		return
+	}
+
+	added, removed, preview, estimated := computeUnifiedDiff(
+		SplitLines(oldData), SplitLines(newData), mode == enrichFull)
 	fd.LinesAdded = added
 	fd.LinesRemoved = removed
 	fd.DiffPreview = preview
+	fd.CountsEstimated = estimated
+}
+
+// IsBinary reports whether data looks like binary content — the same
+// heuristic git uses: a NUL byte anywhere in the first 8 KB. Binary files
+// are never diffed as text; a "line count" for them is meaningless.
+// Exported for the merge package, which must exclude binary content from
+// line-level three-way merging.
+func IsBinary(data []byte) bool {
+	n := len(data)
+	if n > 8192 {
+		n = 8192
+	}
+	return bytes.IndexByte(data[:n], 0) != -1
 }
 
 // ReadObjectSafe reads a stored object by hash, returning nil on any error.
+// Thin wrapper over the objstore package, which owns the on-disk format.
 func ReadObjectSafe(projectRoot, hash string) []byte {
-	if hash == "" {
-		return nil
-	}
-	path := filepath.Join(projectRoot, ".avc", "objects", hash[:2], hash[2:])
-	data, _ := os.ReadFile(path)
-	return data
+	return objstore.ReadSafe(projectRoot, hash)
 }
 
 // SplitLines normalizes line endings and splits data into lines.
@@ -162,9 +205,18 @@ func SplitLines(data []byte) []string {
 }
 
 const (
-	// maxDiffFileLines guards the O(m*n) LCS table allocation.
-	// Files larger than this show counts only, no inline diff.
-	maxDiffFileLines = 2000
+	// maxPreviewLines caps the inline unified-diff preview, whose LCS
+	// backtracking needs an O(m*n) table (buildUnifiedDiff / ComputeEdits).
+	// Files larger than this on either side show counts only, no inline diff.
+	maxPreviewLines = 2000
+	// maxCountProduct caps exact line counting. lcsLength needs only two rows
+	// (O(n) space) but O(m*n) time, so counting scales to far larger files
+	// than the preview — the bound here is compute time (m*n comparisons), not
+	// memory. ~1e8 keeps the worst case well under a second; beyond it, counts
+	// fall back to a whole-file estimate. Two 10k-line files (1e8) still count
+	// exactly, so an ordinary large source file with a small edit reports its
+	// true +/- rather than the whole file as changed.
+	maxCountProduct = 100_000_000
 	// diffContextLines is the number of unchanged lines shown around each hunk.
 	diffContextLines = 3
 )
@@ -187,14 +239,25 @@ type EditLine struct {
 	Text string
 }
 
-// computeUnifiedDiff returns accurate added/removed line counts and a proper
-// unified diff preview with hunk headers and context lines.
-func computeUnifiedDiff(oldLines, newLines []string) (added, removed int, preview string) {
+// computeUnifiedDiff returns accurate added/removed line counts and — when
+// withPreview is set — a proper unified diff preview with hunk headers and
+// context lines. Skipping the preview avoids the full O(m*n) backtracking
+// table, so counts-only callers (change summaries) stay cheap.
+func computeUnifiedDiff(oldLines, newLines []string, withPreview bool) (added, removed int, preview string, estimated bool) {
+	// Exact counts (two-row lcsLength) need only O(n) space, so they scale to
+	// far larger files than the O(m*n)-space preview. Gate them independently:
+	// counts by an m*n time budget, the preview by a line cap. Without this a
+	// large file with a small real change reported the whole file as changed.
+	if int64(len(oldLines))*int64(len(newLines)) > maxCountProduct {
+		return len(newLines), len(oldLines), "", true
+	}
 	lcs := lcsLength(oldLines, newLines)
 	added = len(newLines) - lcs
 	removed = len(oldLines) - lcs
-	preview = buildUnifiedDiff(oldLines, newLines)
-	return
+	if withPreview && len(oldLines) <= maxPreviewLines && len(newLines) <= maxPreviewLines {
+		preview = buildUnifiedDiff(oldLines, newLines)
+	}
+	return added, removed, preview, false
 }
 
 // lcsLength computes the length of the Longest Common Subsequence using a
@@ -222,10 +285,10 @@ func lcsLength(a, b []string) int {
 
 // ComputeEdits returns an in-order edit sequence from oldLines to newLines
 // using LCS backtracking (O(m*n) space). Returns nil when either file exceeds
-// maxDiffFileLines.
+// maxPreviewLines.
 func ComputeEdits(oldLines, newLines []string) []EditLine {
 	m, n := len(oldLines), len(newLines)
-	if m > maxDiffFileLines || n > maxDiffFileLines {
+	if m > maxPreviewLines || n > maxPreviewLines {
 		return nil
 	}
 	// Full DP table for backtracking.
@@ -278,7 +341,7 @@ type posEdit struct {
 
 // buildUnifiedDiff produces a unified diff with @@ hunk headers and
 // diffContextLines of context around each changed region.
-// Returns an empty string when files exceed maxDiffFileLines.
+// Returns an empty string when files exceed maxPreviewLines.
 func buildUnifiedDiff(oldLines, newLines []string) string {
 	edits := ComputeEdits(oldLines, newLines)
 	if edits == nil {
@@ -378,12 +441,11 @@ func buildUnifiedDiff(oldLines, newLines []string) string {
 
 func sortDiffs(diffs []*FileDiff) {
 	order := map[ChangeType]int{Added: 0, Modified: 1, Deleted: 2}
-	for i := 1; i < len(diffs); i++ {
-		for j := i; j > 0; j-- {
-			a, b := diffs[j-1], diffs[j]
-			if order[a.Type] > order[b.Type] || (order[a.Type] == order[b.Type] && a.Path > b.Path) {
-				diffs[j-1], diffs[j] = diffs[j], diffs[j-1]
-			}
+	sort.Slice(diffs, func(i, j int) bool {
+		a, b := diffs[i], diffs[j]
+		if order[a.Type] != order[b.Type] {
+			return order[a.Type] < order[b.Type]
 		}
-	}
+		return a.Path < b.Path
+	})
 }

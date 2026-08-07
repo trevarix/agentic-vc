@@ -17,6 +17,10 @@ export class AutoSnapshotManager implements vscode.Disposable {
   }
 
   private onSave(): void {
+    // The CLI watcher supersedes save-triggered snapshots: it sees every
+    // change (including ones made outside the editor) and dedupes properly.
+    if (vscode.workspace.getConfiguration('avc.watch').get<boolean>('enabled', false)) return;
+
     const config = vscode.workspace.getConfiguration('avc.autoSnapshot');
     if (!config.get<boolean>('enabled', false)) return;
 

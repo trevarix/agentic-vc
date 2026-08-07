@@ -147,7 +147,7 @@ func TestGC_DryRun(t *testing.T) {
 	}
 	store.Close()
 
-	result, err := gc.Run(projectRoot, true /* dryRun */)
+	result, err := gc.RunWithGrace(projectRoot, true /* dryRun */, 0)
 	if err != nil {
 		t.Fatalf("gc.Run dry-run: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestGC_Run(t *testing.T) {
 	}
 	store.Close()
 
-	result, err := gc.Run(projectRoot, false /* run */)
+	result, err := gc.RunWithGrace(projectRoot, false /* run */, 0)
 	if err != nil {
 		t.Fatalf("gc.Run: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestGC_LiveObjectsArePreserved(t *testing.T) {
 	objectsDir := filepath.Join(projectRoot, ".avc", "objects")
 	before := countFiles(t, objectsDir)
 
-	result, err := gc.Run(projectRoot, false)
+	result, err := gc.RunWithGrace(projectRoot, false, 0)
 	if err != nil {
 		t.Fatalf("gc.Run: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestGC_LiveObjectsArePreserved(t *testing.T) {
 func TestGC_EmptyObjectStore(t *testing.T) {
 	projectRoot := setupTestProject(t)
 
-	result, err := gc.Run(projectRoot, true)
+	result, err := gc.RunWithGrace(projectRoot, true, 0)
 	if err != nil {
 		t.Fatalf("gc.Run on empty object store: %v", err)
 	}
@@ -378,7 +378,7 @@ func TestRetention_PrunesOldSnapshots(t *testing.T) {
 		FileCount: 0,
 		TotalSize: 0,
 	}
-	if err := store.InsertSnapshot(oldSnap); err != nil {
+	if err := store.InsertSnapshotWithFiles(oldSnap, nil); err != nil {
 		store.Close()
 		t.Fatalf("insert old snapshot: %v", err)
 	}
@@ -450,6 +450,12 @@ func TestRetention_AutoGCRunsAfterPruning(t *testing.T) {
 	objectsDir := filepath.Join(projectRoot, ".avc", "objects")
 	beforeObjects := countFiles(t, objectsDir)
 
+	// retention's auto-GC uses gc.Run's default grace period (objects younger
+	// than 15m are always kept, since they might belong to a snapshot still
+	// being written concurrently). Backdate every object's mtime so this
+	// fast-running test simulates objects old enough to actually collect.
+	backdateFiles(t, objectsDir, 20*time.Minute)
+
 	cfg := &config.RetentionConfig{
 		MaxSnapshotsPerBranch: 1, // keep only the newest
 		AutoGC:                true,
@@ -484,4 +490,21 @@ func countFiles(t *testing.T, root string) int {
 		t.Fatalf("countFiles(%q): %v", root, err)
 	}
 	return count
+}
+
+// backdateFiles sets the mtime of every regular file under root to age in
+// the past, so tests can simulate objects old enough to survive gc's
+// default grace period without an actual sleep.
+func backdateFiles(t *testing.T, root string, age time.Duration) {
+	t.Helper()
+	past := time.Now().Add(-age)
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		return os.Chtimes(path, past, past)
+	})
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("backdateFiles(%q): %v", root, err)
+	}
 }

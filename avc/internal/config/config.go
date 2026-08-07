@@ -24,7 +24,54 @@ type Config struct {
 	Run       RunConfig       `toml:"run"`
 	Retention RetentionConfig `toml:"retention"`
 	Hooks     HooksConfig     `toml:"hooks"`
+	Snapshot  SnapshotConfig  `toml:"snapshot"`
+	Protect   ProtectConfig   `toml:"protect"`
+	Watch     WatchConfig     `toml:"watch"`
 }
+
+// WatchConfig controls the `avc watch` continuous-checkpointing daemon.
+type WatchConfig struct {
+	// DebounceSeconds is the quiet period after the last file change before
+	// a checkpoint snapshot is taken. 0 = DefaultWatchDebounceSeconds.
+	DebounceSeconds int `toml:"debounce_seconds"`
+	// MinIntervalSeconds is the minimum time between two watch snapshots on
+	// the same branch, regardless of change volume. 0 = DefaultWatchMinIntervalSeconds.
+	MinIntervalSeconds int `toml:"min_interval_seconds"`
+	// IncludeWorkspaces also watches every active branch workspace, not just
+	// the project root. Defaults to true (set include_workspaces = false to disable).
+	IncludeWorkspaces *bool `toml:"include_workspaces"`
+}
+
+// Watch daemon defaults, applied when the corresponding config value is 0.
+const (
+	DefaultWatchDebounceSeconds    = 30
+	DefaultWatchMinIntervalSeconds = 120
+)
+
+// ProtectConfig bounds what agent-driven integration may change. Paths
+// matching these globs are refused (mode "block") or flagged (mode "warn")
+// when a merge would modify them — enforced mechanically, like run.enabled:
+// agents cannot lift it, only a human editing config.toml or passing the
+// CLI-only --allow-protected flag can.
+type ProtectConfig struct {
+	// Paths are gitignore-style globs (same syntax as .avcignore, including
+	// ** and trailing-/ for directories) naming files agents must not change.
+	Paths []string `toml:"paths"`
+	// Mode is "block" (default — merges touching protected paths are
+	// refused) or "warn" (merges proceed with a prominent warning).
+	Mode string `toml:"mode"`
+}
+
+// SnapshotConfig controls snapshot creation behavior.
+type SnapshotConfig struct {
+	// MaxFileSizeMB is the largest single file (in MB) a snapshot will read
+	// and store. Larger files are skipped with a warning rather than risking
+	// an out-of-memory read. 0 falls back to DefaultMaxFileSizeMB.
+	MaxFileSizeMB int `toml:"max_file_size_mb"`
+}
+
+// DefaultMaxFileSizeMB is used when SnapshotConfig.MaxFileSizeMB is unset (0).
+const DefaultMaxFileSizeMB = 100
 
 // HooksConfig defines shell commands to run before/after snapshots and restores.
 // Pre-hooks abort the operation on non-zero exit; post-hooks are non-fatal.
@@ -51,7 +98,18 @@ type RetentionConfig struct {
 	// AutoGC runs garbage collection automatically after pruning.
 	// Defaults to true when a pruning policy is active.
 	AutoGC bool `toml:"auto_gc"`
+
+	// MaxWatchSnapshotsPerBranch caps snapshots created by `avc watch`
+	// (label prefix "auto:watch") per branch — the oldest watch snapshots
+	// are pruned first, before any other retention rule considers them.
+	// 0 = the built-in default (200); -1 = unlimited.
+	MaxWatchSnapshotsPerBranch int `toml:"max_watch_snapshots_per_branch"`
 }
+
+// DefaultMaxWatchSnapshotsPerBranch is used when MaxWatchSnapshotsPerBranch
+// is unset (0). Watch snapshots are high-volume by design, so unlike the
+// other retention rules this cap is on by default.
+const DefaultMaxWatchSnapshotsPerBranch = 200
 
 // RunConfig holds workspace command runner settings.
 type RunConfig struct {
@@ -184,8 +242,9 @@ func acquireLock(lockPath string) (func(), error) {
 }
 
 // WriteDefault writes the default config.toml to the project's .avc/ directory,
-// a default .avcignore to the project root, and appends .avc/ and .avcignore
-// to an existing .gitignore if one is present.
+// a default .avcignore to the project root, and adds .avc/ and .avcignore to
+// .gitignore — appending to an existing file, or creating one when the project
+// is inside a git repository.
 func WriteDefault(projectRoot string) error {
 	avcDir := filepath.Join(projectRoot, ".avc")
 	if err := os.MkdirAll(avcDir, 0755); err != nil {
@@ -200,7 +259,8 @@ func WriteDefault(projectRoot string) error {
 		return err
 	}
 
-	return appendToGitignore(projectRoot)
+	_, err := AppendToGitignore(projectRoot, []string{".avc/", ".avcignore"})
+	return err
 }
 
 // writeFileIfAbsent writes content to path only if the file does not yet exist.
@@ -211,16 +271,37 @@ func writeFileIfAbsent(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0644)
 }
 
-// appendToGitignore adds .avc/ and .avcignore entries to an existing .gitignore.
-// If no .gitignore is present, this is a no-op.
-func appendToGitignore(projectRoot string) error {
+// gitignoreHeader labels the block of AVC-written .gitignore entries.
+const gitignoreHeader = "# Agentic Version Control"
+
+// UserOwnsGitignore reports whether the project has a .gitignore that AVC did
+// not create. An AVC-created .gitignore always starts with the AVC header;
+// one that starts with anything else was authored by the user, which means
+// the user has an expressed tracking policy that must be respected.
+func UserOwnsGitignore(projectRoot string) bool {
+	data, err := os.ReadFile(filepath.Join(projectRoot, ".gitignore"))
+	if err != nil {
+		return false
+	}
+	return !bytes.HasPrefix(bytes.TrimSpace(data), []byte(gitignoreHeader))
+}
+
+// AppendToGitignore adds the given entries to the project's .gitignore under
+// an "# Agentic Version Control" comment, skipping entries already present.
+// Appends to an existing .gitignore; when none exists, one is created — but
+// only when the project is inside a git repository, since without git the
+// file would be noise. Returns "created", "updated", or "" when nothing was
+// written.
+func AppendToGitignore(projectRoot string, entries []string) (string, error) {
 	gitignorePath := filepath.Join(projectRoot, ".gitignore")
 	data, err := os.ReadFile(gitignorePath)
 	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return err
+		if !insideGitRepo(projectRoot) {
+			return "", nil
+		}
+		data = nil
+	} else if err != nil {
+		return "", err
 	}
 
 	existing := make(map[string]bool)
@@ -229,27 +310,55 @@ func appendToGitignore(projectRoot string) error {
 	}
 
 	var toAppend []string
-	for _, entry := range []string{".avc/", ".avcignore"} {
+	for _, entry := range entries {
 		if !existing[entry] {
 			toAppend = append(toAppend, entry)
 		}
 	}
 	if len(toAppend) == 0 {
-		return nil
+		return "", nil
 	}
 
-	f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(gitignorePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer f.Close()
 
-	block := "\n# Agentic Version Control\n"
+	// Repeat the comment header only if a previous append didn't write it.
+	block := ""
+	if !existing[gitignoreHeader] {
+		block = gitignoreHeader + "\n"
+	}
+	if len(data) > 0 {
+		block = "\n" + block
+	}
 	for _, entry := range toAppend {
 		block += entry + "\n"
 	}
-	_, err = f.WriteString(block)
-	return err
+	if _, err := f.WriteString(block); err != nil {
+		return "", err
+	}
+	if len(data) > 0 {
+		return "updated", nil
+	}
+	return "created", nil
+}
+
+// insideGitRepo reports whether dir is inside a git repository — a .git
+// directory (or file, for worktrees and submodules) exists in dir or any
+// parent.
+func insideGitRepo(dir string) bool {
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return false
+		}
+		dir = parent
+	}
 }
 
 func splitLines(s string) []string {
@@ -291,6 +400,32 @@ max_timeout_seconds     = 600
 # Increase for projects with verbose test suites.
 max_output_kb = 512
 
+[snapshot]
+# Files larger than this are skipped (with a warning) instead of being
+# read and stored — protects against an out-of-memory read on an
+# accidentally-tracked large binary. 0 = use the built-in default (100 MB).
+# max_file_size_mb = 100
+
+[protect]
+# Paths agents must not change. Merges that would modify a matching path are
+# refused (mode = "block", the default) or flagged (mode = "warn"). Globs use
+# .avcignore syntax, including ** and trailing / for directories.
+# A human can override a blocked merge with: avc merge <branch> --allow-protected
+# (the MCP merge tool has no such override — agents cannot lift this).
+# paths = [".github/workflows/**", "secrets/**", "*.pem"]
+# mode  = "block"
+
+[watch]
+# Settings for the continuous-checkpointing daemon (avc watch).
+# Quiet period after the last file change before a checkpoint is taken.
+# debounce_seconds = 30
+
+# Minimum time between two watch snapshots on the same branch.
+# min_interval_seconds = 120
+
+# Also watch every active branch workspace, not just the project root.
+# include_workspaces = true
+
 [retention]
 # Maximum snapshots to keep per branch (oldest pruned first). 0 = unlimited.
 # max_snapshots_per_branch = 100
@@ -300,6 +435,10 @@ max_output_kb = 512
 
 # Run gc automatically after pruning. Default: true.
 # auto_gc = true
+
+# Cap on snapshots created by "avc watch" per branch — these are pruned
+# first. 0 = the built-in default (200); -1 = unlimited.
+# max_watch_snapshots_per_branch = 200
 
 [hooks]
 # Shell commands run around snapshots and restores.
@@ -342,7 +481,11 @@ node_modules/
 *.tsbuildinfo
 
 # ── Go ────────────────────────────────────────────────────────────────────────
-vendor/
+# Anchored to the repo root: Go's module vendor dir is always at the module
+# root, whereas "vendor" is a common source directory name at other depths
+# (e.g. a frontend feature dir). A bare "vendor/" would match at ANY depth and
+# silently hide that source from every snapshot.
+/vendor/
 
 # ── Rust ──────────────────────────────────────────────────────────────────────
 target/

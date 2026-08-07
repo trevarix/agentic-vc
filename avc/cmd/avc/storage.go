@@ -10,6 +10,7 @@ import (
 
 	"github.com/trevarix/agentic-vc/avc/internal/branch"
 	"github.com/trevarix/agentic-vc/avc/internal/db"
+	"github.com/trevarix/agentic-vc/avc/internal/objstore"
 	"github.com/spf13/cobra"
 )
 
@@ -41,13 +42,16 @@ func init() {
 
 // storageSummary holds computed sizes for JSON output.
 type storageSummary struct {
-	ProjectName    string                `json:"project_name"`
-	DatabaseBytes  int64                 `json:"database_bytes"`
-	ObjectsBytes   int64                 `json:"objects_bytes"`
-	WorkspacesBytes int64                `json:"workspaces_bytes"`
-	TotalBytes     int64                 `json:"total_bytes"`
-	Branches       []branchStorageRow    `json:"branches,omitempty"`
-	Snapshots      []snapshotStorageRow  `json:"snapshots,omitempty"`
+	ProjectName       string               `json:"project_name"`
+	DatabaseBytes     int64                `json:"database_bytes"`
+	ObjectsBytes      int64                `json:"objects_bytes"`      // on-disk (compressed) size of the object store
+	ObjectsRawBytes   int64                `json:"objects_raw_bytes"`  // original content size the store represents
+	ObjectsCompressed int                  `json:"objects_compressed"` // objects stored in the compressed v2 format
+	ObjectCount       int                  `json:"object_count"`
+	WorkspacesBytes   int64                `json:"workspaces_bytes"`
+	TotalBytes        int64                `json:"total_bytes"`
+	Branches          []branchStorageRow   `json:"branches,omitempty"`
+	Snapshots         []snapshotStorageRow `json:"snapshots,omitempty"`
 }
 
 type branchStorageRow struct {
@@ -74,8 +78,10 @@ func runStorage(cmd *cobra.Command, args []string) error {
 	// Measure the database file.
 	dbSize := fileSize(filepath.Join(avcDir, "avc.db"))
 
-	// Measure the object store.
-	objSize, _ := dirSize(filepath.Join(avcDir, "objects"))
+	// Measure the object store, including its compression footprint (the v2
+	// object header records each blob's raw size, so this needs no decompression).
+	objStats := objectStoreStats(filepath.Join(avcDir, "objects"))
+	objSize := objStats.diskBytes
 
 	// Measure workspaces.
 	wsSize, _ := dirSize(filepath.Join(avcDir, "workspaces"))
@@ -95,11 +101,14 @@ func runStorage(cmd *cobra.Command, args []string) error {
 	}
 
 	summary := storageSummary{
-		ProjectName:     proj.Name,
-		DatabaseBytes:   dbSize,
-		ObjectsBytes:    objSize,
-		WorkspacesBytes: wsSize,
-		TotalBytes:      total,
+		ProjectName:       proj.Name,
+		DatabaseBytes:     dbSize,
+		ObjectsBytes:      objSize,
+		ObjectsRawBytes:   objStats.rawBytes,
+		ObjectsCompressed: objStats.compressed,
+		ObjectCount:       objStats.count,
+		WorkspacesBytes:   wsSize,
+		TotalBytes:        total,
 	}
 
 	// Build branch-level summary from DB if requested.
@@ -158,6 +167,13 @@ func runStorage(cmd *cobra.Command, args []string) error {
 	fmt.Printf("%s %s\n%s\n\n", accent("◆ AVC storage:"), cyan(proj.Name), ruler(50))
 	fmt.Printf("  %s  %s\n", prop("Database:  "), bold(formatBytes(dbSize)))
 	fmt.Printf("  %s  %s\n", prop("Objects:   "), bold(formatBytes(objSize)))
+	if objStats.rawBytes > objSize && objSize > 0 {
+		fmt.Printf("  %s  %s\n", prop("           "),
+			dim(fmt.Sprintf("representing %s of content (%.1fx compression, %d/%d objects compressed)",
+				formatBytes(objStats.rawBytes),
+				float64(objStats.rawBytes)/float64(objSize),
+				objStats.compressed, objStats.count)))
+	}
 	fmt.Printf("  %s  %s\n", prop("Workspaces:"), bold(formatBytes(wsSize)))
 	fmt.Printf("  %s\n", ruler(30))
 	fmt.Printf("  %s  %s\n\n", prop("Total:     "), bold(yellow(formatBytes(total))))
@@ -185,6 +201,38 @@ func runStorage(cmd *cobra.Command, args []string) error {
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+// objStoreStats aggregates the object store's on-disk vs logical footprint.
+type objStoreStats struct {
+	count      int
+	compressed int
+	diskBytes  int64
+	rawBytes   int64
+}
+
+// objectStoreStats walks the object store summing on-disk and raw sizes.
+// Reads only each object's 13-byte header — never decompresses.
+func objectStoreStats(objectsDir string) objStoreStats {
+	var stats objStoreStats
+	_ = filepath.WalkDir(objectsDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		info, statErr := d.Info()
+		if statErr != nil {
+			return nil
+		}
+		stats.count++
+		stats.diskBytes += info.Size()
+		objInfo := objstore.Stat(path, info.Size())
+		stats.rawBytes += int64(objInfo.RawSize)
+		if objInfo.Compressed {
+			stats.compressed++
+		}
+		return nil
+	})
+	return stats
+}
 
 // dirSize returns the total byte size of all regular files under root.
 func dirSize(root string) (int64, error) {

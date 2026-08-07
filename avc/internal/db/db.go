@@ -6,6 +6,7 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -48,6 +49,7 @@ type Branch struct {
 	BaseSnapshotID string // empty string for main (no base snapshot)
 	CreatedAt      int64
 	Status         string // "active" | "merged" | "abandoned"
+	ParentBranchID string // branch this one was stacked on (--from-branch); empty when branched from main
 }
 
 // Snapshot represents a row in the snapshots table.
@@ -61,6 +63,8 @@ type Snapshot struct {
 	FileCount int
 	TotalSize int64
 	BranchID  string // empty string when branch_id is NULL (pre-Phase-4 rows)
+	SessionID string // agent session that produced this snapshot; empty when unattributed
+	Task      string // one-line task description for the session; empty when unattributed
 }
 
 // File represents a row in the files table.
@@ -70,6 +74,7 @@ type File struct {
 	RelativePath string
 	FileHash     string
 	FileSize     int64
+	FileMode     uint32 // Unix permission bits (e.g. 0644, 0755); 0 = not recorded (pre-mode-tracking row, or platform without meaningful modes) — restore falls back to 0644
 }
 
 // Merge represents one merge operation (branch → main).
@@ -96,6 +101,20 @@ type MergeFile struct {
 	BranchHash   string
 }
 
+// Operation is one entry in the operations log: a destructive operation
+// (restore, merge, or an undo itself) paired with the safety snapshot that
+// reverses it. This is what lets `avc undo` work with zero arguments —
+// and lets undoing an undo behave as redo.
+type Operation struct {
+	ID             string
+	ProjectID      string
+	BranchID       string // branch the operation ran on (agent branch for merges)
+	Kind           string // "restore" | "merge" | "undo"
+	UndoSnapshotID string // restoring this snapshot reverses the operation
+	Details        string // human-readable summary, e.g. "restored snap-abc123"
+	CreatedAt      int64
+}
+
 // DiffCache represents a row in the diffs table.
 type DiffCache struct {
 	ID             string
@@ -118,11 +137,15 @@ func Open(projectRoot string) (*Store, error) {
 	}
 
 	// Apply pragmas before migrations so every subsequent query benefits from them.
+	// busy_timeout MUST be set first: switching journal_mode itself briefly
+	// needs exclusive access, and without a timeout already in effect that
+	// very first pragma can fail with "database is locked" under contention.
 	pragmas := []string{
-		"PRAGMA journal_mode=WAL",  // concurrent readers during writes
+		"PRAGMA busy_timeout=5000",  // writers wait up to 5s instead of failing on SQLITE_BUSY
+		"PRAGMA journal_mode=WAL",   // concurrent readers during writes
 		"PRAGMA synchronous=NORMAL", // safe + faster than FULL
 		"PRAGMA cache_size=-65536",  // 64 MB page cache
-		"PRAGMA foreign_keys=ON",   // enforce FK constraints
+		"PRAGMA foreign_keys=ON",    // enforce FK constraints
 	}
 	for _, p := range pragmas {
 		if _, err := db.Exec(p); err != nil {
@@ -177,9 +200,23 @@ func InitProject(projectRoot string) (*Project, error) {
 	return store.GetProject(normed)
 }
 
+// schemaVersion stamps a fully migrated database (PRAGMA user_version) so
+// migrate can skip its ~15 DDL statements — each an fsynced write
+// transaction — on every subsequent Open. db.Open runs on every CLI command
+// and hundreds of times per test run, so this fast path matters.
+//
+// BUMP THIS whenever migrate() gains or changes a statement, or existing
+// databases will silently skip the new migration.
+const schemaVersion = 2
+
 // migrate creates all tables if absent and applies incremental schema changes
-// idempotently. Safe to call on every Open.
+// idempotently. Safe to call on every Open; already-migrated databases
+// (user_version == schemaVersion) return immediately.
 func (s *Store) migrate() error {
+	var v int
+	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&v); err == nil && v == schemaVersion {
+		return nil
+	}
 	schema := `
 	CREATE TABLE IF NOT EXISTS projects (
 		id         TEXT PRIMARY KEY,
@@ -260,12 +297,58 @@ func (s *Store) migrate() error {
 	if _, err := s.db.Exec(schema); err != nil {
 		return err
 	}
-	// Phase 4: add branch_id to snapshots (idempotent — SQLite returns an error
-	// if the column already exists, which we intentionally ignore).
-	_, _ = s.db.Exec(`ALTER TABLE snapshots ADD COLUMN branch_id TEXT REFERENCES branches(id)`)
+	// Phase 4: add branch_id to snapshots (idempotent — SQLite returns
+	// "duplicate column name" if it already exists, which we ignore; any
+	// other failure, e.g. a locked or full-disk database, must propagate).
+	if err := execIgnoreDuplicateColumn(s.db, `ALTER TABLE snapshots ADD COLUMN branch_id TEXT REFERENCES branches(id)`); err != nil {
+		return fmt.Errorf("add snapshots.branch_id: %w", err)
+	}
 
 	// Phase 7.1: branch lifecycle status column.
-	_, _ = s.db.Exec(`ALTER TABLE branches ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`)
+	if err := execIgnoreDuplicateColumn(s.db, `ALTER TABLE branches ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`); err != nil {
+		return fmt.Errorf("add branches.status: %w", err)
+	}
+
+	// Lifecycle hardening: file_mode preserves Unix permission bits (notably
+	// the executable bit) across snapshot/restore. 0 default means "not
+	// recorded" for rows written before this column existed.
+	if err := execIgnoreDuplicateColumn(s.db, `ALTER TABLE files ADD COLUMN file_mode INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return fmt.Errorf("add files.file_mode: %w", err)
+	}
+
+	// Agent features: stacked branches record their parent for lineage
+	// display (`avc branch list`). Merge math is unaffected — the base
+	// snapshot already encodes the fork point.
+	if err := execIgnoreDuplicateColumn(s.db, `ALTER TABLE branches ADD COLUMN parent_branch_id TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("add branches.parent_branch_id: %w", err)
+	}
+
+	// Agent features: session attribution — which agent session, doing what
+	// task, produced each snapshot. Empty for rows written before these
+	// columns existed and for unattributed (human/CLI) snapshots.
+	if err := execIgnoreDuplicateColumn(s.db, `ALTER TABLE snapshots ADD COLUMN session_id TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("add snapshots.session_id: %w", err)
+	}
+	if err := execIgnoreDuplicateColumn(s.db, `ALTER TABLE snapshots ADD COLUMN task TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("add snapshots.task: %w", err)
+	}
+
+	// Trust primitives: the operations log records every destructive
+	// operation together with the safety snapshot that can reverse it, so
+	// `avc undo` works with zero arguments.
+	if _, err := s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS operations (
+			id               TEXT PRIMARY KEY,
+			project_id       TEXT NOT NULL,
+			branch_id        TEXT NOT NULL DEFAULT '',
+			kind             TEXT NOT NULL,
+			undo_snapshot_id TEXT NOT NULL,
+			details          TEXT NOT NULL DEFAULT '',
+			created_at       INTEGER NOT NULL,
+			FOREIGN KEY (project_id) REFERENCES projects(id)
+		)`); err != nil {
+		return fmt.Errorf("create operations table: %w", err)
+	}
 
 	// Phase 7.3: project_state — stores the active branch name inside the DB
 	// (eliminates the config.toml race condition for concurrent writers).
@@ -294,7 +377,9 @@ func (s *Store) migrate() error {
 
 	// Phase 5.3: add computed_at to the diffs cache table (tracks when each
 	// cached diff was computed; enables TTL-based invalidation).
-	_, _ = s.db.Exec(`ALTER TABLE diffs ADD COLUMN computed_at INTEGER NOT NULL DEFAULT 0`)
+	if err := execIgnoreDuplicateColumn(s.db, `ALTER TABLE diffs ADD COLUMN computed_at INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return fmt.Errorf("add diffs.computed_at: %w", err)
+	}
 
 	// Phase 1 improvement: query indexes for hot paths.
 	// All idempotent via IF NOT EXISTS — safe to run on every Open.
@@ -317,7 +402,28 @@ func (s *Store) migrate() error {
 			return fmt.Errorf("create index: %w", err)
 		}
 	}
+
+	// Stamp the schema version last, only after every statement above
+	// succeeded — a partially migrated database must re-run migrate (all
+	// statements are idempotent) rather than fast-path past the remainder.
+	if _, err := s.db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion)); err != nil {
+		return fmt.Errorf("set schema version: %w", err)
+	}
 	return nil
+}
+
+// execIgnoreDuplicateColumn runs an idempotent `ALTER TABLE ... ADD COLUMN`
+// migration statement. SQLite has no `IF NOT EXISTS` for columns, so a
+// column that already exists returns an error containing "duplicate column
+// name" — that specific case is expected on every Open() after the first and
+// is ignored. Any other error (locked database, disk full, syntax error, ...)
+// propagates, so a real migration failure is never mistaken for "already applied".
+func execIgnoreDuplicateColumn(db *sql.DB, stmt string) error {
+	_, err := db.Exec(stmt)
+	if err == nil || strings.Contains(err.Error(), "duplicate column name") {
+		return nil
+	}
+	return err
 }
 
 // ─── Project ─────────────────────────────────────────────────────────────────
@@ -336,11 +442,11 @@ func (s *Store) GetProject(projectRoot string) (*Project, error) {
 
 // ─── Branch ──────────────────────────────────────────────────────────────────
 
-const branchSelectCols = `id, name, project_id, COALESCE(base_snapshot_id, ''), created_at, COALESCE(status, 'active')`
+const branchSelectCols = `id, name, project_id, COALESCE(base_snapshot_id, ''), created_at, COALESCE(status, 'active'), COALESCE(parent_branch_id, '')`
 
 func scanBranch(row interface{ Scan(...any) error }) (*Branch, error) {
 	b := &Branch{}
-	err := row.Scan(&b.ID, &b.Name, &b.ProjectID, &b.BaseSnapshotID, &b.CreatedAt, &b.Status)
+	err := row.Scan(&b.ID, &b.Name, &b.ProjectID, &b.BaseSnapshotID, &b.CreatedAt, &b.Status, &b.ParentBranchID)
 	return b, err
 }
 
@@ -351,11 +457,23 @@ func (s *Store) InsertBranch(b *Branch) error {
 		status = "active"
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO branches (id, name, project_id, base_snapshot_id, created_at, status)
-		 VALUES (?, ?, ?, NULLIF(?, ''), ?, ?)`,
-		b.ID, b.Name, b.ProjectID, b.BaseSnapshotID, b.CreatedAt, status,
+		`INSERT INTO branches (id, name, project_id, base_snapshot_id, created_at, status, parent_branch_id)
+		 VALUES (?, ?, ?, NULLIF(?, ''), ?, ?, ?)`,
+		b.ID, b.Name, b.ProjectID, b.BaseSnapshotID, b.CreatedAt, status, b.ParentBranchID,
 	)
 	return err
+}
+
+// GetBranchByID returns a branch by its primary key.
+func (s *Store) GetBranchByID(id string) (*Branch, error) {
+	row := s.db.QueryRow(
+		`SELECT `+branchSelectCols+` FROM branches WHERE id = ?`, id,
+	)
+	b, err := scanBranch(row)
+	if err != nil {
+		return nil, fmt.Errorf("branch '%s' not found", id)
+	}
+	return b, nil
 }
 
 // GetBranchByName returns a branch by project and name.
@@ -450,7 +568,18 @@ func (s *Store) DeleteSnapshotsByBranch(branchID string) error {
 	if err != nil {
 		return err
 	}
-	// Delete files first to satisfy the FK constraint on files.snapshot_id.
+	// Delete dependents first to satisfy the FK constraints on
+	// files.snapshot_id and diffs.from/to_snapshot_id (cached diff rows are
+	// recomputable — dropping them loses nothing).
+	if _, err := tx.Exec(
+		`DELETE FROM diffs WHERE from_snapshot_id IN
+		 (SELECT id FROM snapshots WHERE branch_id = ?)
+		 OR to_snapshot_id IN
+		 (SELECT id FROM snapshots WHERE branch_id = ?)`, branchID, branchID,
+	); err != nil {
+		tx.Rollback()
+		return err
+	}
 	if _, err := tx.Exec(
 		`DELETE FROM files WHERE snapshot_id IN
 		 (SELECT id FROM snapshots WHERE branch_id = ?)`, branchID,
@@ -484,9 +613,15 @@ func (s *Store) GetActiveBranch(projectID string) (string, error) {
 	err := s.db.QueryRow(
 		`SELECT active_branch FROM project_state WHERE project_id = ?`, projectID,
 	).Scan(&name)
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		// No row yet — default to main.
 		return "main", nil
+	}
+	if err != nil {
+		// A real failure (locked DB, I/O error, ...) must propagate: silently
+		// returning "main" here would retarget snapshots/restores to the
+		// wrong branch on a transient error instead of surfacing it.
+		return "", err
 	}
 	return name, nil
 }
@@ -502,6 +637,31 @@ func (s *Store) SetActiveBranch(projectID, name string) error {
 		projectID, name, nowUnix(),
 	)
 	return err
+}
+
+// SnapshotsReferencingHash returns the distinct snapshot IDs whose file
+// records reference the given content hash, newest first. Used by fsck to
+// report which snapshots a corrupt blob damages.
+func (s *Store) SnapshotsReferencingHash(hash string) ([]string, error) {
+	rows, err := s.db.Query(
+		`SELECT DISTINCT f.snapshot_id FROM files f
+		 JOIN snapshots s ON s.id = f.snapshot_id
+		 WHERE f.file_hash = ? ORDER BY s.timestamp DESC`,
+		hash,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 // LiveHashes returns the set of all file_hash values currently referenced by
@@ -569,26 +729,56 @@ func (s *Store) EnsureMainBranch(projectID string) (*Branch, error) {
 
 // ─── Snapshot ────────────────────────────────────────────────────────────────
 
-// InsertSnapshot persists a new snapshot record.
-func (s *Store) InsertSnapshot(snap *Snapshot) error {
-	_, err := s.db.Exec(
+// InsertSnapshotWithFiles persists the snapshot row and all of its file rows
+// in a single transaction, so a crash between the two writes can never leave
+// a snapshot with zero file rows (which a later restore would interpret as
+// "delete every tracked file").
+func (s *Store) InsertSnapshotWithFiles(snap *Snapshot, files []*File) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(
 		`INSERT INTO snapshots
-		 (id, project_id, timestamp, label, agent_name, notes, file_count, total_size, branch_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''))`,
+		 (id, project_id, timestamp, label, agent_name, notes, file_count, total_size, branch_id, session_id, task)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?)`,
 		snap.ID, snap.ProjectID, snap.Timestamp, snap.Label,
 		snap.AgentName, snap.Notes, snap.FileCount, snap.TotalSize, snap.BranchID,
+		snap.SessionID, snap.Task,
+	); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("insert snapshot: %w", err)
+	}
+
+	stmt, err := tx.Prepare(
+		`INSERT INTO files (id, snapshot_id, relative_path, file_hash, file_size, file_mode) VALUES (?, ?, ?, ?, ?, ?)`,
 	)
-	return err
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	for _, f := range files {
+		if _, err := stmt.Exec(f.ID, f.SnapshotID, f.RelativePath, f.FileHash, f.FileSize, f.FileMode); err != nil {
+			stmt.Close()
+			tx.Rollback()
+			return fmt.Errorf("insert file %s: %w", f.RelativePath, err)
+		}
+	}
+	stmt.Close()
+
+	return tx.Commit()
 }
 
 const snapshotSelectCols = `id, project_id, timestamp, label, agent_name, notes, file_count, total_size,
-	COALESCE(branch_id, '')`
+	COALESCE(branch_id, ''), COALESCE(session_id, ''), COALESCE(task, '')`
 
 func scanSnapshot(row interface{ Scan(...any) error }) (*Snapshot, error) {
 	snap := &Snapshot{}
 	err := row.Scan(
 		&snap.ID, &snap.ProjectID, &snap.Timestamp, &snap.Label,
 		&snap.AgentName, &snap.Notes, &snap.FileCount, &snap.TotalSize, &snap.BranchID,
+		&snap.SessionID, &snap.Task,
 	)
 	return snap, err
 }
@@ -615,10 +805,12 @@ func (s *Store) ListSnapshots() ([]*Snapshot, error) {
 	return snapshots, rows.Err()
 }
 
-// ListSnapshotsByBranch returns snapshots for a specific branch, newest first.
+// ListSnapshotsByBranch returns snapshots for a specific branch, newest
+// first. rowid breaks timestamp ties (same-second snapshots) so the order is
+// true insertion order — bisect and timeline depend on this being stable.
 func (s *Store) ListSnapshotsByBranch(branchID string) ([]*Snapshot, error) {
 	rows, err := s.db.Query(
-		`SELECT `+snapshotSelectCols+` FROM snapshots WHERE branch_id = ? ORDER BY timestamp DESC`,
+		`SELECT `+snapshotSelectCols+` FROM snapshots WHERE branch_id = ? ORDER BY timestamp DESC, rowid DESC`,
 		branchID,
 	)
 	if err != nil {
@@ -641,6 +833,7 @@ func (s *Store) ListSnapshotsByBranch(branchID string) ([]*Snapshot, error) {
 // Zero values mean "no filter" for that field.
 type SnapshotFilter struct {
 	BranchID  string // exact match; empty = all branches
+	SessionID string // exact match on session attribution; empty = all sessions
 	AgentName string // LIKE match (case-insensitive prefix/substring)
 	Query     string // full-text search on label + notes (LIKE %query%)
 	Tag       string // only snapshots with this tag
@@ -659,6 +852,10 @@ func (s *Store) ListSnapshotsFiltered(f SnapshotFilter) ([]*Snapshot, error) {
 	if f.BranchID != "" {
 		conditions = append(conditions, "s.branch_id = ?")
 		args = append(args, f.BranchID)
+	}
+	if f.SessionID != "" {
+		conditions = append(conditions, "s.session_id = ?")
+		args = append(args, f.SessionID)
 	}
 	if f.AgentName != "" {
 		conditions = append(conditions, "s.agent_name LIKE ?")
@@ -723,7 +920,7 @@ func (s *Store) ListSnapshotsFiltered(f SnapshotFilter) ([]*Snapshot, error) {
 // snapshotSelectColsAliased is snapshotSelectCols with the "s." table alias
 // used by ListSnapshotsFiltered (which joins via EXISTS subqueries).
 const snapshotSelectColsAliased = `s.id, s.project_id, s.timestamp, s.label, s.agent_name, s.notes, s.file_count, s.total_size,
-	COALESCE(s.branch_id, '')`
+	COALESCE(s.branch_id, ''), COALESCE(s.session_id, ''), COALESCE(s.task, '')`
 
 // ─── Snapshot tags ────────────────────────────────────────────────────────────
 
@@ -770,6 +967,69 @@ func (s *Store) GetSnapshotTags(snapshotID string) ([]string, error) {
 // ListSnapshotsByTag returns all snapshots carrying the given tag, newest first.
 func (s *Store) ListSnapshotsByTag(tag string) ([]*Snapshot, error) {
 	return s.ListSnapshotsFiltered(SnapshotFilter{Tag: tag, Limit: -1})
+}
+
+// ─── Operations log ───────────────────────────────────────────────────────────
+
+// InsertOperation appends one entry to the operations log.
+func (s *Store) InsertOperation(op *Operation) error {
+	_, err := s.db.Exec(
+		`INSERT INTO operations (id, project_id, branch_id, kind, undo_snapshot_id, details, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		op.ID, op.ProjectID, op.BranchID, op.Kind, op.UndoSnapshotID, op.Details, op.CreatedAt,
+	)
+	return err
+}
+
+const operationSelectCols = `id, project_id, branch_id, kind, undo_snapshot_id, details, created_at`
+
+func scanOperation(row interface{ Scan(...any) error }) (*Operation, error) {
+	op := &Operation{}
+	err := row.Scan(&op.ID, &op.ProjectID, &op.BranchID, &op.Kind,
+		&op.UndoSnapshotID, &op.Details, &op.CreatedAt)
+	return op, err
+}
+
+// ListOperations returns the newest operations for a project, most recent
+// first. limit <= 0 means the default of 20.
+func (s *Store) ListOperations(projectID string, limit int) ([]*Operation, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := s.db.Query(
+		`SELECT `+operationSelectCols+` FROM operations
+		 WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?`,
+		projectID, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ops []*Operation
+	for rows.Next() {
+		op, err := scanOperation(rows)
+		if err != nil {
+			return nil, err
+		}
+		ops = append(ops, op)
+	}
+	return ops, rows.Err()
+}
+
+// GetLastOperation returns the most recent operation for a project, or an
+// error when the log is empty.
+func (s *Store) GetLastOperation(projectID string) (*Operation, error) {
+	row := s.db.QueryRow(
+		`SELECT `+operationSelectCols+` FROM operations
+		 WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+		projectID,
+	)
+	op, err := scanOperation(row)
+	if err != nil {
+		return nil, fmt.Errorf("no operations recorded yet")
+	}
+	return op, nil
 }
 
 // ─── Diff cache management ────────────────────────────────────────────────────
@@ -831,10 +1091,16 @@ func (s *Store) GetOldestSnapshot(branchID string) (*Snapshot, error) {
 	return snap, nil
 }
 
-// DeleteSnapshot removes a snapshot and its associated file records.
+// DeleteSnapshot removes a snapshot, its file records, and any cached diff
+// rows that reference it (the diffs table is a cache — dropping rows loses
+// nothing that can't be recomputed).
 func (s *Store) DeleteSnapshot(id string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM diffs WHERE from_snapshot_id = ? OR to_snapshot_id = ?`, id, id); err != nil {
+		tx.Rollback()
 		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM files WHERE snapshot_id = ?`, id); err != nil {
@@ -846,6 +1112,103 @@ func (s *Store) DeleteSnapshot(id string) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// ProtectedSnapshotIDs returns snapshot IDs that must not be deleted:
+//   - base_snapshot_id of any branch with status 'active'
+//   - any snapshot carrying at least one tag
+//   - the base/main/head snapshot of the most recent merge per branch
+//
+// Retention and `avc delete` both consult this so pruning can never corrupt
+// an active branch's merge base, silently untag a deliberately marked
+// milestone, or invalidate the record of the last merge.
+func (s *Store) ProtectedSnapshotIDs(projectID string) (map[string]bool, error) {
+	protected := make(map[string]bool)
+
+	branchRows, err := s.db.Query(
+		`SELECT base_snapshot_id FROM branches
+		 WHERE project_id = ? AND COALESCE(status, 'active') = 'active'
+		   AND base_snapshot_id IS NOT NULL AND base_snapshot_id != ''`,
+		projectID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	for branchRows.Next() {
+		var id string
+		if err := branchRows.Scan(&id); err != nil {
+			branchRows.Close()
+			return nil, err
+		}
+		protected[id] = true
+	}
+	if err := branchRows.Err(); err != nil {
+		branchRows.Close()
+		return nil, err
+	}
+	branchRows.Close()
+
+	tagRows, err := s.db.Query(
+		`SELECT DISTINCT st.snapshot_id FROM snapshot_tags st
+		 JOIN snapshots s ON s.id = st.snapshot_id
+		 WHERE s.project_id = ?`,
+		projectID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	for tagRows.Next() {
+		var id string
+		if err := tagRows.Scan(&id); err != nil {
+			tagRows.Close()
+			return nil, err
+		}
+		protected[id] = true
+	}
+	if err := tagRows.Err(); err != nil {
+		tagRows.Close()
+		return nil, err
+	}
+	tagRows.Close()
+
+	mergeRows, err := s.db.Query(
+		`SELECT base_snapshot_id, main_snapshot_id, head_snapshot_id
+		 FROM merges m
+		 WHERE project_id = ? AND started_at = (
+		     SELECT MAX(started_at) FROM merges WHERE branch_id = m.branch_id
+		 )`,
+		projectID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	for mergeRows.Next() {
+		var base, main, head string
+		if err := mergeRows.Scan(&base, &main, &head); err != nil {
+			mergeRows.Close()
+			return nil, err
+		}
+		protected[base] = true
+		protected[main] = true
+		protected[head] = true
+	}
+	if err := mergeRows.Err(); err != nil {
+		mergeRows.Close()
+		return nil, err
+	}
+	mergeRows.Close()
+
+	return protected, nil
+}
+
+// IsSnapshotProtected reports whether snapshotID is protected from deletion
+// within projectID. See ProtectedSnapshotIDs.
+func (s *Store) IsSnapshotProtected(projectID, snapshotID string) (bool, error) {
+	protected, err := s.ProtectedSnapshotIDs(projectID)
+	if err != nil {
+		return false, err
+	}
+	return protected[snapshotID], nil
 }
 
 // FileVersion is a single (snapshot, hash, timestamp) tuple for one file path.
@@ -886,43 +1249,10 @@ func (s *Store) GetFileVersions(relPath string) ([]FileVersion, error) {
 
 // ─── File ────────────────────────────────────────────────────────────────────
 
-// InsertFile persists a file record belonging to a snapshot.
-func (s *Store) InsertFile(f *File) error {
-	_, err := s.db.Exec(
-		`INSERT INTO files (id, snapshot_id, relative_path, file_hash, file_size) VALUES (?, ?, ?, ?, ?)`,
-		f.ID, f.SnapshotID, f.RelativePath, f.FileHash, f.FileSize,
-	)
-	return err
-}
-
-// InsertFilesBatch persists all file records in a single transaction,
-// reducing SQLite fsyncs from one-per-file to one for the entire batch.
-func (s *Store) InsertFilesBatch(files []*File) error {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	stmt, err := tx.Prepare(
-		`INSERT INTO files (id, snapshot_id, relative_path, file_hash, file_size) VALUES (?, ?, ?, ?, ?)`,
-	)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	defer stmt.Close()
-	for _, f := range files {
-		if _, err := stmt.Exec(f.ID, f.SnapshotID, f.RelativePath, f.FileHash, f.FileSize); err != nil {
-			tx.Rollback()
-			return err
-		}
-	}
-	return tx.Commit()
-}
-
 // GetSnapshotFiles returns all file records for a snapshot.
 func (s *Store) GetSnapshotFiles(snapshotID string) ([]*File, error) {
 	rows, err := s.db.Query(
-		`SELECT id, snapshot_id, relative_path, file_hash, file_size
+		`SELECT id, snapshot_id, relative_path, file_hash, file_size, file_mode
 		 FROM files WHERE snapshot_id = ? ORDER BY relative_path`, snapshotID,
 	)
 	if err != nil {
@@ -933,7 +1263,7 @@ func (s *Store) GetSnapshotFiles(snapshotID string) ([]*File, error) {
 	var files []*File
 	for rows.Next() {
 		f := &File{}
-		if err := rows.Scan(&f.ID, &f.SnapshotID, &f.RelativePath, &f.FileHash, &f.FileSize); err != nil {
+		if err := rows.Scan(&f.ID, &f.SnapshotID, &f.RelativePath, &f.FileHash, &f.FileSize, &f.FileMode); err != nil {
 			return nil, err
 		}
 		files = append(files, f)
@@ -1004,6 +1334,28 @@ func (s *Store) GetLastMerge(branchID string) (*Merge, error) {
 		&m.MainSnapshotID, &m.HeadSnapshotID, &m.Status, &m.StartedAt, &m.FinishedAt)
 	if err != nil {
 		return nil, fmt.Errorf("no merge record for branch")
+	}
+	return m, nil
+}
+
+// GetLastMergeForProject returns the most recent merge for a project,
+// regardless of which branch it targeted. Merges are recorded under the
+// *agent* branch's ID (see InsertMerge), so callers that only know the
+// project — like Abort, which must find an in-progress merge without
+// knowing which agent branch it belongs to — should use this instead of
+// GetLastMerge(mainBranch.ID), which never matches.
+func (s *Store) GetLastMergeForProject(projectID string) (*Merge, error) {
+	row := s.db.QueryRow(
+		`SELECT id, project_id, branch_id, base_snapshot_id, main_snapshot_id, head_snapshot_id,
+		        status, started_at, finished_at
+		 FROM merges WHERE project_id = ? ORDER BY started_at DESC, rowid DESC LIMIT 1`,
+		projectID,
+	)
+	m := &Merge{}
+	err := row.Scan(&m.ID, &m.ProjectID, &m.BranchID, &m.BaseSnapshotID,
+		&m.MainSnapshotID, &m.HeadSnapshotID, &m.Status, &m.StartedAt, &m.FinishedAt)
+	if err != nil {
+		return nil, fmt.Errorf("no merge record for project")
 	}
 	return m, nil
 }

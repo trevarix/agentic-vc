@@ -83,9 +83,9 @@ func runList(cmd *cobra.Command, args []string) error {
 	defer store.Close()
 
 	cfg, _ := config.Load(projectPath)
-	activeName := cfg.Branch.Active
-	if activeName == "" {
-		activeName = "main"
+	activeName := "main"
+	if cfg != nil && cfg.Branch.Active != "" {
+		activeName = cfg.Branch.Active
 	}
 
 	// Build filter from flags.
@@ -139,6 +139,8 @@ func runList(cmd *cobra.Command, args []string) error {
 			TotalSize    int64  `json:"total_size"`
 			Notes        string `json:"notes"`
 			BranchID     string `json:"branch_id"`
+			SessionID    string `json:"session_id"`
+			Task         string `json:"task"`
 		}
 		out := make([]snapshotJSON, len(snapshots))
 		for i, s := range snapshots {
@@ -151,6 +153,8 @@ func runList(cmd *cobra.Command, args []string) error {
 				TotalSize:    s.TotalSize,
 				Notes:        s.Notes,
 				BranchID:     s.BranchID,
+				SessionID:    s.SessionID,
+				Task:         s.Task,
 			}
 		}
 		return json.NewEncoder(os.Stdout).Encode(out)
