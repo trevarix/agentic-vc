@@ -1,6 +1,5 @@
 {
   "name": "agentic-vc",
-  "displayName": "AVC — Agentic Version Control",
   "version": "0.2.0",
   "description": "Local version control built for AI agents. Snapshot, diff, branch, and merge — without the complexity of Git.",
   "author": {
@@ -8,45 +7,19 @@
     "url": "https://trevarix.com"
   },
   "homepage": "https://avc.trevarix.com",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/trevarix/agentic-vc"
-  },
+  "repository": "https://github.com/trevarix/agentic-vc",
   "license": "AGPL-3.0-or-later",
   "keywords": [
     "version-control",
     "snapshots",
     "agents",
     "mcp",
-    "claude-code",
-    "cursor",
-    "windsurf",
     "git-alternative"
-  ],
-  "categories": [
-    "version-control",
-    "developer-tools"
   ],
   "mcpServers": {
     "avc": {
       "command": "avc",
-      "args": ["mcp", "serve", "--compact"],
-      "description": "AVC MCP server — exposes snapshot/diff/branch/merge as tools."
+      "args": ["mcp", "serve", "--compact"]
     }
-  },
-  "requires": {
-    "binary": {
-      "name": "avc",
-      "install": {
-        "macos": "brew install trevarix/tap/avc",
-        "linux": "curl -sSL https://raw.githubusercontent.com/trevarix/agentic-vc/main/install.sh | sh",
-        "windows": "irm https://raw.githubusercontent.com/trevarix/agentic-vc/main/install.ps1 | iex",
-        "from-source": "go install github.com/trevarix/agentic-vc/avc@latest"
-      },
-      "verify": "avc --version"
-    }
-  },
-  "postInstall": {
-    "message": "AVC plugin installed. Run `avc init` in any project to start tracking snapshots. Docs: https://avc.trevarix.com"
   }
 }
