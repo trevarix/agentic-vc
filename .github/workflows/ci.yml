@@ -24,6 +24,18 @@ jobs:
       - run: go mod tidy
       - run: go build ./...
       - run: go vet ./...
+      # Linux only: the Windows and macOS runners check out Go files with CRLF
+      # line endings, which gofmt reports as unformatted regardless of the
+      # actual formatting. One platform is enough to catch real drift.
+      - name: Format check
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean. Run: gofmt -w \$(find . -name '*.go')"
+            echo "$unformatted"
+            exit 1
+          fi
       - name: Test
         env:
           CGO_ENABLED: "0"

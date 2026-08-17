@@ -9,8 +9,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/trevarix/agentic-vc/avc/internal/diff"
 	"github.com/spf13/cobra"
+	"github.com/trevarix/agentic-vc/avc/internal/diff"
 )
 
 var (

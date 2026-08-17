@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spf13/cobra"
 	branchpkg "github.com/trevarix/agentic-vc/avc/internal/branch"
 	"github.com/trevarix/agentic-vc/avc/internal/timeline"
-	"github.com/spf13/cobra"
 )
 
 var (

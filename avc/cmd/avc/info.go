@@ -9,8 +9,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/trevarix/agentic-vc/avc/internal/db"
 	"github.com/spf13/cobra"
+	"github.com/trevarix/agentic-vc/avc/internal/db"
 )
 
 var infoCmd = &cobra.Command{
@@ -46,9 +46,9 @@ func runInfo(cmd *cobra.Command, args []string) error {
 
 	if jsonOutput {
 		type fileJSON struct {
-			Path     string `json:"path"`
-			Hash     string `json:"hash"`
-			Size     int64  `json:"size"`
+			Path string `json:"path"`
+			Hash string `json:"hash"`
+			Size int64  `json:"size"`
 		}
 		fileList := make([]fileJSON, len(files))
 		for i, f := range files {

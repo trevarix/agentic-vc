@@ -11,10 +11,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/spf13/cobra"
 	"github.com/trevarix/agentic-vc/avc/internal/config"
 	"github.com/trevarix/agentic-vc/avc/internal/db"
 	"github.com/trevarix/agentic-vc/avc/internal/skills"
-	"github.com/spf13/cobra"
 )
 
 var (
@@ -153,12 +153,12 @@ func runInit(cmd *cobra.Command, args []string) error {
 			srJSON[i] = skillJSON{sr.Framework, actions, sr.Warnings}
 		}
 		return json.NewEncoder(os.Stdout).Encode(map[string]any{
-			"id":                 project.ID,
-			"path":               project.Path,
-			"name":               project.Name,
-			"skills":             srJSON,
+			"id":                  project.ID,
+			"path":                project.Path,
+			"name":                project.Name,
+			"skills":              srJSON,
 			"already_initialized": alreadyInit,
-			"success":            true,
+			"success":             true,
 		})
 	}
 

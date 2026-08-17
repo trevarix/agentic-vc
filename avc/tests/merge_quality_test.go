@@ -1,9 +1,10 @@
 // Package tests — Phase 4: Merge Quality tests.
 //
 // Covers:
-//   4.1 Post-merge auto-snapshot (PostMergeSnapshotID in result; new HEAD on main after clean merge)
-//   4.2 Conflict resolution (ListConflicts, ResolveFile: ours/theirs/content)
-//   4.3 diff --stat data layer (result carries correct per-file and total line counts)
+//
+//	4.1 Post-merge auto-snapshot (PostMergeSnapshotID in result; new HEAD on main after clean merge)
+//	4.2 Conflict resolution (ListConflicts, ResolveFile: ours/theirs/content)
+//	4.3 diff --stat data layer (result carries correct per-file and total line counts)
 package tests
 
 import (

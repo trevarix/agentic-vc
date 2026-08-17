@@ -8,12 +8,12 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/spf13/cobra"
 	branchpkg "github.com/trevarix/agentic-vc/avc/internal/branch"
 	"github.com/trevarix/agentic-vc/avc/internal/db"
 	"github.com/trevarix/agentic-vc/avc/internal/oplog"
 	"github.com/trevarix/agentic-vc/avc/internal/restore"
 	"github.com/trevarix/agentic-vc/avc/internal/snapshot"
-	"github.com/spf13/cobra"
 )
 
 var restoreCmd = &cobra.Command{

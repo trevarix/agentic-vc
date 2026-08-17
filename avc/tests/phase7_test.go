@@ -1,10 +1,11 @@
 // Package tests — Phase 7: Branch Lifecycle & Automation tests.
 //
 // Covers:
-//   7.1 Branch status: default active, set merged/abandoned, list filtering, prune workspaces
-//   7.2 Branch rename: workspace dir, stat cache, active branch reference
-//   7.3 Active branch in SQLite: Switch writes project_state, GetActiveBranchName reads DB
-//   7.4 Pre/post hooks: pre-snapshot abort on non-zero exit, post-snapshot runs after success
+//
+//	7.1 Branch status: default active, set merged/abandoned, list filtering, prune workspaces
+//	7.2 Branch rename: workspace dir, stat cache, active branch reference
+//	7.3 Active branch in SQLite: Switch writes project_state, GetActiveBranchName reads DB
+//	7.4 Pre/post hooks: pre-snapshot abort on non-zero exit, post-snapshot runs after success
 package tests
 
 import (

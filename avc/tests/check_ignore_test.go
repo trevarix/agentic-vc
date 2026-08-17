@@ -27,11 +27,11 @@ func TestWhyIgnored_NamesTheMatchingPattern(t *testing.T) {
 		wantIgnored bool
 		wantPattern string
 	}{
-		{"app.log", true, "*.log"},                       // direct file match
-		{"vendor/pkg.go", true, "/vendor/"},              // root-anchored dir
-		{"web/features/vendor/screen.tsx", false, ""},    // nested vendor stays tracked
+		{"app.log", true, "*.log"},                                 // direct file match
+		{"vendor/pkg.go", true, "/vendor/"},                        // root-anchored dir
+		{"web/features/vendor/screen.tsx", false, ""},              // nested vendor stays tracked
 		{"web/node_modules/react/index.js", true, "node_modules/"}, // ignored ancestor at depth
-		{"src/main.go", false, ""},                       // ordinary source
+		{"src/main.go", false, ""},                                 // ordinary source
 	}
 	for _, c := range cases {
 		pat, ignored := rules.WhyIgnored(c.rel)

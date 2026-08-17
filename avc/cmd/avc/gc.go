@@ -6,8 +6,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/trevarix/agentic-vc/avc/internal/gc"
 	"github.com/spf13/cobra"
+	"github.com/trevarix/agentic-vc/avc/internal/gc"
 )
 
 var gcRunFlag bool

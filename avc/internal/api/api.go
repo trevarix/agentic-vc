@@ -296,12 +296,12 @@ func GetStatus(projectRoot string) (*StatusResult, error) {
 
 // StorageResult holds disk-usage information for a project.
 type StorageResult struct {
-	ProjectName     string              `json:"project_name"`
-	DatabaseBytes   int64               `json:"database_bytes"`
-	ObjectsBytes    int64               `json:"objects_bytes"`
-	WorkspacesBytes int64               `json:"workspaces_bytes"`
-	TotalBytes      int64               `json:"total_bytes"`
-	Branches        []BranchStorageRow  `json:"branches"`
+	ProjectName     string             `json:"project_name"`
+	DatabaseBytes   int64              `json:"database_bytes"`
+	ObjectsBytes    int64              `json:"objects_bytes"`
+	WorkspacesBytes int64              `json:"workspaces_bytes"`
+	TotalBytes      int64              `json:"total_bytes"`
+	Branches        []BranchStorageRow `json:"branches"`
 }
 
 // BranchStorageRow holds per-branch storage info.

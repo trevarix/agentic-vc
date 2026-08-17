@@ -10,9 +10,9 @@ import (
 	"os/signal"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/trevarix/agentic-vc/avc/internal/config"
 	"github.com/trevarix/agentic-vc/avc/internal/watch"
-	"github.com/spf13/cobra"
 )
 
 var (

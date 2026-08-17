@@ -37,7 +37,7 @@ type TrainBranchResult struct {
 // TrainResult is the outcome of a whole merge train.
 type TrainResult struct {
 	Results   []TrainBranchResult `json:"results"`
-	Completed int                 `json:"completed"`           // branches merged (and kept)
+	Completed int                 `json:"completed"`            // branches merged (and kept)
 	StoppedAt string              `json:"stopped_at,omitempty"` // branch that halted the train; "" when all merged
 }
 

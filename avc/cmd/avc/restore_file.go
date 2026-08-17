@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/trevarix/agentic-vc/avc/internal/restore"
 	"github.com/spf13/cobra"
+	"github.com/trevarix/agentic-vc/avc/internal/restore"
 )
 
 var restoreFileCmd = &cobra.Command{
