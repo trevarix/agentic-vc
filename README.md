@@ -229,7 +229,22 @@ It also installs a `PreToolUse` hook that checkpoints the project before an agen
 
 The plugin expects `avc` on your `PATH` and the project initialized with `avc init`. If either is missing, ask Claude to run the bundled `avc-setup` skill and it will walk you through both.
 
-> **Claude Desktop chat:** plugins contribute skills only — a plugin-bundled MCP server does not run there, so the `avc_*` tools will not appear. Use `avc init --skills claude-desktop` for now; a one-click desktop extension is planned.
+> **Claude Desktop chat:** plugins contribute skills only — a plugin-bundled MCP server does not run there, so the `avc_*` tools will not appear from the plugin. Install the desktop extension below instead.
+
+### Install as a Claude Desktop extension
+
+Claude Desktop runs local MCP servers as *extensions*, not plugins. Download the `.mcpb` bundle for your platform from the [latest release](https://github.com/trevarix/agentic-vc/releases):
+
+| Platform | File |
+|----------|------|
+| macOS (Apple Silicon) | `avc-<version>-darwin-arm64.mcpb` |
+| macOS (Intel) | `avc-<version>-darwin-amd64.mcpb` |
+| Windows | `avc-<version>-windows-amd64.mcpb` |
+| Linux | `avc-<version>-linux-amd64.mcpb` / `-arm64` |
+
+Then in Claude Desktop: **Settings → Extensions → Advanced settings → Install Extension…** and select the file.
+
+The bundle contains the `avc` binary, so there is nothing else to install. On first install Desktop asks for **Project folders** — pick the directories your projects live in (`~/code`, say). AVC searches them up to four levels deep and works across every project it finds, so you can ask "what did my agents do in the api project yesterday?" without reconfiguring anything.
 
 ### Automatic setup with `--skills`
 

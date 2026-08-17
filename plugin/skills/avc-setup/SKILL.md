@@ -44,4 +44,8 @@ If the tools are still missing after a restart, the MCP server is not starting. 
 
 ## Claude Desktop
 
-Plugin-bundled MCP servers do not run in Claude Desktop chat — only skills do. A Desktop user who wants the `avc_*` tools needs the AVC desktop extension instead: **Settings → Extensions → Advanced settings → Install Extension…** and select the `avc.mcpb` file from the [latest release](https://github.com/trevarix/agentic-vc/releases).
+Plugin-bundled MCP servers do not run in Claude Desktop chat — only skills do. A Desktop user who wants the `avc_*` tools needs the AVC desktop extension instead.
+
+Point them at the [latest release](https://github.com/trevarix/agentic-vc/releases) and the bundle matching their platform — `avc-<version>-darwin-arm64.mcpb` for Apple Silicon, `-darwin-amd64` for Intel Macs, `-windows-amd64`, or `-linux-amd64`/`-linux-arm64`. Then: **Settings → Extensions → Advanced settings → Install Extension…**
+
+The bundle carries its own `avc` binary, so nothing else needs installing. Desktop will ask for **Project folders** during install — that is where they choose which directories AVC can see.
