@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/trevarix/agentic-vc/avc/internal/db"
 	"github.com/trevarix/agentic-vc/avc/internal/diff"
@@ -27,6 +28,42 @@ type AnnotateResult struct {
 	FilePath   string            `json:"file_path"`
 	TotalLines int               `json:"total_lines"`
 	Lines      []*LineAnnotation `json:"lines"`
+}
+
+// Block is a contiguous run of lines that share an originating snapshot.
+type Block struct {
+	Start int             // 1-based first line, inclusive
+	End   int             // 1-based last line, inclusive
+	Line  *LineAnnotation // annotation shared by every line in the block
+}
+
+// CollapseBlocks groups per-line annotations into runs of consecutive lines
+// that share a snapshot (blame-style), so a file is described one block at a
+// time instead of one line at a time. Assumes lines are ordered by line number.
+func CollapseBlocks(lines []*LineAnnotation) []Block {
+	var blocks []Block
+	for _, ln := range lines {
+		if n := len(blocks); n > 0 &&
+			blocks[n-1].Line.SnapshotID == ln.SnapshotID &&
+			ln.Line == blocks[n-1].End+1 {
+			blocks[n-1].End = ln.Line
+			continue
+		}
+		blocks = append(blocks, Block{Start: ln.Line, End: ln.Line, Line: ln})
+	}
+	return blocks
+}
+
+// ClassifyAuthor labels a line's originating snapshot as agent- or
+// human-authored. Human-origin: no agent name, or the automatic save-snapshots
+// ("auto") that capture a human's own edits. Everything else is a named AI
+// agent (e.g. "claude", "cursor", or the MCP default "agent").
+func ClassifyAuthor(agentName string) (label string, isAgent bool) {
+	name := strings.TrimSpace(agentName)
+	if name == "" || strings.EqualFold(name, "auto") {
+		return "you", false
+	}
+	return name, true
 }
 
 // Annotate traces line origins for filePath across all snapshots.
