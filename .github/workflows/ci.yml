@@ -44,6 +44,55 @@ jobs:
         # give the suite real headroom rather than racing a tight budget.
         run: go test ./... -count=1 -timeout=600s
 
+  # Claude Desktop bundles. Cross-compiles every target because the failures
+  # this catches — a missing executable bit, a binary built for the wrong
+  # architecture, a bundle absent from the matrix — are invisible until a user
+  # installs the extension and it refuses to launch.
+  desktop-bundle:
+    name: Claude Desktop bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: avc/go.sum
+
+      - name: Build bundles
+        run: python3 scripts/build-mcpb.py 0.0.0-ci dist/mcpb
+
+      - name: Verify bundle structure
+        run: python3 scripts/verify-mcpb.py dist/mcpb
+
+      # unzip, not Python: it restores the mode stored in the archive, so
+      # launching the binary without a chmod proves the executable bit
+      # survives the round trip the way it will on a user's machine.
+      - name: Smoke-test the Linux bundle
+        run: |
+          unzip -q dist/mcpb/avc-0.0.0-ci-linux-amd64.mcpb -d /tmp/bundle
+          test -x /tmp/bundle/server/avc || { echo "bundled binary is not executable"; exit 1; }
+
+          mkdir -p /tmp/projects/demo
+          /tmp/bundle/server/avc init --yes /tmp/projects/demo
+
+          # Drive the server exactly as Claude Desktop launches it: the argv
+          # from the manifest, with the configured folder as a positional root.
+          echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"avc_projects_list","arguments":{}}}' \
+            | /tmp/bundle/server/avc mcp serve --tools standard --compact /tmp/projects > /tmp/rpc.json
+          cat /tmp/rpc.json
+
+          python3 - <<'EOF'
+          import json
+          m = json.load(open("/tmp/rpc.json"))
+          if "error" in m:
+              raise SystemExit(f"server returned an error: {m['error']}")
+          found = json.loads(m["result"]["content"][0]["text"])["projects"]
+          names = [p["name"] for p in found]
+          if names != ["demo"]:
+              raise SystemExit(f"discovered {names}, expected ['demo']")
+          print("bundled server discovered:", names)
+          EOF
+
   extension:
     name: AVC Extension
     runs-on: ubuntu-latest
