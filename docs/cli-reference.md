@@ -175,6 +175,45 @@ by the web UI at `/api/timeline`.
 
 ---
 
+## `avc mcp serve [search-root...]`
+
+Start the MCP server over stdio, exposing AVC operations as agent tools.
+
+```bash
+avc mcp serve                          # project resolved from the working directory
+avc mcp serve --tools core             # advertise a smaller tool set
+avc mcp serve ~/Projects ~/work        # search folders instead of a working directory
+```
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--tools <tier>` | Tool set to advertise: `core` (4), `standard` (11, default), `full` (~27) |
+| `--compact` | Emit compact JSON instead of pretty-printed |
+
+**Resolving the project.** In order of precedence:
+
+1. The `AVC_PROJECT` environment variable, when set
+2. A `.avc/` directory found by walking up from the working directory
+3. The search roots given as positional arguments
+
+**Search roots.** A host such as Claude Desktop launches the server outside any
+project, so there is no working directory to resolve from. Positional arguments
+name directories to search for AVC projects, bounded to four levels deep and
+skipping `node_modules`, `vendor`, `build` and hidden directories.
+
+- **Exactly one project found** — it is selected automatically. Nothing else changes.
+- **Several found** — no project is selected until the agent calls `avc_project_use`. Tools that need one return an error naming that path forward rather than failing blankly.
+- **None found** — `avc_init` is advertised so a directory can be set up without leaving the conversation.
+
+`avc_projects_list` and `avc_project_use` are advertised only when search roots
+are configured; with a single resolved project they would have nothing to do.
+A project-bound server never exposes the whole filesystem: `avc_project_use`
+only accepts projects discovered beneath the configured roots.
+
+---
+
 ## `avc hook pre-edit`
 
 Checkpoint the project before an agent's first edit of a session. Designed to

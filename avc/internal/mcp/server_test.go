@@ -66,7 +66,7 @@ func TestServe_SurvivesOversizedRequestAndKeepsServing(t *testing.T) {
 	input := huge + "\n" + pingReq
 
 	var out bytes.Buffer
-	if err := serve(strings.NewReader(input), &out, "", false, "standard"); err != nil {
+	if err := serve(strings.NewReader(input), &out, "", nil, false, "standard"); err != nil {
 		t.Fatalf("serve: %v", err)
 	}
 
