@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/trevarix/agentic-vc/avc/internal/bisect"
 	"github.com/spf13/cobra"
+	"github.com/trevarix/agentic-vc/avc/internal/bisect"
 )
 
 var (

@@ -51,9 +51,9 @@ func TestIgnoreLayering_RootRuleAppliesToLiveBranch(t *testing.T) {
 	// add a WORKSPACE-only rule. Create files matching each in the workspace.
 	writeFile(t, projectRoot, ".avcignore", "# project ignores\nlogs/\n")
 	writeFile(t, ws, ".avcignore", "# project ignores\nmedia/\n")
-	writeFile(t, ws, "logs/run.txt", "log output")   // matches the fresh ROOT rule
-	writeFile(t, ws, "media/pic.bin", "bytes")        // matches the WORKSPACE rule
-	writeFile(t, ws, "keep.go", "package main\n")      // tracked
+	writeFile(t, ws, "logs/run.txt", "log output") // matches the fresh ROOT rule
+	writeFile(t, ws, "media/pic.bin", "bytes")     // matches the WORKSPACE rule
+	writeFile(t, ws, "keep.go", "package main\n")  // tracked
 
 	snap, err := snapshot.Create(projectRoot, "layered", "", "", b.ID, ws)
 	if err != nil {

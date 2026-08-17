@@ -1,12 +1,13 @@
 // Package tests — Phase 8: Portability & Performance tests.
 //
 // Covers:
-//   8.1 avc export / avc import: round-trip export → import, manifest correctness,
-//       branch-filtered export, version check on import
-//   8.2 Workspace hardlink/reflink: branch creation uses optimised copy (hardlink
-//       where possible, byte-copy as fallback) and produces a warm stat cache
-//   8.3 MCP tool tiers: CoreTools has 4 tools, StandardTools has 12, AllTools > 12,
-//       ToolsForTier resolves names correctly
+//
+//	8.1 avc export / avc import: round-trip export → import, manifest correctness,
+//	    branch-filtered export, version check on import
+//	8.2 Workspace hardlink/reflink: branch creation uses optimised copy (hardlink
+//	    where possible, byte-copy as fallback) and produces a warm stat cache
+//	8.3 MCP tool tiers: CoreTools has 4 tools, StandardTools has 12, AllTools > 12,
+//	    ToolsForTier resolves names correctly
 package tests
 
 import (

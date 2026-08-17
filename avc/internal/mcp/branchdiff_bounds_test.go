@@ -18,11 +18,11 @@ func bigPreviewResult(files int) *diffpkg.Result {
 	r := &diffpkg.Result{FromSnapshotID: "snap-from", ToSnapshotID: "snap-to"}
 	for i := 0; i < files; i++ {
 		r.Files = append(r.Files, &diffpkg.FileDiff{
-			Path:        fmt.Sprintf("src/file%03d.go", i),
-			Type:        diffpkg.Modified,
-			LinesAdded:  400,
+			Path:         fmt.Sprintf("src/file%03d.go", i),
+			Type:         diffpkg.Modified,
+			LinesAdded:   400,
 			LinesRemoved: 1,
-			DiffPreview: preview,
+			DiffPreview:  preview,
 		})
 	}
 	return r

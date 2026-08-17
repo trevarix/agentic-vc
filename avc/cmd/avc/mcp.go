@@ -6,8 +6,8 @@ package avc
 import (
 	"os"
 
-	"github.com/trevarix/agentic-vc/avc/internal/mcp"
 	"github.com/spf13/cobra"
+	"github.com/trevarix/agentic-vc/avc/internal/mcp"
 )
 
 var (

@@ -9,8 +9,8 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/trevarix/agentic-vc/avc/internal/web"
 	"github.com/spf13/cobra"
+	"github.com/trevarix/agentic-vc/avc/internal/web"
 )
 
 var (

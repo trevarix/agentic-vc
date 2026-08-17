@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/trevarix/agentic-vc/avc/internal/trash"
 	"github.com/spf13/cobra"
+	"github.com/trevarix/agentic-vc/avc/internal/trash"
 )
 
 var trashOlderThan string

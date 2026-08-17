@@ -10,8 +10,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/trevarix/agentic-vc/avc/internal/annotate"
 	"github.com/spf13/cobra"
+	"github.com/trevarix/agentic-vc/avc/internal/annotate"
 )
 
 var annotateCmd = &cobra.Command{

@@ -9,9 +9,9 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/spf13/cobra"
 	branchpkg "github.com/trevarix/agentic-vc/avc/internal/branch"
 	"github.com/trevarix/agentic-vc/avc/internal/fileutil"
-	"github.com/spf13/cobra"
 )
 
 var checkIgnoreCmd = &cobra.Command{

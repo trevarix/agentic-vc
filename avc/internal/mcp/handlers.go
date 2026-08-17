@@ -232,11 +232,11 @@ func toolList(projectRoot string, args map[string]any) (any, error) {
 	defer store.Close()
 
 	f := db.SnapshotFilter{
-		Query:    strArg(args, "search"),
+		Query:     strArg(args, "search"),
 		AgentName: strArg(args, "agent"),
-		FilePath: strArg(args, "changed"),
-		Tag:      strArg(args, "tag"),
-		Limit:    intArg(args, "limit"),
+		FilePath:  strArg(args, "changed"),
+		Tag:       strArg(args, "tag"),
+		Limit:     intArg(args, "limit"),
 	}
 
 	// Default to active branch unless --all or any filter is set.
@@ -1157,12 +1157,12 @@ func toolStatus(projectRoot string) (any, error) {
 
 	if headErr != nil {
 		return map[string]any{
-			"branch":        branchName,
-			"snapshot_id":   "",
+			"branch":         branchName,
+			"snapshot_id":    "",
 			"snapshot_label": "",
-			"files":         []any{},
-			"changed_count": 0,
-			"message":       "No snapshots yet. Run avc_snapshot to start tracking.",
+			"files":          []any{},
+			"changed_count":  0,
+			"message":        "No snapshots yet. Run avc_snapshot to start tracking.",
 		}, nil
 	}
 

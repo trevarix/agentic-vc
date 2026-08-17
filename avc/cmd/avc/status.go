@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/spf13/cobra"
 	branchpkg "github.com/trevarix/agentic-vc/avc/internal/branch"
 	"github.com/trevarix/agentic-vc/avc/internal/config"
 	"github.com/trevarix/agentic-vc/avc/internal/db"
 	"github.com/trevarix/agentic-vc/avc/internal/diff"
 	"github.com/trevarix/agentic-vc/avc/internal/policy"
-	"github.com/spf13/cobra"
 )
 
 var statusCmd = &cobra.Command{
@@ -80,11 +80,11 @@ func runStatus(cmd *cobra.Command, args []string) error {
 			}
 		}
 		return json.NewEncoder(os.Stdout).Encode(map[string]any{
-			"branch":        branchName,
-			"snapshot_id":   head.ID,
+			"branch":         branchName,
+			"snapshot_id":    head.ID,
 			"snapshot_label": head.Label,
-			"files":         files,
-			"changed_count": len(result.Files),
+			"files":          files,
+			"changed_count":  len(result.Files),
 		})
 	}
 

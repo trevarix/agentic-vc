@@ -166,7 +166,7 @@ func AllTools() []Tool {
 			},
 		},
 		{
-			Name: "avc_info",
+			Name:        "avc_info",
 			Description: "Get detailed information about a snapshot, including the full list of tracked files.",
 			InputSchema: InputSchema{
 				Type: "object",
@@ -177,7 +177,7 @@ func AllTools() []Tool {
 			},
 		},
 		{
-			Name: "avc_delete",
+			Name:        "avc_delete",
 			Description: "Permanently delete a snapshot and its file records. Cannot be undone.",
 			InputSchema: InputSchema{
 				Type: "object",
@@ -210,7 +210,7 @@ func AllTools() []Tool {
 			InputSchema: InputSchema{Type: "object"},
 		},
 		{
-			Name: "avc_branch_switch",
+			Name:        "avc_branch_switch",
 			Description: "Switch the active branch. Does not modify any files — use avc_restore to roll the workspace to a specific snapshot.",
 			InputSchema: InputSchema{
 				Type: "object",
@@ -432,7 +432,7 @@ func AllTools() []Tool {
 			},
 		},
 		{
-			Name: "avc_untag_snapshot",
+			Name:        "avc_untag_snapshot",
 			Description: "Remove a tag from a snapshot. No-op if the tag was not set.",
 			InputSchema: InputSchema{
 				Type: "object",

@@ -211,13 +211,13 @@ func TestValidateBranchName_RejectsPathTraversal(t *testing.T) {
 // colons, asterisks, and other shell-special characters are rejected.
 func TestValidateBranchName_RejectsIllegalCharacters(t *testing.T) {
 	illegal := []string{
-		"feat auth",       // space
-		"feat:auth",       // colon
-		"feat*",           // asterisk
-		"feat?",           // question mark
-		"feat|pipe",       // pipe
-		"feat<redir",      // redirect
-		"feat>redir",      // redirect
+		"feat auth",  // space
+		"feat:auth",  // colon
+		"feat*",      // asterisk
+		"feat?",      // question mark
+		"feat|pipe",  // pipe
+		"feat<redir", // redirect
+		"feat>redir", // redirect
 	}
 	for _, name := range illegal {
 		if err := branch.ValidateBranchName(name); err == nil {
@@ -456,9 +456,9 @@ func TestMerge_Conflict_BaseContentIsCorrect(t *testing.T) {
 
 	// Extract the text between the base marker and the separator.
 	const baseMarker = "||||||| base (common ancestor)\n"
-	const sepMarker  = "=======\n"
+	const sepMarker = "=======\n"
 	baseIdx := strings.Index(content, baseMarker)
-	sepIdx  := strings.Index(content, sepMarker)
+	sepIdx := strings.Index(content, sepMarker)
 	if baseIdx < 0 || sepIdx < 0 || baseIdx >= sepIdx {
 		t.Fatalf("markers not in expected order in:\n%s", content)
 	}

@@ -43,7 +43,7 @@ type Step struct {
 	SnapshotID string `json:"snapshot_id"`
 	Label      string `json:"label"`
 	ExitCode   int    `json:"exit_code"`
-	Verdict    string `json:"verdict"` // "good" | "bad" | "skip"
+	Verdict    string `json:"verdict"`   // "good" | "bad" | "skip"
 	Remaining  int    `json:"remaining"` // candidates still in the search window
 }
 
@@ -60,15 +60,15 @@ type Options struct {
 
 // Result is the outcome of a bisect run.
 type Result struct {
-	FirstBadID    string           `json:"first_bad_id"`
-	FirstBadLabel string           `json:"first_bad_label"`
-	PredecessorID string           `json:"predecessor_id"`
-	Steps         int              `json:"steps"`
-	Skipped       []string         `json:"skipped,omitempty"`
-	Summary       string           `json:"summary,omitempty"` // change summary of the first bad snapshot
-	Diff          *diffpkg.Result  `json:"-"`                 // first bad snapshot vs its predecessor
-	Ambiguous     bool             `json:"ambiguous"`         // skips prevented exact narrowing
-	Message       string           `json:"message,omitempty"`
+	FirstBadID    string          `json:"first_bad_id"`
+	FirstBadLabel string          `json:"first_bad_label"`
+	PredecessorID string          `json:"predecessor_id"`
+	Steps         int             `json:"steps"`
+	Skipped       []string        `json:"skipped,omitempty"`
+	Summary       string          `json:"summary,omitempty"` // change summary of the first bad snapshot
+	Diff          *diffpkg.Result `json:"-"`                 // first bad snapshot vs its predecessor
+	Ambiguous     bool            `json:"ambiguous"`         // skips prevented exact narrowing
+	Message       string          `json:"message,omitempty"`
 }
 
 // Run executes the bisect. The [run] enabled gate applies exactly as it does
