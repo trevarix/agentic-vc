@@ -81,6 +81,11 @@ snapshot:
 # Requires a public GitHub repo named "homebrew-tap" under the trevarix org.
 brews:
   - name: avc
+    # Never publish a formula for a prerelease. Without this, tagging
+    # v0.5.0-rc1 would hand the release candidate to every user on their next
+    # `brew upgrade` — silently, and with no way for them to know they had
+    # opted into a rehearsal.
+    skip_upload: "auto"
     repository:
       owner: trevarix
       name: homebrew-tap
@@ -103,7 +108,10 @@ brews:
 #   scoop install avc
 # Requires a public GitHub repo named "scoop-bucket" under the trevarix org.
 scoops:
-  - repository:
+  - # Same as the Homebrew formula above: a prerelease must not reach users
+    # who only ever asked for stable releases.
+    skip_upload: "auto"
+    repository:
       owner: trevarix
       name: scoop-bucket
       branch: main

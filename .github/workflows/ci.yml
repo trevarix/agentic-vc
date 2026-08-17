@@ -98,6 +98,27 @@ jobs:
           print("bundled server discovered:", names)
           EOF
 
+  # Schema-validate the Claude plugin manifest. The Go tests check that the
+  # paths it declares resolve and that its version tracks the changelog; this
+  # catches what they cannot — unknown keys and wrong types, judged against the
+  # spec the CLI itself enforces.
+  plugin-manifest:
+    name: Claude plugin manifest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # Pinned deliberately. The accepted schema moves with the CLI — a field
+      # valid in one version is rejected by an older one (displayName needs
+      # 2.1.143+, for instance) — so an unpinned install would fail builds on
+      # changes nobody made. Bump this when you want the newer schema.
+      - run: npm install -g @anthropic-ai/claude-code@2.1.128
+
+      - run: claude plugin validate .
+
   extension:
     name: AVC Extension
     runs-on: ubuntu-latest
