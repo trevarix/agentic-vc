@@ -91,8 +91,19 @@ When this skill is invoked with a version argument (e.g. `0.3.0`):
      ```
    - Write the file. Do not change any other part of CHANGELOG.md.
 
-8. **Show a summary**
+8. **Bump the Claude plugin manifest**
+   - Set `version` in `.claude-plugin/plugin.json` to the same version.
+   - This is not optional bookkeeping. Claude pins an installed plugin to that
+     string and ships no update until it changes, so a release that bumps the
+     changelog alone leaves every existing plugin user stranded on the old
+     version with no signal that anything happened.
+   - `TestPluginVersionMatchesChangelog` in `avc/tests/plugin_manifest_test.go`
+     fails the build while the two disagree, so skipping this breaks CI.
+   - Change only the `version` field. Leave the rest of the manifest alone.
+
+9. **Show a summary**
    - Display the new versioned section to the user.
+   - Confirm the manifest bump: `.claude-plugin/plugin.json` → `<version>`.
    - Remind them to review and edit before tagging:
      > Review the entries above, edit as needed, then tag with `git tag v<version>` to trigger the release workflow.
 
@@ -100,8 +111,9 @@ When this skill is invoked with a version argument (e.g. `0.3.0`):
 
 ## Rules
 
-- Never commit, stage, or tag. Write the file only.
+- Never commit, stage, or tag. Write the files only.
 - Never modify anything in CHANGELOG.md outside the `[Unreleased]` block.
+- Never modify anything in `.claude-plugin/plugin.json` outside the `version` field.
 - Always use today's date (available in system context) for the release date.
 - If a commit message is ambiguous or uncategorisable, put it under `### Changed` rather than dropping it.
 - Deduplicate entries that appear more than once (same subject after prefix stripping).

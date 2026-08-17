@@ -94,6 +94,46 @@ jobs:
           gh release upload "$GITHUB_REF_NAME" dist/mcpb/*.mcpb \
             --repo "$GITHUB_REPOSITORY" --clobber
 
+  # Move plugin users to this release by pinning the marketplace at it. The
+  # marketplace lives in another repository, so nothing here can notice when
+  # its pin goes stale — hence automation rather than a checklist entry.
+  #
+  # Two gates, because this is the one step that reaches existing users
+  # without them asking:
+  #
+  #   1. Prereleases are skipped. goreleaser's `prerelease: auto` treats any
+  #      hyphenated tag as a prerelease, so `v0.5.0-rc1` publishes binaries
+  #      and bundles for you to install and try while leaving every existing
+  #      plugin user where they are.
+  #   2. The `marketplace` environment requires a reviewer. Only this job
+  #      waits — the release, its binaries, and the bundles are already
+  #      published, so a pending approval never blocks a download.
+  #
+  # If it does go wrong, re-pinning is a one-line revert that reaches users on
+  # their next marketplace update. Unlike a published binary, this is undoable.
+  pin-marketplace:
+    name: Pin marketplace to this release
+    needs: [release, desktop-extension]
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    environment: marketplace
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pin the plugin ref
+        env:
+          # Fine-grained PAT with "Contents: write" on trevarix/claude-marketplace.
+          # Leave unset to skip the pin — the release still succeeds, and plugin
+          # users stay on whatever ref is currently pinned.
+          GH_TOKEN: ${{ secrets.MARKETPLACE_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "MARKETPLACE_TOKEN is not set — skipping the marketplace pin."
+            echo "Plugin users remain on the previously pinned ref."
+            exit 0
+          fi
+          python3 scripts/pin-marketplace.py "$GITHUB_REF_NAME"
+
   # VSCode extension is built separately — it does not go through goreleaser.
   build-extension:
     name: Build VSCode extension

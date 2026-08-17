@@ -192,3 +192,57 @@ feat: add avc annotate command
 fix: exclude .avc/ directory from snapshot walk
 docs: clarify branch workspace lifecycle
 ```
+
+---
+
+## Releasing
+
+Most of a release runs itself. Only two steps need a person, and both need
+judgement rather than memory.
+
+**1. Write the changelog.** Run `/create-changelog <version>`. It moves the
+`[Unreleased]` entries into a versioned section and bumps `version` in
+`.claude-plugin/plugin.json` to match. Review the prose before continuing —
+entries should read as release notes, not commit subjects. Commit both files.
+
+The manifest bump is not cosmetic: Claude pins an installed plugin to that
+version string and ships no update until it changes. `TestPluginVersionMatchesChangelog`
+fails the build while the two disagree, so a forgotten bump cannot ship.
+
+**2. Tag.** `git tag v<version> && git push origin v<version>`. Everything
+downstream is automatic:
+
+| Artifact | Produced by |
+|----------|-------------|
+| Cross-platform binaries, checksums, cosign signature | goreleaser |
+| Homebrew formula, Scoop manifest | goreleaser (needs `HOMEBREW_TAP_TOKEN`, `SCOOP_BUCKET_TOKEN`) |
+| `.mcpb` Claude Desktop bundles, one per platform | `desktop-extension` job |
+| `.vsix` VSCode extension | `build-extension` job |
+| Marketplace pinned to the new tag | `pin-marketplace` job (needs `MARKETPLACE_TOKEN`) |
+
+### Rehearsing a release
+
+Tag a prerelease — any tag containing a hyphen, such as `v0.5.0-rc1`. goreleaser
+marks it as a prerelease, and the `pin-marketplace` job skips it. Binaries and
+bundles are built and attached so you can install and try them, while every
+existing plugin user stays exactly where they are.
+
+### The marketplace pin
+
+`pin-marketplace` updates `trevarix/claude-marketplace` to point at the new tag.
+It is the one step that reaches existing users without them asking, so it waits
+on the `marketplace` GitHub environment for a reviewer. Only that job waits —
+the release and its artifacts are already published, so an unapproved pin never
+blocks a download.
+
+Without `MARKETPLACE_TOKEN` set the job skips and the release still succeeds;
+plugin users simply stay on the previously pinned ref.
+
+If a release turns out to be bad, re-pin to the previous tag:
+
+```bash
+python scripts/pin-marketplace.py v<previous> # --dry-run to preview
+```
+
+Users move back on their next marketplace update. Unlike a published binary,
+the pin is fully reversible.
