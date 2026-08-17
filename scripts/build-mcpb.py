@@ -67,7 +67,14 @@ def manifest(version: str, platform: str) -> dict:
 
 
 def build_binary(goos: str, goarch: str, out_path: Path, version: str) -> None:
-    """Cross-compile the avc binary for one target."""
+    """Cross-compile the avc binary for one target.
+
+    out_path must be absolute: this runs with cwd=avc/, so a relative -o would
+    be written under avc/ rather than where the caller asked for it.
+    """
+    if not out_path.is_absolute():
+        raise SystemExit(f"internal error: build output path {out_path} is not absolute")
+
     env = dict(os.environ)
     env.update({"GOOS": goos, "GOARCH": goarch, "CGO_ENABLED": "0"})
     subprocess.run(
@@ -82,6 +89,11 @@ def build_binary(goos: str, goarch: str, out_path: Path, version: str) -> None:
         env=env,
         check=True,
     )
+
+    # go build can exit 0 without producing the file the caller expected — a
+    # relative -o resolved against the wrong directory did exactly that.
+    if not out_path.is_file():
+        raise SystemExit(f"go build reported success but {out_path} does not exist")
 
 
 def write_bundle(bundle_path: Path, manifest_data: dict, binary: Path, binary_name: str) -> None:
@@ -105,7 +117,10 @@ def main() -> int:
         return 2
 
     version = sys.argv[1].lstrip("v")
-    outdir = Path(sys.argv[2]) if len(sys.argv) > 2 else REPO_ROOT / "dist" / "mcpb"
+    # Resolved before use: the go build below runs with cwd=avc/, so a relative
+    # output path would put the binary under avc/ while everything here looks
+    # for it relative to the caller's directory.
+    outdir = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else REPO_ROOT / "dist" / "mcpb"
     staging = outdir / ".build"
     staging.mkdir(parents=True, exist_ok=True)
 
