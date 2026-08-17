@@ -1,6 +1,6 @@
 {
   "name": "agentic-vc",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Local version control built for AI agents. Snapshot, diff, branch, and merge — without the complexity of Git.",
   "author": {
     "name": "TREVARIX Corp.",
