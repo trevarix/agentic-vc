@@ -1,0 +1,49 @@
+{
+  "manifest_version": "0.3",
+  "name": "avc",
+  "display_name": "AVC — Agentic Version Control",
+  "version": "0.0.0",
+  "description": "Snapshot, diff, branch, and merge your projects — version control built for AI agents.",
+  "long_description": "AVC gives Claude the ability to review and recover your work: see what agents changed session by session, diff any two points in time, and roll back when something breaks. Point it at the folders your projects live in.",
+  "author": {
+    "name": "TREVARIX Corp.",
+    "url": "https://trevarix.com"
+  },
+  "homepage": "https://avc.trevarix.com",
+  "documentation": "https://avc.trevarix.com",
+  "support": "https://github.com/trevarix/agentic-vc/issues",
+  "license": "AGPL-3.0-or-later",
+  "keywords": [
+    "version-control",
+    "snapshots",
+    "agents",
+    "git-alternative"
+  ],
+  "server": {
+    "type": "binary",
+    "entry_point": "server/avc",
+    "mcp_config": {
+      "command": "server/avc",
+      "args": [
+        "mcp",
+        "serve",
+        "--tools",
+        "standard",
+        "${user_config.project_folders}"
+      ],
+      "env": {}
+    }
+  },
+  "user_config": {
+    "project_folders": {
+      "type": "directory",
+      "title": "Project folders",
+      "description": "Folders to search for AVC projects, such as your code directory. AVC looks up to four levels deep. A folder that is not an AVC project yet can be set up from the conversation.",
+      "multiple": true,
+      "required": true
+    }
+  },
+  "compatibility": {
+    "platforms": []
+  }
+}

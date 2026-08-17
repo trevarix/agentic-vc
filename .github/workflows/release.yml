@@ -70,6 +70,30 @@ jobs:
           { cat .goreleaser-release-notes.md; echo; echo "$existing"; } > /tmp/release-body.md
           gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --notes-file /tmp/release-body.md
 
+  # Claude Desktop extension bundles. Desktop chat cannot run a plugin's MCP
+  # server — plugins contribute skills there and nothing else — so a .mcpb
+  # bundle is the only way Desktop users get the avc_* tools.
+  desktop-extension:
+    name: Build and attach Claude Desktop bundles
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: avc/go.mod
+          cache-dependency-path: avc/go.sum
+
+      - name: Build .mcpb bundles
+        run: python3 scripts/build-mcpb.py "${GITHUB_REF_NAME}" dist/mcpb
+
+      - name: Upload bundles to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" dist/mcpb/*.mcpb \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
   # VSCode extension is built separately — it does not go through goreleaser.
   build-extension:
     name: Build VSCode extension
