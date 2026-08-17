@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -20,6 +21,7 @@ type pluginManifest struct {
 	Version  string   `json:"version"`
 	Skills   []string `json:"skills"`
 	Commands string   `json:"commands"`
+	Hooks    string   `json:"hooks"`
 }
 
 // repoRoot returns the repository root, two levels above avc/tests.
@@ -97,6 +99,61 @@ func TestPluginComponentPathsResolve(t *testing.T) {
 		if !info.IsDir() {
 			t.Errorf("plugin.json references %s, which is not a directory", rel)
 		}
+	}
+}
+
+// TestPluginHooksInvokeAnExistingCommand guards the hook wiring. The hook file
+// names an avc subcommand as a bare string, so a rename would break every
+// install silently — the hook simply fails at edit time on the user's machine.
+func TestPluginHooksInvokeAnExistingCommand(t *testing.T) {
+	manifest, root := readPluginManifest(t)
+
+	if manifest.Hooks == "" {
+		t.Fatal("plugin.json declares no hooks file")
+	}
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(manifest.Hooks)))
+	if err != nil {
+		t.Fatalf("read hooks file %s: %v", manifest.Hooks, err)
+	}
+
+	var config struct {
+		Hooks map[string][]struct {
+			Matcher string `json:"matcher"`
+			Hooks   []struct {
+				Type    string `json:"type"`
+				Command string `json:"command"`
+			} `json:"hooks"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatalf("parse hooks file: %v", err)
+	}
+
+	events, ok := config.Hooks["PreToolUse"]
+	if !ok || len(events) == 0 {
+		t.Fatal("hooks file declares no PreToolUse entries")
+	}
+
+	found := false
+	for _, event := range events {
+		for _, h := range event.Hooks {
+			if h.Command == "" {
+				continue
+			}
+			found = true
+			// The command must be one this binary actually serves.
+			if !strings.HasPrefix(h.Command, "avc hook ") {
+				t.Errorf("hook command %q does not invoke an avc hook subcommand", h.Command)
+				continue
+			}
+			sub := strings.TrimPrefix(h.Command, "avc hook ")
+			if sub != "pre-edit" {
+				t.Errorf("hook command %q names unknown subcommand %q", h.Command, sub)
+			}
+		}
+	}
+	if !found {
+		t.Error("PreToolUse entries declare no command")
 	}
 }
 

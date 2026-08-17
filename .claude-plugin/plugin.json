@@ -21,6 +21,7 @@
     "./plugin/skills/"
   ],
   "commands": "./plugin/commands/",
+  "hooks": "./plugin/hooks/hooks.json",
   "mcpServers": {
     "avc": {
       "command": "avc",

@@ -11,6 +11,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 - AVC installs into Claude Code as a plugin. Adding the `trevarix` marketplace and installing `agentic-vc` registers the MCP server and installs the AVC skills for every project at once, instead of running `avc init --skills` in each repository. The plugin also adds four slash commands: `/agentic-vc:snapshot`, `/agentic-vc:timeline`, `/agentic-vc:review-branch`, and `/agentic-vc:undo`.
 - A new `avc-setup` skill walks you through installing the `avc` binary and initializing a project whenever the `avc_*` tools are unavailable. Previously an agent that could not reach the AVC server had nothing to go on — the server simply failed to start when `avc` was not on your PATH.
+- Agent sessions are now checkpointed automatically. The plugin installs a hook that runs `avc hook pre-edit` before an agent's first file edit, saving the project as it stood before that session started. Safety no longer depends on the agent remembering to snapshot. The checkpoint is taken once per session, not once per edit, so history stays readable — and the hook never blocks an edit, even when AVC itself fails.
 
 ### Changed
 
