@@ -1,0 +1,25 @@
+{
+  "name": "agentic-vc",
+  "version": "0.2.0",
+  "description": "Local version control built for AI agents. Snapshot, diff, branch, and merge — without the complexity of Git.",
+  "author": {
+    "name": "TREVARIX Corp.",
+    "url": "https://trevarix.com"
+  },
+  "homepage": "https://avc.trevarix.com",
+  "repository": "https://github.com/trevarix/agentic-vc",
+  "license": "AGPL-3.0-or-later",
+  "keywords": [
+    "version-control",
+    "snapshots",
+    "agents",
+    "mcp",
+    "git-alternative"
+  ],
+  "mcpServers": {
+    "avc": {
+      "command": "avc",
+      "args": ["mcp", "serve", "--compact"]
+    }
+  }
+}
