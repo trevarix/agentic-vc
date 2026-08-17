@@ -2,7 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # dev is the integration branch: feature branches merge here first and
+    # main only receives merges from it. Without dev, nothing ever tests the
+    # combination of PRs sitting together — each one is verified against its
+    # own merge ref, and the merged result goes unchecked until it reaches
+    # main.
+    branches: [main, dev]
   pull_request:
 
 jobs:
