@@ -53,18 +53,22 @@ const maxLineBytes = 32 * 1024 * 1024
 
 // Serve runs the MCP server over stdin/stdout, blocking until EOF.
 //
-// projectRoot is the resolved AVC project root directory (.avc/ parent).
+// projectRoot is the resolved AVC project root directory (.avc/ parent); it is
+// empty when the server was launched without one.
+// roots are directories to search for AVC projects, used when the host has no
+// meaningful working directory (Claude Desktop). A non-empty projectRoot wins.
 // compact controls whether tool output JSON is compact or pretty-printed.
 // toolTier selects the advertised tool set: "core", "standard" (default), or "full".
-func Serve(projectRoot string, compact bool, toolTier string) error {
-	return serve(os.Stdin, os.Stdout, projectRoot, compact, toolTier)
+func Serve(projectRoot string, roots []string, compact bool, toolTier string) error {
+	return serve(os.Stdin, os.Stdout, projectRoot, roots, compact, toolTier)
 }
 
 // serve is Serve with the transport as parameters, so it can be exercised
 // with an in-memory pipe in tests.
-func serve(r io.Reader, w io.Writer, projectRoot string, compact bool, toolTier string) error {
+func serve(r io.Reader, w io.Writer, projectRoot string, roots []string, compact bool, toolTier string) error {
 	enc := json.NewEncoder(w)
 	reader := bufio.NewReaderSize(r, 64*1024)
+	sess := newSession(projectRoot, roots)
 
 	for {
 		line, tooLong, err := readLine(reader)
@@ -86,7 +90,7 @@ func serve(r io.Reader, w io.Writer, projectRoot string, compact bool, toolTier 
 				writeErrorNoID(enc, -32700, "parse error: "+jsonErr.Error())
 			} else if len(req.ID) != 0 {
 				// Notifications have no id — they require no response.
-				result, rpcErr := dispatch(projectRoot, compact, toolTier, req.Method, req.Params)
+				result, rpcErr := dispatch(sess, compact, toolTier, req.Method, req.Params)
 				resp := rpcResponse{JSONRPC: "2.0", ID: req.ID}
 				if rpcErr != nil {
 					resp.Error = rpcErr
@@ -142,7 +146,7 @@ func readLine(r *bufio.Reader) (line []byte, tooLong bool, err error) {
 }
 
 // dispatch routes a method to its handler.
-func dispatch(projectRoot string, compact bool, toolTier string, method string, rawParams json.RawMessage) (any, *rpcError) {
+func dispatch(sess *session, compact bool, toolTier string, method string, rawParams json.RawMessage) (any, *rpcError) {
 	switch method {
 	case "initialize":
 		return map[string]any{
@@ -156,12 +160,16 @@ func dispatch(projectRoot string, compact bool, toolTier string, method string, 
 		return map[string]any{}, nil
 
 	case "tools/list":
-		// When no AVC project is detected, expose an empty tool set so the agent
-		// cannot misuse snapshot/branch/merge tools on an uninitialised directory.
-		if projectRoot == "" {
-			return map[string]any{"tools": ProjectlessTools()}, nil
+		// Until a project is resolved, expose only the tools that resolve one,
+		// so snapshot/branch/merge cannot be misused on an uninitialised
+		// directory while the agent still has a way forward.
+		hasRoots := len(sess.roots) > 0
+		if sess.current == "" {
+			return map[string]any{"tools": ProjectlessTools(hasRoots)}, nil
 		}
-		return map[string]any{"tools": ToolsForTier(toolTier)}, nil
+		// The project tools stay available so the user can switch projects
+		// mid-conversation without restarting the server.
+		return map[string]any{"tools": append(ToolsForTier(toolTier), ProjectTools(hasRoots)...)}, nil
 
 	case "tools/call":
 		var p struct {
@@ -173,6 +181,19 @@ func dispatch(projectRoot string, compact bool, toolTier string, method string, 
 		}
 		if p.Arguments == nil {
 			p.Arguments = map[string]any{}
+		}
+		// Project-management tools run before a project is resolved — they are
+		// what resolves it.
+		if result, handled, err := dispatchProjectTool(sess, compact, p.Name, p.Arguments); handled {
+			if err != nil {
+				return nil, &rpcError{Code: -32000, Message: err.Error()}
+			}
+			return result, nil
+		}
+
+		projectRoot, err := sess.projectRoot()
+		if err != nil {
+			return nil, &rpcError{Code: -32000, Message: err.Error()}
 		}
 		result, err := dispatchTool(projectRoot, compact, p.Name, p.Arguments)
 		if err != nil {

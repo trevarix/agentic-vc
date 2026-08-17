@@ -23,12 +23,58 @@ type Property struct {
 	Description string `json:"description"`
 }
 
-// ProjectlessTools returns the tool set advertised when no AVC project is
-// detected. Empty — no AVC tools are exposed so the agent cannot misuse them
-// on an uninitialized directory. The user must run `avc init` from a terminal
-// and restart Claude Code to enable AVC.
-func ProjectlessTools() []Tool {
-	return []Tool{}
+// ProjectlessTools returns the tool set advertised when no AVC project has
+// been resolved. The snapshot, branch, and merge tools stay hidden so the
+// agent cannot misuse them on an uninitialized directory, but the tools that
+// resolve a project are exposed: without them the agent has no way out of the
+// state, which is how a host with no working directory otherwise dead-ends.
+func ProjectlessTools(hasRoots bool) []Tool {
+	return ProjectTools(hasRoots)
+}
+
+// ProjectTools returns the tools that decide which project the session acts
+// on. Listing and switching only make sense when the server was given search
+// roots to discover projects in; avc_init is always available, since a
+// directory that is not yet an AVC project can be set up anywhere.
+func ProjectTools(hasRoots bool) []Tool {
+	tools := []Tool{
+		{
+			Name: "avc_init",
+			Description: "Initialize AVC in a directory that is not yet an AVC project. " +
+				"Creates .avc/ with a database, default ignore rules, and config. " +
+				"Ask the user before calling this — it writes to their project root and adds .gitignore entries.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"path": {Type: "string", Description: "Absolute path of the directory to initialize"},
+				},
+				Required: []string{"path"},
+			},
+		},
+	}
+	if !hasRoots {
+		return tools
+	}
+	return append(tools,
+		Tool{
+			Name: "avc_projects_list",
+			Description: "List the AVC projects found in the configured search folders, " +
+				"marking which one tools currently act on.",
+			InputSchema: InputSchema{Type: "object", Properties: map[string]Property{}},
+		},
+		Tool{
+			Name: "avc_project_use",
+			Description: "Choose which AVC project the other tools act on, by name or absolute path. " +
+				"Call avc_projects_list first to see the options.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"project": {Type: "string", Description: "Project name or absolute path, as returned by avc_projects_list"},
+				},
+				Required: []string{"project"},
+			},
+		},
+	)
 }
 
 // ToolsForTier returns the tool set for the named tier.

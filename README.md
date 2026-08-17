@@ -206,6 +206,14 @@ AVC runs as an MCP (Model Context Protocol) server over stdio. Start it with:
 avc mcp serve
 ```
 
+The server resolves the project from the working directory. For a host that has no meaningful working directory — Claude Desktop, for instance — pass one or more folders to search for projects instead:
+
+```bash
+avc mcp serve ~/Projects ~/work
+```
+
+The server then discovers the AVC projects beneath those folders. With exactly one, it selects that project automatically and nothing changes for you. With several, it exposes `avc_projects_list` and `avc_project_use` so you can say "switch to the api project" mid-conversation, and tools that need a project explain how to pick one rather than failing with a bare error. A directory that isn't an AVC project yet can be set up in place with `avc_init` — no trip to a terminal.
+
 ### Install as a Claude plugin
 
 In Claude Code, add the marketplace and install the plugin once — it applies to every project, so you don't run `avc init --skills` per repo:
@@ -251,6 +259,9 @@ Tools are exposed in three tiers (`avc mcp serve --tools core|standard|full`; `s
 
 | Tool | Tier | Description |
 |------|------|-------------|
+| `avc_init` | always | Initialize AVC in a directory that is not yet a project |
+| `avc_projects_list` | with roots | List AVC projects found in the configured search folders |
+| `avc_project_use` | with roots | Choose which project the other tools act on |
 | `avc_snapshot` | core | Save a snapshot (workspace-aware on agent branches; accepts `session_id`/`task`) |
 | `avc_list` | core | List snapshots on the active branch |
 | `avc_diff` | core | Diff two snapshots |

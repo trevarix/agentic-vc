@@ -9,6 +9,12 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- The MCP server can now work across several projects at once. Point it at one or more folders — `avc mcp serve ~/Projects` — and it discovers the AVC projects underneath, so an agent host with no working directory of its own can still reach your work. With a single project it selects that one automatically and nothing changes; with several, you can switch between them mid-conversation by name.
+- `avc_init` lets an agent set up AVC in a directory that isn't a project yet, so pointing a tool at the wrong folder no longer means leaving the conversation for a terminal.
+- When no project has been selected, the server now advertises the tools that select one instead of advertising nothing at all. Previously an agent in that state had no move to make and no explanation to offer.
+
+### Added
+
 - AVC installs into Claude Code as a plugin. Adding the `trevarix` marketplace and installing `agentic-vc` registers the MCP server and installs the AVC skills for every project at once, instead of running `avc init --skills` in each repository. The plugin also adds four slash commands: `/agentic-vc:snapshot`, `/agentic-vc:timeline`, `/agentic-vc:review-branch`, and `/agentic-vc:undo`.
 - A new `avc-setup` skill walks you through installing the `avc` binary and initializing a project whenever the `avc_*` tools are unavailable. Previously an agent that could not reach the AVC server had nothing to go on — the server simply failed to start when `avc` was not on your PATH.
 - Agent sessions are now checkpointed automatically. The plugin installs a hook that runs `avc hook pre-edit` before an agent's first file edit, saving the project as it stood before that session started. Safety no longer depends on the agent remembering to snapshot. The checkpoint is taken once per session, not once per edit, so history stays readable — and the hook never blocks an edit, even when AVC itself fails.
