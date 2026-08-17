@@ -223,9 +223,17 @@ downstream is automatic:
 ### Rehearsing a release
 
 Tag a prerelease — any tag containing a hyphen, such as `v0.5.0-rc1`. goreleaser
-marks it as a prerelease, and the `pin-marketplace` job skips it. Binaries and
-bundles are built and attached so you can install and try them, while every
-existing plugin user stays exactly where they are.
+marks it as a prerelease, and three things then hold back automatically:
+
+| Channel | Prerelease behaviour |
+|---------|----------------------|
+| Homebrew formula, Scoop manifest | not published (`skip_upload: auto`) |
+| Plugin marketplace ref | not moved (`pin-marketplace` skipped) |
+| GitHub release, binaries, `.mcpb` bundles, `.vsix` | published and downloadable |
+
+So nobody is moved onto a release candidate by upgrading or by a marketplace
+refresh. You install the artifacts deliberately, from the release page, and
+everyone else stays on the last stable version.
 
 ### The marketplace pin
 
