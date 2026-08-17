@@ -206,6 +206,46 @@ AVC runs as an MCP (Model Context Protocol) server over stdio. Start it with:
 avc mcp serve
 ```
 
+The server resolves the project from the working directory. For a host that has no meaningful working directory — Claude Desktop, for instance — pass one or more folders to search for projects instead:
+
+```bash
+avc mcp serve ~/Projects ~/work
+```
+
+The server then discovers the AVC projects beneath those folders. With exactly one, it selects that project automatically and nothing changes for you. With several, it exposes `avc_projects_list` and `avc_project_use` so you can say "switch to the api project" mid-conversation, and tools that need a project explain how to pick one rather than failing with a bare error. A directory that isn't an AVC project yet can be set up in place with `avc_init` — no trip to a terminal.
+
+### Install as a Claude plugin
+
+In Claude Code, add the marketplace and install the plugin once — it applies to every project, so you don't run `avc init --skills` per repo:
+
+```
+/plugin marketplace add trevarix/claude-marketplace
+/plugin install agentic-vc@trevarix
+```
+
+This registers the MCP server and installs the AVC skills plus four slash commands: `/agentic-vc:snapshot`, `/agentic-vc:timeline`, `/agentic-vc:review-branch`, and `/agentic-vc:undo`.
+
+It also installs a `PreToolUse` hook that checkpoints the project before an agent's first edit of a session — one snapshot per session, taken whether or not the agent remembers to ask for it. See [`avc hook pre-edit`](docs/cli-reference.md).
+
+The plugin expects `avc` on your `PATH` and the project initialized with `avc init`. If either is missing, ask Claude to run the bundled `avc-setup` skill and it will walk you through both.
+
+> **Claude Desktop chat:** plugins contribute skills only — a plugin-bundled MCP server does not run there, so the `avc_*` tools will not appear from the plugin. Install the desktop extension below instead.
+
+### Install as a Claude Desktop extension
+
+Claude Desktop runs local MCP servers as *extensions*, not plugins. Download the `.mcpb` bundle for your platform from the [latest release](https://github.com/trevarix/agentic-vc/releases):
+
+| Platform | File |
+|----------|------|
+| macOS (Apple Silicon) | `avc-<version>-darwin-arm64.mcpb` |
+| macOS (Intel) | `avc-<version>-darwin-amd64.mcpb` |
+| Windows | `avc-<version>-windows-amd64.mcpb` |
+| Linux | `avc-<version>-linux-amd64.mcpb` / `-arm64` |
+
+Then in Claude Desktop: **Settings → Extensions → Advanced settings → Install Extension…** and select the file.
+
+The bundle contains the `avc` binary, so there is nothing else to install. On first install Desktop asks for **Project folders** — pick the directories your projects live in (`~/code`, say). AVC searches them up to four levels deep and works across every project it finds, so you can ask "what did my agents do in the api project yesterday?" without reconfiguring anything.
+
 ### Automatic setup with `--skills`
 
 `avc init --skills <framework>` writes the MCP config and agent instruction files for your framework:
@@ -226,7 +266,7 @@ Running `--skills` multiple times is safe — existing files are never overwritt
 
 ### MCP tools
 
-Tools are exposed in three tiers (`avc mcp serve --tier core|standard|full`; `standard` is the default) so agents with small context windows aren't handed every tool at once.
+Tools are exposed in three tiers (`avc mcp serve --tools core|standard|full`; `standard` is the default) so agents with small context windows aren't handed every tool at once.
 
 <details>
 <summary><strong>Full tool list (27 tools across core / standard / full)</strong></summary>
@@ -234,6 +274,9 @@ Tools are exposed in three tiers (`avc mcp serve --tier core|standard|full`; `st
 
 | Tool | Tier | Description |
 |------|------|-------------|
+| `avc_init` | always | Initialize AVC in a directory that is not yet a project |
+| `avc_projects_list` | with roots | List AVC projects found in the configured search folders |
+| `avc_project_use` | with roots | Choose which project the other tools act on |
 | `avc_snapshot` | core | Save a snapshot (workspace-aware on agent branches; accepts `session_id`/`task`) |
 | `avc_list` | core | List snapshots on the active branch |
 | `avc_diff` | core | Diff two snapshots |

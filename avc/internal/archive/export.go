@@ -28,12 +28,12 @@ const exportFormatVersion = "1"
 
 // Manifest is written as avc-export.json inside every bundle.
 type Manifest struct {
-	Version      string   `json:"version"`
-	ProjectName  string   `json:"project_name"`
-	ExportedAt   int64    `json:"exported_at"`
-	Branches     []string `json:"branches"`
-	SnapshotCount int     `json:"snapshot_count"`
-	ObjectCount  int      `json:"object_count"`
+	Version       string   `json:"version"`
+	ProjectName   string   `json:"project_name"`
+	ExportedAt    int64    `json:"exported_at"`
+	Branches      []string `json:"branches"`
+	SnapshotCount int      `json:"snapshot_count"`
+	ObjectCount   int      `json:"object_count"`
 }
 
 // ExportOptions controls what avc export includes.

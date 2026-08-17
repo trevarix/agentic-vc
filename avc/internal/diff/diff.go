@@ -14,7 +14,6 @@ import (
 	"github.com/trevarix/agentic-vc/avc/internal/objstore"
 )
 
-
 // ChangeType classifies how a file changed between two snapshots.
 type ChangeType string
 

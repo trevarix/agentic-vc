@@ -155,7 +155,7 @@ func mergeResultToMap(result *mergepkg.Result) map[string]any {
 		"conflicts":   result.Conflicts,
 		"clean":       result.Clean,
 		"skipped":     result.Skipped,
-		"files":        files,
+		"files":       files,
 	}
 	if result.PostMergeSnapshotID != "" {
 		m["post_merge_snapshot_id"] = result.PostMergeSnapshotID

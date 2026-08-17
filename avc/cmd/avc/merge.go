@@ -7,8 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	mergepkg "github.com/trevarix/agentic-vc/avc/internal/merge"
 	"github.com/spf13/cobra"
+	mergepkg "github.com/trevarix/agentic-vc/avc/internal/merge"
 )
 
 var mergePreview bool

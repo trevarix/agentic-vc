@@ -9,8 +9,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/trevarix/agentic-vc/avc/internal/db"
 	"github.com/spf13/cobra"
+	"github.com/trevarix/agentic-vc/avc/internal/db"
 )
 
 var logCmd = &cobra.Command{

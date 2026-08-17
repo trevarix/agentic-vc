@@ -2,7 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # dev is the integration branch: feature branches merge here first and
+    # main only receives merges from it. Without dev, nothing ever tests the
+    # combination of PRs sitting together — each one is verified against its
+    # own merge ref, and the merged result goes unchecked until it reaches
+    # main.
+    branches: [main, dev]
   pull_request:
 
 jobs:
@@ -24,6 +29,18 @@ jobs:
       - run: go mod tidy
       - run: go build ./...
       - run: go vet ./...
+      # Linux only: the Windows and macOS runners check out Go files with CRLF
+      # line endings, which gofmt reports as unformatted regardless of the
+      # actual formatting. One platform is enough to catch real drift.
+      - name: Format check
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean. Run: gofmt -w \$(find . -name '*.go')"
+            echo "$unformatted"
+            exit 1
+          fi
       - name: Test
         env:
           CGO_ENABLED: "0"
@@ -31,6 +48,76 @@ jobs:
         # ~100 tests) and Windows runners fsync SQLite WAL writes slowly —
         # give the suite real headroom rather than racing a tight budget.
         run: go test ./... -count=1 -timeout=600s
+
+  # Claude Desktop bundles. Cross-compiles every target because the failures
+  # this catches — a missing executable bit, a binary built for the wrong
+  # architecture, a bundle absent from the matrix — are invisible until a user
+  # installs the extension and it refuses to launch.
+  desktop-bundle:
+    name: Claude Desktop bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: avc/go.sum
+
+      - name: Build bundles
+        run: python3 scripts/build-mcpb.py 0.0.0-ci dist/mcpb
+
+      - name: Verify bundle structure
+        run: python3 scripts/verify-mcpb.py dist/mcpb
+
+      # unzip, not Python: it restores the mode stored in the archive, so
+      # launching the binary without a chmod proves the executable bit
+      # survives the round trip the way it will on a user's machine.
+      - name: Smoke-test the Linux bundle
+        run: |
+          unzip -q dist/mcpb/avc-0.0.0-ci-linux-amd64.mcpb -d /tmp/bundle
+          test -x /tmp/bundle/server/avc || { echo "bundled binary is not executable"; exit 1; }
+
+          mkdir -p /tmp/projects/demo
+          /tmp/bundle/server/avc init --yes /tmp/projects/demo
+
+          # Drive the server exactly as Claude Desktop launches it: the argv
+          # from the manifest, with the configured folder as a positional root.
+          echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"avc_projects_list","arguments":{}}}' \
+            | /tmp/bundle/server/avc mcp serve --tools standard --compact /tmp/projects > /tmp/rpc.json
+          cat /tmp/rpc.json
+
+          python3 - <<'EOF'
+          import json
+          m = json.load(open("/tmp/rpc.json"))
+          if "error" in m:
+              raise SystemExit(f"server returned an error: {m['error']}")
+          found = json.loads(m["result"]["content"][0]["text"])["projects"]
+          names = [p["name"] for p in found]
+          if names != ["demo"]:
+              raise SystemExit(f"discovered {names}, expected ['demo']")
+          print("bundled server discovered:", names)
+          EOF
+
+  # Schema-validate the Claude plugin manifest. The Go tests check that the
+  # paths it declares resolve and that its version tracks the changelog; this
+  # catches what they cannot — unknown keys and wrong types, judged against the
+  # spec the CLI itself enforces.
+  plugin-manifest:
+    name: Claude plugin manifest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # Pinned deliberately. The accepted schema moves with the CLI — a field
+      # valid in one version is rejected by an older one (displayName needs
+      # 2.1.143+, for instance) — so an unpinned install would fail builds on
+      # changes nobody made. Bump this when you want the newer schema.
+      - run: npm install -g @anthropic-ai/claude-code@2.1.128
+
+      - run: claude plugin validate .
 
   extension:
     name: AVC Extension

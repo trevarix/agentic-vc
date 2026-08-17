@@ -152,8 +152,8 @@ func WalkProject(root string, ignore *IgnoreRules) ([]string, error) {
 type ignorePattern struct {
 	raw      string   // original line (with any "!" / trailing "/"), for diagnostics
 	segments []string // pattern split on "/"; "**" segments match zero or more path segments
-	dirOnly  bool      // true if the pattern ended in "/" — only matches directories
-	negate   bool      // true if the pattern started with "!" — un-ignores a prior match
+	dirOnly  bool     // true if the pattern ended in "/" — only matches directories
+	negate   bool     // true if the pattern started with "!" — un-ignores a prior match
 }
 
 // compilePattern parses one non-comment, non-blank .avcignore line.

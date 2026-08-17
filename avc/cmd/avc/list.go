@@ -9,10 +9,10 @@ import (
 	"os"
 	"time"
 
+	"github.com/spf13/cobra"
 	branchpkg "github.com/trevarix/agentic-vc/avc/internal/branch"
 	"github.com/trevarix/agentic-vc/avc/internal/config"
 	"github.com/trevarix/agentic-vc/avc/internal/db"
-	"github.com/spf13/cobra"
 )
 
 // filter flags shared between listCmd and searchCmd.
@@ -90,11 +90,11 @@ func runList(cmd *cobra.Command, args []string) error {
 
 	// Build filter from flags.
 	f := db.SnapshotFilter{
-		Query:    listSearch,
+		Query:     listSearch,
 		AgentName: listAgent,
-		FilePath: listChanged,
-		Tag:      listTag,
-		Limit:    listLimit,
+		FilePath:  listChanged,
+		Tag:       listTag,
+		Limit:     listLimit,
 	}
 
 	// Date parsing.

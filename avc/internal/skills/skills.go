@@ -6,6 +6,7 @@
 package skills
 
 import (
+	"embed"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -152,16 +153,7 @@ func writeClaudeCode(projectRoot string, r *WriteResult) error {
 	r.Actions = append(r.Actions, fileAction("CLAUDE.md", action))
 
 	// Skill files — .claude/skills/avc-<name>/SKILL.md
-	for name, content := range claudeSkillFiles {
-		rel := ".claude/skills/" + name + "/SKILL.md"
-		path := filepath.Join(projectRoot, filepath.FromSlash(rel))
-		action, err := writeFileIfAbsent(path, content)
-		if err != nil {
-			return err
-		}
-		r.Actions = append(r.Actions, fileAction(rel, action))
-	}
-	return nil
+	return writeClaudeSkillFiles(projectRoot, r)
 }
 
 func writeClaudeDesktop(projectRoot string, r *WriteResult) error {
@@ -189,16 +181,7 @@ func writeClaudeDesktop(projectRoot string, r *WriteResult) error {
 	r.Actions = append(r.Actions, fileAction("CLAUDE.md", action))
 
 	// Skill files — .claude/skills/avc-<name>/SKILL.md
-	for name, content := range claudeSkillFiles {
-		rel := ".claude/skills/" + name + "/SKILL.md"
-		path := filepath.Join(projectRoot, filepath.FromSlash(rel))
-		action, err := writeFileIfAbsent(path, content)
-		if err != nil {
-			return err
-		}
-		r.Actions = append(r.Actions, fileAction(rel, action))
-	}
-	return nil
+	return writeClaudeSkillFiles(projectRoot, r)
 }
 
 func writeCursor(projectRoot string, r *WriteResult) error {
@@ -602,178 +585,61 @@ func writeFileIfAbsent(path, content string) (string, error) {
 
 // ─── Content: Claude Code skill files ────────────────────────────────────────
 
-var claudeSkillFiles = map[string]string{
-	"avc-snapshot": `---
-name: avc-snapshot
-description: Save an AVC snapshot before making changes — call this proactively, not on request
----
+// skillAssets holds the Claude skill files bundled into the binary. The AVC
+// Claude plugin publishes this same directory, so the skills installed by
+// `avc init --skills` and the skills shipped to plugin users cannot drift.
+//
+//go:embed assets/skills
+var skillAssets embed.FS
 
-Call **avc_snapshot** before making any code change. No exceptions.
+// skillAssetsRoot is the embedded directory holding one <name>/SKILL.md per skill.
+const skillAssetsRoot = "assets/skills"
 
-Do not assess whether the change is "small enough" or "easily reversible" — that judgement is not yours to make. The cost of an unnecessary snapshot is negligible. The cost of skipping one when it was needed is not.
-
-## How to call
-
-` + "```" + `json
-{
-  "label": "auto: before <what you are about to do>",
-  "agent_name": "claude",
-  "notes": "<brief description of the change planned>",
-  "session_id": "<stable ID for this conversation — reuse it on every snapshot>",
-  "task": "<one-line description of the overall task>"
+// bundledSkill is one skill file bundled into the binary.
+type bundledSkill struct {
+	Path    string // project-relative destination, e.g. .claude/skills/avc-run/SKILL.md
+	Content string
 }
-` + "```" + `
 
-Always pass ` + "`session_id`" + ` and ` + "`task`" + ` — they are how ` + "`avc timeline`" + ` groups your snapshots into a reviewable story for the user. Use the same ` + "`session_id`" + ` for the whole conversation and the same ` + "`task`" + ` for the whole task, not per-step values.
-
-## Label format — always use the ` + "`auto:`" + ` prefix
-
-All agent-created snapshots MUST start with ` + "`auto:`" + ` so they are distinguishable from user-created snapshots in ` + "`avc list`" + `.
-
-The ` + "`<action>`" + ` part should be 2–5 words describing the specific change:
-- CORRECT: ` + "`auto: before auth middleware refactor`" + `
-- WRONG: ` + "`auth routes added`" + ` (missing prefix)
-- WRONG: ` + "`auto: making changes to the authentication system`" + ` (too vague, too long)
-
-## On failure
-
-If the task breaks something, do NOT attempt repeated fixes. Call **avc_restore** immediately to return to the last good snapshot, then retry from a clean state.
-`,
-
-	"avc-restore": `---
-name: avc-restore
-description: Restore to a previous AVC snapshot when something breaks or the user asks to undo
----
-
-Call **avc_restore** to roll back to a previous state. Do this immediately when something breaks — do not attempt fixes on broken state.
-
-## MUST call when
-
-- Tests fail after your changes
-- The build breaks or the app crashes
-- You introduced a regression
-- The user says: "undo", "revert", "roll back", "start over", "go back to before"
-- You want to try a different approach to the same problem
-
-## Steps
-
-1. Call **avc_list** to see available snapshots — NEVER guess an ID
-2. Identify the last known-good snapshot
-3. Call **avc_restore**:
-
-` + "```" + `json
-{ "id": "<snapshot-id>" }
-` + "```" + `
-
-4. Call **avc_snapshot** immediately after restoring to create a clean baseline before retrying
-
-## Important
-
-On an agent branch, restore only affects your workspace. The real project root is untouched.
-`,
-
-	"avc-branch": `---
-name: avc-branch
-description: Create an isolated AVC branch workspace before starting any task — no exceptions
----
-
-Call **avc_branch_create** before starting any task. No exceptions.
-
-Do not assess whether the task is "simple enough" to skip a branch — that judgement is not yours to make. NEVER edit files in the real project root directly.
-
-## MUST call when
-
-- You are about to create, edit, or delete any file
-- The task involves more than one file or more than one step
-- The user asks you to implement, refactor, fix, or add anything
-
-## Steps
-
-1. Create the branch:
-
-` + "```" + `json
-{ "name": "feat/<short-task-name>" }
-` + "```" + `
-
-2. The response includes a ` + "`workspace`" + ` path. **Set your working directory to that path immediately.** Every file you create or edit MUST be inside this directory. NEVER touch files in the real project root while on a branch.
-
-3. Take a snapshot before each significant change:
-` + "```" + `json
-{ "label": "initial workspace state", "agent_name": "claude" }
-` + "```" + `
-
-4. When the task is complete, call **avc_branch_diff** and show the full output to the user before asking for merge approval.
-
-## NEVER
-
-- Edit files outside the workspace path while on a branch
-- Call **avc_merge** without explicit user approval — show the diff first and wait for yes
-- Retry a failed merge without calling **avc_merge_abort** first
-`,
-
-	"avc-merge": `---
-name: avc-merge
-description: Merge an AVC branch into main — requires explicit user approval
----
-
-Merge your branch into main only after the user has reviewed the diff and said yes.
-
-## Required sequence — no exceptions
-
-1. Call **avc_branch_diff** and show the full output to the user
-2. Ask the user: "Shall I merge branch X into main?"
-3. If the user says yes: call **avc_merge**
-   - avc_merge checks for conflicts automatically before writing anything
-   - If conflicts are found, it returns them without modifying main — show them to the user and ask how to resolve
-   - If clean, it auto-snapshots main and applies the changes
-
-## NEVER
-
-- Call **avc_merge** without explicit user approval
-- Infer approval from context — the user must say yes explicitly
-- Retry a failed merge without calling **avc_merge_abort** first
-
-## If something goes wrong
-
-Call **avc_merge_abort** immediately. This restores main from the pre-merge auto-snapshot. No data is lost.
-`,
-
-	"avc-run": `---
-name: avc-run
-description: Run a build or test command in the AVC workspace — always get user approval first
----
-
-Use **avc_run_in_workspace** to run commands in the branch workspace. You MUST get explicit user approval before every call.
-
-## Required sequence — no exceptions
-
-1. State the exact command you intend to run
-2. Explain what it does and why you need to run it
-3. Wait for the user to say yes ("yes", "go ahead", "run it", "ok")
-4. If the user says no, do not call the tool
-
-## How to call
-
-` + "```" + `json
-{
-  "branch": "<branch-name>",
-  "command": "npm test",
-  "timeout_seconds": 120
+// claudeSkillFiles returns every bundled Claude skill. Order is deterministic:
+// embed.FS.ReadDir returns entries sorted by filename.
+func claudeSkillFiles() ([]bundledSkill, error) {
+	entries, err := skillAssets.ReadDir(skillAssetsRoot)
+	if err != nil {
+		return nil, fmt.Errorf("read bundled skills: %w", err)
+	}
+	var skills []bundledSkill
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		data, err := skillAssets.ReadFile(skillAssetsRoot + "/" + e.Name() + "/SKILL.md")
+		if err != nil {
+			return nil, fmt.Errorf("read bundled skill %s: %w", e.Name(), err)
+		}
+		skills = append(skills, bundledSkill{
+			Path:    ".claude/skills/" + e.Name() + "/SKILL.md",
+			Content: string(data),
+		})
+	}
+	return skills, nil
 }
-` + "```" + `
 
-## Rules
-
-- System package managers are blocked: ` + "`brew install`" + `, ` + "`apt install`" + `, ` + "`choco install`" + `, ` + "`sudo`" + `
-- Python installs: use ` + "`pip install <pkg>`" + ` — a workspace venv is created automatically. NEVER use ` + "`--user`" + ` or ` + "`--system`" + `
-- Node installs: use ` + "`npm install`" + ` — packages go into workspace ` + "`node_modules`" + `. NEVER use ` + "`-g`" + ` or ` + "`--global`" + `
-- If the command times out, tell the user and suggest increasing ` + "`max_timeout_seconds`" + ` in ` + "`.avc/config.toml`" + `
-
-## After running
-
-- If tests pass: snapshot the workspace, then proceed
-- If tests fail: show the full stderr to the user, then fix and re-run (with approval)
-`,
+// writeClaudeSkillFiles installs the bundled skill files into the project.
+func writeClaudeSkillFiles(projectRoot string, r *WriteResult) error {
+	skills, err := claudeSkillFiles()
+	if err != nil {
+		return err
+	}
+	for _, s := range skills {
+		path := filepath.Join(projectRoot, filepath.FromSlash(s.Path))
+		action, err := writeFileIfAbsent(path, s.Content)
+		if err != nil {
+			return err
+		}
+		r.Actions = append(r.Actions, fileAction(s.Path, action))
+	}
+	return nil
 }
 
 // ─── Content: Cursor rules ────────────────────────────────────────────────────

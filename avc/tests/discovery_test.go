@@ -1,10 +1,11 @@
 // Package tests — Phase 5: Snapshot Discovery & Organisation tests.
 //
 // Covers:
-//   5.1 ListSnapshotsFiltered — search, agent, changed, since/until, limit
-//   5.1 avc search alias (CLI flag surface verified via DB method directly)
-//   5.2 TagSnapshot / UntagSnapshot / GetSnapshotTags / ListSnapshotsByTag
-//   5.3 ClearDiffCache / DiffCacheStats
+//
+//	5.1 ListSnapshotsFiltered — search, agent, changed, since/until, limit
+//	5.1 avc search alias (CLI flag surface verified via DB method directly)
+//	5.2 TagSnapshot / UntagSnapshot / GetSnapshotTags / ListSnapshotsByTag
+//	5.3 ClearDiffCache / DiffCacheStats
 package tests
 
 import (

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/trevarix/agentic-vc/avc/internal/archive"
 	"github.com/spf13/cobra"
+	"github.com/trevarix/agentic-vc/avc/internal/archive"
 )
 
 var importFrom string

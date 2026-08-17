@@ -7,6 +7,30 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-17
+
+### Added
+
+- AVC installs into Claude Desktop as a one-click extension. Each release now ships a `.mcpb` bundle per platform, carrying the `avc` binary inside it — download the one for your machine, install it from **Settings → Extensions**, and pick the folders your projects live in. Nothing else to install, and no config files to edit. This is the only way Desktop gets the `avc_*` tools: a plugin's MCP server does not run in Desktop chat, where plugins contribute skills and nothing else.
+- AVC installs into Claude Code as a plugin. Adding the `trevarix` marketplace and installing `agentic-vc` registers the MCP server and installs the AVC skills for every project at once, instead of running `avc init --skills` in each repository. The plugin also adds four slash commands: `/agentic-vc:snapshot`, `/agentic-vc:timeline`, `/agentic-vc:review-branch`, and `/agentic-vc:undo`.
+- The MCP server can now work across several projects at once. Point it at one or more folders — `avc mcp serve ~/Projects` — and it discovers the AVC projects underneath, so an agent host with no working directory of its own can still reach your work. With a single project it selects that one automatically and nothing changes; with several, you can switch between them mid-conversation by name.
+- Agent sessions are now checkpointed automatically. The plugin installs a hook that runs `avc hook pre-edit` before an agent's first file edit, saving the project as it stood before that session started. Safety no longer depends on the agent remembering to snapshot. The checkpoint is taken once per session, not once per edit, so history stays readable — and the hook never blocks an edit, even when AVC itself fails.
+- A new `avc-setup` skill walks you through installing the `avc` binary and initializing a project whenever the `avc_*` tools are unavailable. Previously an agent that could not reach the AVC server had nothing to go on — the server simply failed to start when `avc` was not on your PATH.
+- `avc_init` lets an agent set up AVC in a directory that isn't a project yet, so pointing a tool at the wrong folder no longer means leaving the conversation for a terminal.
+- When no project has been selected, the server now advertises the tools that select one instead of advertising nothing at all. Previously an agent in that state had no move to make and no explanation to offer.
+
+### Fixed
+
+- Pre-release builds no longer reach the Homebrew and Scoop channels. A release candidate could previously be picked up as the newest version and installed as if it were stable.
+- `avc hook pre-edit` is now listed in the command help, instead of working only for those who already knew it existed.
+- The README documented the MCP tool-tier flag as `--tier`; the flag is `--tools`.
+
+### Changed
+
+- The agent skill files are now bundled into the `avc` binary from a single source shared with the plugin, so the guidance `avc init --skills` writes and the guidance plugin users receive can no longer drift apart.
+- Releases are now published end to end from a single tag, with the plugin marketplace entry held back until the matching binaries are live — so the version the marketplace points at is always one you can actually install.
+- The test suite runs on every change to the development branch, and source formatting is checked automatically, keeping regressions out of the release branch rather than catching them at release time.
+
 ## [0.4.0] - 2026-07-25
 
 ### Added

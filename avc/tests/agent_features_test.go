@@ -171,9 +171,9 @@ func TestChangeSummaries_PersistedAndComposable(t *testing.T) {
 	writeFile(t, projectRoot, "c.txt", "gone soon\n")
 	first := createMainSnap(t, projectRoot, mainBranchID, "first")
 
-	writeFile(t, projectRoot, "a.txt", "one\nTWO\n")   // modified
-	writeFile(t, projectRoot, "b.txt", "new\n")        // added
-	os.Remove(filepath.Join(projectRoot, "c.txt"))     // deleted
+	writeFile(t, projectRoot, "a.txt", "one\nTWO\n") // modified
+	writeFile(t, projectRoot, "b.txt", "new\n")      // added
+	os.Remove(filepath.Join(projectRoot, "c.txt"))   // deleted
 	second := createMainSnap(t, projectRoot, mainBranchID, "second")
 
 	// Snapshot creation populated the diffs cache with per-file summaries.
