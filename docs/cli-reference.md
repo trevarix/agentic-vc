@@ -175,6 +175,67 @@ by the web UI at `/api/timeline`.
 
 ---
 
+## `avc hook pre-edit`
+
+Checkpoint the project before an agent's first edit of a session. Designed to
+be called by an agent harness, not by hand — Claude Code invokes it from a
+`PreToolUse` hook, and the AVC plugin wires that up for you.
+
+Reads a hook payload as JSON on stdin and uses its `session_id` to decide what
+to do: the first edit of a session produces one snapshot capturing the project
+as it stood before that session touched anything; every later edit in the same
+session is a no-op. Snapshotting on every edit would flood `avc list` and
+leave `avc timeline` unreadable, so the session — not the edit — is the unit.
+
+```bash
+echo '{"session_id":"sess-42","cwd":"/path/to/project"}' | avc hook pre-edit --json
+```
+
+**Stdin payload** (extra fields are ignored):
+
+| Field | Description |
+|-------|-------------|
+| `session_id` | Agent session this edit belongs to. Without it, nothing is snapshotted |
+| `cwd` | Directory the agent is working in; AVC walks up from here to find `.avc` |
+| `tool_name` | The tool about to run. Recorded but not acted on |
+
+**JSON output:**
+```json
+{
+  "action": "snapshotted",
+  "snapshot_id": "snap-3f7f0e6a40fc",
+  "label": "auto: session start checkpoint",
+  "session_id": "sess-42",
+  "project": "/path/to/project"
+}
+```
+
+When no snapshot was taken, `action` is `skipped` and `reason` says why:
+`not an AVC project`, `hook payload carried no session_id`, or
+`session already has a checkpoint`.
+
+**Always exits 0.** A hook that blocked an edit because AVC had a problem
+would be worse than no hook at all, so failures are reported on stderr (or as
+a `skipped` result under `--json`) and the agent proceeds. This is the one
+place AVC deliberately does not propagate an error to its exit code.
+
+To wire it up by hand, add to your Claude Code hook settings:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [{ "type": "command", "command": "avc hook pre-edit" }]
+      }
+    ]
+  }
+}
+```
+
+---
+
 ## `avc watch`
 
 Continuously checkpoint the project as files change. A foreground daemon

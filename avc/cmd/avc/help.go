@@ -80,6 +80,7 @@ func printRootHelp() {
 	helpEntry("init [directory]", "Initialize AVC for a project (run once)")
 	helpEntry("ui", "Start the web UI (default port 3004)")
 	helpEntry("mcp serve", "Start the MCP server for agent frameworks")
+	helpEntry("hook pre-edit", "Checkpoint before an agent's first edit of a session")
 	helpEntry("run --branch <branch> <command>", "Run a command in a branch workspace")
 	helpEntry("bisect --good <id> --cmd <command>", "Find the snapshot that broke a command")
 	fmt.Println()

@@ -206,6 +206,23 @@ AVC runs as an MCP (Model Context Protocol) server over stdio. Start it with:
 avc mcp serve
 ```
 
+### Install as a Claude plugin
+
+In Claude Code, add the marketplace and install the plugin once — it applies to every project, so you don't run `avc init --skills` per repo:
+
+```
+/plugin marketplace add trevarix/claude-marketplace
+/plugin install agentic-vc@trevarix
+```
+
+This registers the MCP server and installs the AVC skills plus four slash commands: `/agentic-vc:snapshot`, `/agentic-vc:timeline`, `/agentic-vc:review-branch`, and `/agentic-vc:undo`.
+
+It also installs a `PreToolUse` hook that checkpoints the project before an agent's first edit of a session — one snapshot per session, taken whether or not the agent remembers to ask for it. See [`avc hook pre-edit`](docs/cli-reference.md).
+
+The plugin expects `avc` on your `PATH` and the project initialized with `avc init`. If either is missing, ask Claude to run the bundled `avc-setup` skill and it will walk you through both.
+
+> **Claude Desktop chat:** plugins contribute skills only — a plugin-bundled MCP server does not run there, so the `avc_*` tools will not appear. Use `avc init --skills claude-desktop` for now; a one-click desktop extension is planned.
+
 ### Automatic setup with `--skills`
 
 `avc init --skills <framework>` writes the MCP config and agent instruction files for your framework:
@@ -226,7 +243,7 @@ Running `--skills` multiple times is safe — existing files are never overwritt
 
 ### MCP tools
 
-Tools are exposed in three tiers (`avc mcp serve --tier core|standard|full`; `standard` is the default) so agents with small context windows aren't handed every tool at once.
+Tools are exposed in three tiers (`avc mcp serve --tools core|standard|full`; `standard` is the default) so agents with small context windows aren't handed every tool at once.
 
 <details>
 <summary><strong>Full tool list (27 tools across core / standard / full)</strong></summary>
