@@ -111,6 +111,9 @@ func TestMCPBManifestArgsParse(t *testing.T) {
 	}
 }
 
+// bundleDirVar is the MCPB placeholder for the installed bundle's directory.
+const bundleDirVar = "${__dirname}"
+
 // TestMCPBManifestShape checks the fields Claude Desktop requires to install
 // and launch the bundle at all.
 func TestMCPBManifestShape(t *testing.T) {
@@ -126,16 +129,38 @@ func TestMCPBManifestShape(t *testing.T) {
 		t.Errorf("server.type is %q, want %q", m.Server.Type, "binary")
 	}
 
-	// entry_point and command must agree, or Desktop validates one path and
-	// executes another.
-	if m.Server.EntryPoint != m.Server.MCPConfig.Command {
-		t.Errorf("entry_point %q and mcp_config.command %q disagree",
-			m.Server.EntryPoint, m.Server.MCPConfig.Command)
-	}
-	// The build script places the binary at this path inside the archive.
+	// entry_point is archive-relative: it names where the binary sits inside
+	// the .mcpb, and the build script writes it there.
 	if want := "server/avc"; m.Server.EntryPoint != want {
 		t.Errorf("entry_point is %q, want %q — the build script writes the binary there",
 			m.Server.EntryPoint, want)
+	}
+}
+
+// TestMCPBCommandIsAbsolute guards the failure that shipped in v0.5.0-rc1.
+//
+// The manifest previously set command to the same archive-relative path as
+// entry_point, following the spec's own example. Claude Desktop spawns that
+// string as given, resolving it against its own working directory rather than
+// the bundle, so the extension installed cleanly and then died with
+// "spawn server/avc ENOENT" on every start.
+//
+// ${__dirname} expands to the installed bundle directory, which is the only
+// form that survives being spawned from somewhere else.
+func TestMCPBCommandIsAbsolute(t *testing.T) {
+	m := readMCPBManifest(t)
+	cmd := m.Server.MCPConfig.Command
+
+	if !strings.HasPrefix(cmd, bundleDirVar+"/") {
+		t.Errorf("mcp_config.command is %q; it must start with %s/ or Desktop spawns it "+
+			"against its own working directory and fails with ENOENT", cmd, bundleDirVar)
+	}
+
+	// The command must still point at the file entry_point declares, or the
+	// host validates one path and executes another.
+	if want := bundleDirVar + "/" + m.Server.EntryPoint; cmd != want {
+		t.Errorf("mcp_config.command is %q, want %q — it must resolve to entry_point %q",
+			cmd, want, m.Server.EntryPoint)
 	}
 }
 

@@ -23,13 +23,16 @@ type Property struct {
 	Description string `json:"description"`
 }
 
-// ProjectlessTools returns the tool set advertised when no AVC project has
-// been resolved. The snapshot, branch, and merge tools stay hidden so the
-// agent cannot misuse them on an uninitialized directory, but the tools that
-// resolve a project are exposed: without them the agent has no way out of the
-// state, which is how a host with no working directory otherwise dead-ends.
-func ProjectlessTools(hasRoots bool) []Tool {
-	return ProjectTools(hasRoots)
+// ProjectlessTools returns the tool set advertised when there is no project
+// and no search root to find one in. Snapshot, branch, and merge stay hidden —
+// they have nothing to act on — but avc_init is exposed, because without it
+// the agent has no way out of the state and simply reports that AVC is broken.
+//
+// A server given search roots advertises the full set instead: a project can
+// be selected at any time, and tools called before that return an error naming
+// the way forward.
+func ProjectlessTools() []Tool {
+	return ProjectTools(false)
 }
 
 // ProjectTools returns the tools that decide which project the session acts
