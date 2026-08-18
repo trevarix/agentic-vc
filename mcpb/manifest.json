@@ -7,7 +7,7 @@
   "long_description": "AVC gives Claude the ability to review and recover your work: see what agents changed session by session, diff any two points in time, and roll back when something breaks. Point it at the folders your projects live in.",
   "author": {
     "name": "TREVARIX Corp.",
-    "url": "https://trevarix.com"
+    "url": "https://avc.trevarix.com"
   },
   "homepage": "https://avc.trevarix.com",
   "documentation": "https://avc.trevarix.com",
@@ -23,7 +23,7 @@
     "type": "binary",
     "entry_point": "server/avc",
     "mcp_config": {
-      "command": "server/avc",
+      "command": "${__dirname}/server/avc",
       "args": [
         "mcp",
         "serve",
