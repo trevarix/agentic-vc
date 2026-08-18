@@ -90,6 +90,7 @@ func serve(r io.Reader, w io.Writer, projectRoot string, roots []string, compact
 				writeErrorNoID(enc, -32700, "parse error: "+jsonErr.Error())
 			} else if len(req.ID) != 0 {
 				// Notifications have no id — they require no response.
+				before := sess.current
 				result, rpcErr := dispatch(sess, compact, toolTier, req.Method, req.Params)
 				resp := rpcResponse{JSONRPC: "2.0", ID: req.ID}
 				if rpcErr != nil {
@@ -98,6 +99,17 @@ func serve(r io.Reader, w io.Writer, projectRoot string, roots []string, compact
 					resp.Result = result
 				}
 				_ = enc.Encode(resp)
+
+				// Selecting a project can change which tools apply. A client
+				// caches the list from tools/list and has no reason to ask
+				// again unless told, so say so — after the response, so the
+				// tool call the client is waiting on is never delayed.
+				if sess.current != before {
+					_ = enc.Encode(map[string]any{
+						"jsonrpc": "2.0",
+						"method":  "notifications/tools/list_changed",
+					})
+				}
 			}
 		}
 
@@ -151,24 +163,35 @@ func dispatch(sess *session, compact bool, toolTier string, method string, rawPa
 	case "initialize":
 		return map[string]any{
 			"protocolVersion": protocolVersion,
-			"capabilities":    map[string]any{"tools": map[string]any{}},
-			"serverInfo":      map[string]any{"name": serverName, "version": serverVersion},
-			"instructions":    buildInstructions(),
+			// listChanged tells the client the tool set is not fixed for the
+			// life of the connection, so it re-reads tools/list when notified.
+			"capabilities": map[string]any{"tools": map[string]any{"listChanged": true}},
+			"serverInfo":   map[string]any{"name": serverName, "version": serverVersion},
+			"instructions": buildInstructions(),
 		}, nil
 
 	case "ping":
 		return map[string]any{}, nil
 
 	case "tools/list":
-		// Until a project is resolved, expose only the tools that resolve one,
-		// so snapshot/branch/merge cannot be misused on an uninitialised
-		// directory while the agent still has a way forward.
 		hasRoots := len(sess.roots) > 0
-		if sess.current == "" {
-			return map[string]any{"tools": ProjectlessTools(hasRoots)}, nil
+
+		// With no project and nowhere to look for one, expose only the tools
+		// that could establish one: snapshot and merge have nothing to act on
+		// and would only invite an attempt on an uninitialised directory.
+		if sess.current == "" && !hasRoots {
+			return map[string]any{"tools": ProjectlessTools()}, nil
 		}
-		// The project tools stay available so the user can switch projects
-		// mid-conversation without restarting the server.
+
+		// With search roots, advertise the full set even before a project is
+		// chosen. Withholding it costs more than it protects: a client caches
+		// tools/list, so tools that appear only after avc_project_use may never
+		// be seen at all, and the agent concludes AVC cannot snapshot. Calling
+		// one early is harmless — it returns the error from session.projectRoot
+		// naming avc_projects_list as the way forward.
+		//
+		// The project tools stay listed either way, so the active project can
+		// be changed mid-conversation without restarting the server.
 		return map[string]any{"tools": append(ToolsForTier(toolTier), ProjectTools(hasRoots)...)}, nil
 
 	case "tools/call":

@@ -24,6 +24,9 @@ from pathlib import Path
 # satisfy every structural check while being useless.
 MIN_BINARY_BYTES = 1_000_000
 
+# Entries must claim a Unix creator or their stored modes are ignored.
+UNIX_CREATE_SYSTEM = 3
+
 # Expected (executable format, machine) per "<goos>-<goarch>" build target,
 # read from the binary's own header so a mismatched build is caught.
 EXPECTED = {
@@ -92,6 +95,24 @@ def verify(path: Path) -> list:
             problems.append(
                 f"{path.name}: {member} is stored mode {oct(mode)} with no executable bit; "
                 "the extension would install and then fail to launch")
+        # A mode is only read when the entry claims a Unix creator. Stored under
+        # the default creator, the bits above are present but ignored, and the
+        # binary extracts unexecutable on macOS and Linux.
+        if info.create_system != UNIX_CREATE_SYSTEM:
+            problems.append(
+                f"{path.name}: {member} declares create_system={info.create_system}, not "
+                f"{UNIX_CREATE_SYSTEM} (Unix); its {oct(mode)} mode would be ignored on extraction")
+
+        manifest_info = z.getinfo("manifest.json")
+        if manifest_info.create_system != UNIX_CREATE_SYSTEM:
+            problems.append(
+                f"{path.name}: manifest.json declares create_system={manifest_info.create_system}, "
+                f"not {UNIX_CREATE_SYSTEM} (Unix)")
+        manifest_mode = (manifest_info.external_attr >> 16) & 0o777
+        if not manifest_mode & 0o044:
+            problems.append(
+                f"{path.name}: manifest.json is stored mode {oct(manifest_mode)}; the host must "
+                "read it to install or uninstall the extension")
 
         data = z.read(member)
         if len(data) < MIN_BINARY_BYTES:

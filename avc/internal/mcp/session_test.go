@@ -110,31 +110,96 @@ func TestSessionUseRejectsUnconfiguredPath(t *testing.T) {
 	}
 }
 
-// TestProjectlessToolsAreNotADeadEnd is the core UX guarantee. Before this
-// change an unresolved project advertised zero tools, leaving the agent with
-// no move to make and the user with no explanation.
+// TestProjectlessToolsAreNotADeadEnd is the core UX guarantee for a server
+// with nowhere to look for a project. Advertising zero tools left the agent
+// with no move to make and the user with no explanation.
 func TestProjectlessToolsAreNotADeadEnd(t *testing.T) {
-	withRoots := ProjectlessTools(true)
-	if len(withRoots) == 0 {
-		t.Fatal("no tools advertised without a project; the agent has no way forward")
-	}
-	want := map[string]bool{"avc_init": false, "avc_projects_list": false, "avc_project_use": false}
-	for _, tool := range withRoots {
-		if _, ok := want[tool.Name]; ok {
-			want[tool.Name] = true
+	tools := ProjectlessTools()
+	if len(tools) != 1 || tools[0].Name != "avc_init" {
+		names := make([]string, 0, len(tools))
+		for _, tool := range tools {
+			names = append(names, tool.Name)
 		}
+		t.Errorf("got %v, want only avc_init — listing and switching have no roots to operate on", names)
 	}
-	for name, found := range want {
-		if !found {
-			t.Errorf("%s is not advertised when no project is resolved", name)
+}
+
+// listToolNames drives tools/list through dispatch and returns the tool names.
+func listToolNames(t *testing.T, s *session) map[string]bool {
+	t.Helper()
+	res, rpcErr := dispatch(s, true, "standard", "tools/list", nil)
+	if rpcErr != nil {
+		t.Fatalf("tools/list: %v", rpcErr.Message)
+	}
+	tools, ok := res.(map[string]any)["tools"].([]Tool)
+	if !ok {
+		t.Fatalf("tools/list returned %T, want []Tool", res.(map[string]any)["tools"])
+	}
+	names := map[string]bool{}
+	for _, tool := range tools {
+		names[tool.Name] = true
+	}
+	return names
+}
+
+// TestToolsListStableAcrossProjectSelection guards the failure seen in
+// v0.5.0-rc1 on Claude Desktop. The tool set used to depend on whether a
+// project had been chosen, so a client that had already cached tools/list
+// never saw snapshot or merge appear after avc_project_use — it reported that
+// AVC offered only three tools and could not snapshot at all.
+//
+// With search roots configured, the advertised set must not depend on the
+// selection.
+func TestToolsListStableAcrossProjectSelection(t *testing.T) {
+	root := t.TempDir()
+	mkProj(t, filepath.Join(root, "one"))
+	mkProj(t, filepath.Join(root, "two"))
+
+	s := newSession("", []string{root})
+	if s.current != "" {
+		t.Fatalf("expected no auto-selection with two projects, got %q", s.current)
+	}
+
+	before := listToolNames(t, s)
+	for _, name := range []string{"avc_snapshot", "avc_list", "avc_projects_list", "avc_project_use"} {
+		if !before[name] {
+			t.Errorf("%s is not advertised before a project is chosen; a client caching this list never learns it exists", name)
 		}
 	}
 
-	// Without search roots, listing and switching have nothing to operate on;
-	// only initialization still makes sense.
-	noRoots := ProjectlessTools(false)
-	if len(noRoots) != 1 || noRoots[0].Name != "avc_init" {
-		t.Errorf("without roots got %d tools, want only avc_init", len(noRoots))
+	if _, err := s.use("two"); err != nil {
+		t.Fatalf("use: %v", err)
+	}
+
+	after := listToolNames(t, s)
+	if len(before) != len(after) {
+		t.Errorf("tool count changed across selection: %d -> %d", len(before), len(after))
+	}
+	for name := range after {
+		if !before[name] {
+			t.Errorf("%s appeared only after selecting a project", name)
+		}
+	}
+}
+
+// TestInitializeAdvertisesListChanged covers the protocol half of the same
+// failure: a client only re-reads tools/list when the server says the set can
+// change, so the capability must be declared even though the set is now stable.
+func TestInitializeAdvertisesListChanged(t *testing.T) {
+	res, rpcErr := dispatch(newSession("", nil), true, "standard", "initialize", nil)
+	if rpcErr != nil {
+		t.Fatalf("initialize: %v", rpcErr.Message)
+	}
+	caps, ok := res.(map[string]any)["capabilities"].(map[string]any)
+	if !ok {
+		t.Fatal("initialize returned no capabilities object")
+	}
+	tools, ok := caps["tools"].(map[string]any)
+	if !ok {
+		t.Fatal("capabilities has no tools object")
+	}
+	if changed, _ := tools["listChanged"].(bool); !changed {
+		t.Error("tools.listChanged is not advertised; a client will never re-read tools/list")
 	}
 }
 
