@@ -110,6 +110,27 @@ func walk(dir string, depth int, seen map[string]bool, found *[]Project) {
 // IsProject reports whether dir is an AVC project root.
 func IsProject(dir string) bool { return isProject(dir) }
 
+// FindEnclosing returns the AVC project root that contains dir — dir itself
+// or its nearest ancestor holding .avc — or "" when dir is in no project.
+// An agent host reports the folder the user opened, which may be a
+// subdirectory of the project rather than its root.
+func FindEnclosing(dir string) string {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return ""
+	}
+	for {
+		if isProject(abs) {
+			return abs
+		}
+		parent := filepath.Dir(abs)
+		if parent == abs {
+			return ""
+		}
+		abs = parent
+	}
+}
+
 func isProject(dir string) bool {
 	info, err := os.Stat(filepath.Join(dir, avcDir))
 	return err == nil && info.IsDir()

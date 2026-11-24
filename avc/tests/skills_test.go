@@ -194,12 +194,12 @@ func readGitignore(t *testing.T, project string) string {
 }
 
 // TestSkills_CreatedFilesAreGitignored verifies that every project file AVC
-// creates is added to .gitignore — generated agent files are local tooling.
+// creates is added to .gitignore in local mode (avc init --local).
 func TestSkills_CreatedFilesAreGitignored(t *testing.T) {
 	fakeHome(t)
 	project := gitProject(t)
 
-	if _, err := skills.Write(project, skills.FrameworkClaudeCode); err != nil {
+	if _, err := skills.WriteWithOptions(project, skills.FrameworkClaudeCode, skills.Options{Local: true}); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
@@ -235,7 +235,7 @@ func TestSkills_PreexistingFilesAreNotGitignored(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := skills.Write(project, skills.FrameworkClaudeCode); err != nil {
+	if _, err := skills.WriteWithOptions(project, skills.FrameworkClaudeCode, skills.Options{Local: true}); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
@@ -273,7 +273,7 @@ func TestSkills_NoUserGitignore_PreexistingFilesAreGitignored(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := skills.Write(project, skills.FrameworkClaudeCode); err != nil {
+	if _, err := skills.WriteWithOptions(project, skills.FrameworkClaudeCode, skills.Options{Local: true}); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
@@ -296,7 +296,7 @@ func TestSkills_CursorCreatedFilesAreGitignored(t *testing.T) {
 	fakeHome(t)
 	project := gitProject(t)
 
-	if _, err := skills.Write(project, skills.FrameworkCursor); err != nil {
+	if _, err := skills.WriteWithOptions(project, skills.FrameworkCursor, skills.Options{Local: true}); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 

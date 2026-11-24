@@ -5,7 +5,6 @@ package avc
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +12,9 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/trevarix/agentic-vc/avc/internal/agenthook"
 )
+
+// hookAgent names the harness that invoked the hook, for attribution.
+var hookAgent string
 
 var hookCmd = &cobra.Command{
 	Use:   "hook",
@@ -29,15 +31,17 @@ var hookPreEditCmd = &cobra.Command{
 	Long: `Takes one snapshot per agent session, capturing the project as it stood
 before that session edited anything.
 
-Reads a Claude Code PreToolUse payload as JSON on stdin and uses its
-session_id to decide: the first edit of a session produces a checkpoint,
-every later edit is a no-op. Snapshotting every edit would flood avc list
-and leave avc timeline unreadable.
+Reads the harness's hook payload as JSON on stdin and uses its session id
+to decide: the first edit of a session produces a checkpoint, every later
+edit is a no-op. Snapshotting every edit would flood avc list and leave
+avc timeline unreadable. Payloads from Claude Code, Codex, Copilot (VS Code
+and CLI), Windsurf (trajectory_id) and Cursor (conversation_id) are read.
 
 Does nothing outside an AVC project, and always exits 0 — a hook that
 blocked an edit would be worse than no hook at all.
 
-Wire it up as a PreToolUse hook matching Write|Edit:
+avc init --skills <tool> --hooks installs it for you. By hand, for Claude
+Code, wire it up as a PreToolUse hook matching Write|Edit:
 
   { "type": "command", "command": "avc hook pre-edit" }`,
 	Args: cobra.NoArgs,
@@ -45,6 +49,8 @@ Wire it up as a PreToolUse hook matching Write|Edit:
 }
 
 func init() {
+	hookPreEditCmd.Flags().StringVar(&hookAgent, "agent", "",
+		"Harness that invoked the hook, used to attribute the checkpoint (default claude-code)")
 	hookCmd.AddCommand(hookPreEditCmd)
 }
 
@@ -53,12 +59,23 @@ func runHookPreEdit(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return reportHookFailure(fmt.Errorf("read hook payload: %w", err))
 	}
+	in.Harness = hookAgent
 
 	result, err := agenthook.PreEdit(in)
 	if err != nil {
 		return reportHookFailure(err)
 	}
 
+	reply, quiet := agenthook.HarnessReply(hookAgent)
+	if quiet {
+		// The harness reads stdout as its decision: answer it, and keep the
+		// report on stderr where it is shown as a log line, if at all.
+		fmt.Fprintf(os.Stderr, "[avc] pre-edit hook: %s %s\n", result.Action, result.SnapshotID+result.Reason)
+		if reply != "" {
+			fmt.Println(reply)
+		}
+		return nil
+	}
 	if jsonOutput {
 		return json.NewEncoder(os.Stdout).Encode(result)
 	}
@@ -73,21 +90,24 @@ func runHookPreEdit(cmd *cobra.Command, args []string) error {
 // readHookInput decodes the harness payload. Empty stdin is not an error: it
 // yields a zero Input, which PreEdit skips for want of a session ID.
 func readHookInput(r io.Reader) (agenthook.Input, error) {
-	var in agenthook.Input
-	err := json.NewDecoder(r).Decode(&in)
-	if errors.Is(err, io.EOF) {
-		return agenthook.Input{}, nil
-	}
+	data, err := io.ReadAll(r)
 	if err != nil {
 		return agenthook.Input{}, err
 	}
-	return in, nil
+	return agenthook.ParseInput(data)
 }
 
 // reportHookFailure writes the failure to stderr and returns nil so the process
 // still exits 0. A hook handler must never turn an AVC problem into a blocked
 // edit, so this deliberately breaks the usual "errors propagate up" rule.
 func reportHookFailure(err error) error {
+	if reply, quiet := agenthook.HarnessReply(hookAgent); quiet {
+		fmt.Fprintf(os.Stderr, "[avc] warning: pre-edit hook skipped: %v\n", err)
+		if reply != "" {
+			fmt.Println(reply)
+		}
+		return nil
+	}
 	if jsonOutput {
 		return json.NewEncoder(os.Stdout).Encode(agenthook.Result{
 			Action: agenthook.ActionSkipped,

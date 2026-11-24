@@ -22,17 +22,71 @@ import (
 type session struct {
 	roots   []string // configured search roots; empty for a project-bound server
 	current string   // project root tools act on; empty until resolved
+	pinned  bool     // current came from the working directory and never changes
+
+	// clientRoots records that the client can report its workspace folders
+	// (the MCP roots capability). Hosts with one global server config —
+	// Windsurf, Codex, VS Code user settings — start it outside any project,
+	// so the folders the user has open are the best guide to the project.
+	clientRoots bool
 }
 
 // newSession builds the connection state. A non-empty projectRoot pins the
 // session to that project and ignores roots, preserving the CLI behaviour
 // where the working directory is the project.
 func newSession(projectRoot string, roots []string) *session {
-	s := &session{roots: roots, current: projectRoot}
+	s := &session{roots: roots, current: projectRoot, pinned: projectRoot != ""}
 	if s.current == "" {
 		s.autoSelect()
 	}
 	return s
+}
+
+// applyClientRoots folds the client's workspace folders into the session and
+// reports whether anything visible changed (the project, or whether there are
+// roots at all — both affect tools/list).
+//
+// The project enclosing each folder becomes a search root, so avc_project_use
+// accepts it. When the folders lie in exactly one project, that project is
+// selected: it is the one the user has open. A server pinned to its working
+// directory ignores client roots.
+func (s *session) applyClientRoots(dirs []string) bool {
+	if s.pinned {
+		return false
+	}
+	beforeCurrent, beforeHasRoots := s.current, len(s.roots) > 0
+
+	var enclosing []string
+	seenProject := map[string]bool{}
+	for _, dir := range dirs {
+		root := dir
+		if p := projects.FindEnclosing(dir); p != "" {
+			root = p
+			if !seenProject[p] {
+				seenProject[p] = true
+				enclosing = append(enclosing, p)
+			}
+		}
+		s.addRoot(root)
+	}
+
+	if len(enclosing) == 1 {
+		s.current = enclosing[0]
+	} else if s.current == "" {
+		s.autoSelect()
+	}
+	return s.current != beforeCurrent || (len(s.roots) > 0) != beforeHasRoots
+}
+
+// addRoot appends dir to the search roots unless it is already there.
+func (s *session) addRoot(dir string) {
+	clean := filepath.Clean(dir)
+	for _, r := range s.roots {
+		if filepath.Clean(r) == clean {
+			return
+		}
+	}
+	s.roots = append(s.roots, clean)
 }
 
 // autoSelect picks the sole discovered project, if there is exactly one.

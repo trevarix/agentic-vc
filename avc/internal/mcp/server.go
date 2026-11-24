@@ -27,11 +27,16 @@ const (
 
 // rpcRequest is an incoming JSON-RPC 2.0 message.
 // Notifications have no id field; requests always have one.
+//
+// A message with an id but no method is the client's response to a request
+// this server sent (roots/list); its Result or Error is set instead of Params.
 type rpcRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id,omitempty"` // nil/absent for notifications
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params,omitempty"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   json.RawMessage `json:"error,omitempty"`
 }
 
 // rpcResponse is an outgoing JSON-RPC 2.0 message.
@@ -69,6 +74,15 @@ func serve(r io.Reader, w io.Writer, projectRoot string, roots []string, compact
 	enc := json.NewEncoder(w)
 	reader := bufio.NewReaderSize(r, 64*1024)
 	sess := newSession(projectRoot, roots)
+	rootsRequests := 0
+
+	// requestRoots asks a client that supports it for its workspace folders.
+	requestRoots := func() {
+		if sess.clientRoots && !sess.pinned {
+			rootsRequests++
+			_ = enc.Encode(rootsRequest(rootsRequests))
+		}
+	}
 
 	for {
 		line, tooLong, err := readLine(reader)
@@ -88,7 +102,20 @@ func serve(r io.Reader, w io.Writer, projectRoot string, roots []string, compact
 			var req rpcRequest
 			if jsonErr := json.Unmarshal(trimmed, &req); jsonErr != nil {
 				writeErrorNoID(enc, -32700, "parse error: "+jsonErr.Error())
-			} else if len(req.ID) != 0 {
+			} else if len(req.ID) != 0 && req.Method == "" {
+				// A response to a request this server sent. Responses are
+				// never answered; a roots/list result may pick the project.
+				if isRootsResponse(req.ID) && len(req.Result) > 0 &&
+					sess.applyClientRoots(parseRootsResult(req.Result)) {
+					_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "method": methodToolsListChanged})
+				}
+			} else if len(req.ID) == 0 {
+				// Notifications require no response. Two of them mean the
+				// client's workspace folders are ready to be read.
+				if req.Method == methodInitialized || req.Method == methodRootsListChanged {
+					requestRoots()
+				}
+			} else {
 				// Notifications have no id — they require no response.
 				before := sess.current
 				result, rpcErr := dispatch(sess, compact, toolTier, req.Method, req.Params)
@@ -107,7 +134,7 @@ func serve(r io.Reader, w io.Writer, projectRoot string, roots []string, compact
 				if sess.current != before {
 					_ = enc.Encode(map[string]any{
 						"jsonrpc": "2.0",
-						"method":  "notifications/tools/list_changed",
+						"method":  methodToolsListChanged,
 					})
 				}
 			}
@@ -161,6 +188,7 @@ func readLine(r *bufio.Reader) (line []byte, tooLong bool, err error) {
 func dispatch(sess *session, compact bool, toolTier string, method string, rawParams json.RawMessage) (any, *rpcError) {
 	switch method {
 	case "initialize":
+		sess.clientRoots = clientSupportsRoots(rawParams)
 		return map[string]any{
 			"protocolVersion": protocolVersion,
 			// listChanged tells the client the tool set is not fixed for the

@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Package agenthook handles callbacks from an agent harness's hook system.
-// Claude Code invokes `avc hook pre-edit` from a PreToolUse hook before the
-// agent edits a file; this package decides whether that warrants a snapshot.
+// Claude Code, Windsurf, Codex and Copilot invoke `avc hook pre-edit` from a
+// pre-tool or pre-write hook before the agent edits a file; this package
+// decides whether that warrants a snapshot.
 //
 // The unit of work is the session, not the edit. A checkpoint per edit would
 // flood `avc list` and leave `avc timeline` unreadable, so PreEdit takes at
@@ -39,15 +40,23 @@ const (
 // convention agents use, so `avc list` groups them with other agent activity.
 const checkpointLabel = "auto: session start checkpoint"
 
-// checkpointAgent attributes hook snapshots to the harness rather than to the
-// model, since no agent chose to take them.
-const checkpointAgent = "claude-code-hook"
+// defaultHarness names the harness when the hook command does not say which
+// one invoked it — Claude Code, which was the first to call this hook.
+const defaultHarness = "claude-code"
 
-// Input is the subset of a Claude Code hook payload that AVC reads.
+// checkpointAgentSuffix attributes hook snapshots to the harness rather than
+// to the model, since no agent chose to take them: "<harness>-hook".
+const checkpointAgentSuffix = "-hook"
+
+// Input is the subset of a harness hook payload that AVC reads. ParseInput
+// fills it from any supported harness's field names.
 type Input struct {
 	SessionID string `json:"session_id"`
 	CWD       string `json:"cwd"`
 	ToolName  string `json:"tool_name"`
+	// Harness names the agent tool that ran the hook (claude-code, windsurf,
+	// codex, copilot). Set from the hook command line, not the payload.
+	Harness string `json:"-"`
 }
 
 // Result describes what PreEdit did.
@@ -103,7 +112,7 @@ func PreEdit(in Input) (Result, error) {
 
 	snap, err := snapshot.CreateWithOptions(root, snapshot.Options{
 		Label:     checkpointLabel,
-		AgentName: checkpointAgent,
+		AgentName: harnessName(in.Harness) + checkpointAgentSuffix,
 		BranchID:  branchID,
 		SourceDir: sourceDir,
 		SessionID: in.SessionID,
@@ -119,6 +128,14 @@ func PreEdit(in Input) (Result, error) {
 		SessionID:  in.SessionID,
 		Project:    root,
 	}, nil
+}
+
+// harnessName returns the harness to attribute a checkpoint to.
+func harnessName(h string) string {
+	if h == "" {
+		return defaultHarness
+	}
+	return h
 }
 
 // sessionCheckpointed reports whether any snapshot already carries this

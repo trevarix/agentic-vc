@@ -8,11 +8,11 @@ package skills
 import (
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"runtime"
 	"strings"
 
@@ -25,6 +25,8 @@ const (
 	FrameworkClaudeDesktop = "claude-desktop"
 	FrameworkCursor        = "cursor"
 	FrameworkWindsurf      = "windsurf"
+	FrameworkCodex         = "codex"
+	FrameworkCopilot       = "copilot"
 	FrameworkGeneric       = "generic"
 )
 
@@ -34,13 +36,15 @@ var SupportedFrameworks = []string{
 	FrameworkClaudeDesktop,
 	FrameworkCursor,
 	FrameworkWindsurf,
+	FrameworkCodex,
+	FrameworkCopilot,
 	FrameworkGeneric,
 }
 
 // FileAction records what happened to a single file.
 type FileAction struct {
-	Path   string // relative to projectRoot
-	Status string // "created" | "updated" | "skipped"
+	Path   string // relative to projectRoot, or absolute for a global config
+	Status string // "created" | "updated" | "removed" | "skipped"
 	Reason string // non-empty when Status == "skipped"
 }
 
@@ -49,58 +53,101 @@ type WriteResult struct {
 	Framework string
 	Actions   []FileAction
 	Warnings  []string
+	NextSteps []string // what the user must do in the tool for AVC to load
 }
 
-// Write installs MCP config and agent instructions for the given framework.
-// MCP configs are project-level where the framework supports it (claude-code:
-// .mcp.json, cursor: .cursor/mcp.json); claude-desktop and windsurf have no
-// project-level config and write to their global config file.
-func Write(projectRoot, framework string) (*WriteResult, error) {
-	r := &WriteResult{Framework: framework}
+// Options adjusts how Write sets up a framework.
+type Options struct {
+	// Local keeps the generated agent files out of version control by adding
+	// them to .gitignore. By default they are left trackable, so a teammate
+	// who clones the repository gets the same agent setup.
+	Local bool
+	// Hooks also installs the framework's pre-edit hook, which checkpoints the
+	// project before an agent session's first edit.
+	Hooks bool
+}
 
-	switch framework {
-	case FrameworkClaudeCode:
-		if err := writeClaudeCode(projectRoot, r); err != nil {
-			return nil, err
+// Validate checks every framework name before anything is written, so a typo
+// in `--skills` fails before `avc init` creates a project or touches a file.
+func Validate(frameworks []string) error {
+	for _, f := range frameworks {
+		if !isSupported(f) {
+			return fmt.Errorf("unknown framework '%s'; supported: %s",
+				f, strings.Join(SupportedFrameworks, ", "))
 		}
-	case FrameworkClaudeDesktop:
-		if err := writeClaudeDesktop(projectRoot, r); err != nil {
-			return nil, err
-		}
-	case FrameworkCursor:
-		if err := writeCursor(projectRoot, r); err != nil {
-			return nil, err
-		}
-	case FrameworkWindsurf:
-		if err := writeWindsurf(projectRoot, r); err != nil {
-			return nil, err
-		}
-	case FrameworkGeneric:
-		if err := writeGeneric(projectRoot, r); err != nil {
-			return nil, err
-		}
-	default:
-		return nil, fmt.Errorf("unknown framework '%s'; supported: %s",
-			framework, strings.Join(SupportedFrameworks, ", "))
 	}
+	return nil
+}
 
-	// Gitignore the AVC agent files — generated agent files are local tooling,
-	// not repo content. When the user authored the project's .gitignore, only
-	// files AVC created are added: a pre-existing file the user tracks (and
-	// AVC merely appended to or merged into) keeps its tracked status. When
-	// the .gitignore is AVC's own (or absent), the user has no expressed
-	// tracking policy, so every AVC-touched project file is added.
-	createdOnly := config.UserOwnsGitignore(projectRoot)
-	if entries := gitignoreEntriesFor(r.Actions, createdOnly); len(entries) > 0 {
-		action, err := config.AppendToGitignore(projectRoot, entries)
-		if err != nil {
+func isSupported(framework string) bool {
+	for _, s := range SupportedFrameworks {
+		if s == framework {
+			return true
+		}
+	}
+	return false
+}
+
+// Write installs MCP config and agent instructions for the given framework
+// with default options.
+func Write(projectRoot, framework string) (*WriteResult, error) {
+	return WriteWithOptions(projectRoot, framework, Options{})
+}
+
+// writers maps each framework to the function that sets it up.
+var writers = map[string]func(projectRoot string, r *WriteResult) error{
+	FrameworkClaudeCode:    writeClaudeCode,
+	FrameworkClaudeDesktop: writeClaudeDesktop,
+	FrameworkCursor:        writeCursor,
+	FrameworkWindsurf:      writeWindsurf,
+	FrameworkCodex:         writeCodex,
+	FrameworkCopilot:       writeCopilot,
+	FrameworkGeneric:       writeGeneric,
+}
+
+// WriteWithOptions installs MCP config and agent instructions for the given
+// framework. MCP configs are project-level where the framework supports it;
+// claude-desktop and windsurf only have global configs.
+func WriteWithOptions(projectRoot, framework string, opts Options) (*WriteResult, error) {
+	if err := Validate([]string{framework}); err != nil {
+		return nil, err
+	}
+	r := &WriteResult{Framework: framework}
+	if err := writers[framework](projectRoot, r); err != nil {
+		return nil, err
+	}
+	if opts.Hooks {
+		if err := writeHook(projectRoot, framework, r); err != nil {
 			return nil, err
 		}
-		if action != "" {
-			r.Actions = append(r.Actions, FileAction{Path: ".gitignore", Status: action})
+	}
+	if opts.Local {
+		if err := gitignoreAgentFiles(projectRoot, r); err != nil {
+			return nil, err
 		}
 	}
 	return r, nil
+}
+
+// gitignoreAgentFiles adds the project files AVC wrote to .gitignore, for
+// Options.Local. When the user authored the project's .gitignore, only files
+// AVC created are added: a pre-existing file the user tracks (and AVC merely
+// appended to or merged into) keeps its tracked status. When the .gitignore is
+// AVC's own (or absent), every AVC-touched project file is added.
+func gitignoreAgentFiles(projectRoot string, r *WriteResult) error {
+	createdOnly := config.UserOwnsGitignore(projectRoot)
+	entries := gitignoreEntriesFor(r.Actions, createdOnly)
+	if len(entries) == 0 {
+		return nil
+	}
+	action, err := config.AppendToGitignore(projectRoot, entries)
+	if err != nil {
+		return err
+	}
+	if action != "" {
+		r.Actions = append(r.Actions, FileAction{Path: ".gitignore", Status: action})
+	}
+	return nil
 }
 
 // skillsDirPattern gitignores every generated skill directory with one entry.
@@ -109,12 +156,13 @@ const skillsDirPattern = ".claude/skills/avc-*/"
 // gitignoreEntriesFor maps project files AVC wrote to .gitignore entries.
 // With createdOnly, only status "created" qualifies — pre-existing files the
 // user already tracks must not become ignored because AVC appended to them.
-// Global config paths (absolute, outside the project) never produce entries.
+// Global config paths (absolute, outside the project) and removed files never
+// produce entries.
 func gitignoreEntriesFor(actions []FileAction, createdOnly bool) []string {
 	var entries []string
 	seen := map[string]bool{}
 	for _, a := range actions {
-		if (createdOnly && a.Status != "created") || filepath.IsAbs(a.Path) {
+		if a.Status == actionRemoved || (createdOnly && a.Status != actionCreated) || filepath.IsAbs(a.Path) {
 			continue
 		}
 		entry := a.Path
@@ -132,10 +180,53 @@ func gitignoreEntriesFor(actions []FileAction, createdOnly bool) []string {
 
 // ─── Framework writers ────────────────────────────────────────────────────────
 
+// Project-relative paths of the files AVC writes.
+const (
+	projectMCPFile      = ".mcp.json"
+	claudeMDFile        = "CLAUDE.md"
+	agentsMDFile        = "AGENTS.md"
+	legacyGenericFile   = "AGENT_INSTRUCTIONS.md"
+	legacyWindsurfRules = ".windsurfrules"
+)
+
+var (
+	cursorMCPFile      = filepath.Join(".cursor", "mcp.json")
+	cursorRulesFile    = filepath.Join(".cursor", "rules", "avc.mdc")
+	windsurfRulesFile  = filepath.Join(".windsurf", "rules", "avc.md")
+	codexConfigFile    = filepath.Join(".codex", "config.toml")
+	vscodeMCPFile      = filepath.Join(".vscode", "mcp.json")
+	devinMCPFile       = filepath.Join(".devin", "mcp_config.json")
+	copilotRulesFile   = filepath.Join(".github", "instructions", "avc.instructions.md")
+	agentsMDServerNote = "configured in your agent's MCP settings (`avc init --skills <tool>` writes them)"
+)
+
+// Where each framework's MCP server is configured, as the rules intro says it.
+const (
+	claudeCodeLocation = "configured in `.mcp.json` and starts automatically"
+	cursorLocation     = "configured in `.cursor/mcp.json` and starts automatically"
+	windsurfLocation   = "configured in `.devin/mcp_config.json`"
+	copilotLocation    = "configured in `.mcp.json` (and `.vscode/mcp.json` for VS Code's older Local mode)"
+)
+
+// Rule-file frontmatter. Each tool reads its own header to decide when a rule
+// applies; without one, Cursor treats a rule as manual-only and the agent
+// never sees it.
+const (
+	cursorFrontmatter   = "description: AVC version-control rules — snapshot and branch before editing\nalwaysApply: true\n"
+	windsurfFrontmatter = "trigger: always_on\n"
+	copilotFrontmatter  = "applyTo: \"**\"\ndescription: AVC version-control rules — snapshot and branch before editing\n"
+)
+
+// legacyRulesPrefix opens the whole-file rules older AVC versions wrote
+// without a managed-file marker (Cursor's avc.mdc).
+const legacyRulesPrefix = "# " + rulesTitle + "\n\nAVC is active on this project."
+
+func isLegacyRulesFile(content string) bool {
+	return strings.HasPrefix(content, legacyRulesPrefix)
+}
+
 func writeClaudeCode(projectRoot string, r *WriteResult) error {
-	// MCP config — project-level .mcp.json, auto-discovered by Claude Code.
-	projectMCP := filepath.Join(projectRoot, projectMCPFile)
-	action, err := mergeMCPConfig(projectMCP, "avc", resolveProjectCommand(r), nil)
+	action, err := mergeJSONServer(projectServer(projectRoot, projectMCPFile, r))
 	if err != nil {
 		return err
 	}
@@ -143,104 +234,260 @@ func writeClaudeCode(projectRoot string, r *WriteResult) error {
 	if globalSettings, err := claudeGlobalSettingsPath(); err == nil {
 		warnStaleGlobalEntry(globalSettings, "avc", r)
 	}
-
-	// CLAUDE.md — always-loaded context (append, idempotent)
-	claudeMDPath := filepath.Join(projectRoot, "CLAUDE.md")
-	action, err = appendRulesBlock(claudeMDPath, claudeMDBlock)
-	if err != nil {
+	if err := writeClaudeRules(projectRoot, claudeCodeLocation, configuredTier(FrameworkClaudeCode, filepath.Join(projectRoot, projectMCPFile)), r); err != nil {
 		return err
 	}
-	r.Actions = append(r.Actions, fileAction("CLAUDE.md", action))
-
-	// Skill files — .claude/skills/avc-<name>/SKILL.md
-	return writeClaudeSkillFiles(projectRoot, r)
+	r.NextSteps = append(r.NextSteps, "Restart Claude Code (or run /mcp) so it loads the avc server from .mcp.json.")
+	return nil
 }
 
 func writeClaudeDesktop(projectRoot string, r *WriteResult) error {
-	// MCP config — OS-specific Claude Desktop config file.
 	// Use "avc:<project-name>" as the server key so multiple projects can
 	// coexist in the config without overwriting each other.
 	desktopConfig, err := claudeDesktopConfigPath()
 	if err != nil {
 		return err
 	}
-	serverKey := "avc:" + filepath.Base(projectRoot)
-	action, err := mergeMCPConfig(desktopConfig, serverKey, resolveGlobalCommand(r),
-		map[string]any{"AVC_PROJECT": projectRoot})
+	command := resolveGlobalCommand(r)
+	env := map[string]any{"AVC_PROJECT": projectRoot}
+	action, err := mergeJSONServer(jsonServer{
+		path:       desktopConfig,
+		serversKey: keyMCPServers,
+		name:       "avc:" + filepath.Base(projectRoot),
+		entry:      map[string]any{"command": command, "args": serverArgs(), "env": env},
+		matches:    commandMatches(command, env),
+	})
 	if err != nil {
 		return err
 	}
 	r.Actions = append(r.Actions, fileAction(desktopConfig, action))
+	if err := writeClaudeRules(projectRoot, "configured in Claude Desktop", defaultToolTier, r); err != nil {
+		return err
+	}
+	r.NextSteps = append(r.NextSteps, "Restart Claude Desktop to load the avc server.")
+	return nil
+}
 
-	// CLAUDE.md — always-loaded context (append, idempotent)
-	claudeMDPath := filepath.Join(projectRoot, "CLAUDE.md")
-	action, err = appendRulesBlock(claudeMDPath, claudeMDBlock)
+// writeClaudeRules writes the CLAUDE.md section and the bundled skill files.
+func writeClaudeRules(projectRoot, serverLocation, tier string, r *WriteResult) error {
+	action, err := upsertBlock(filepath.Join(projectRoot, claudeMDFile), renderBlock(serverLocation, tier))
 	if err != nil {
 		return err
 	}
-	r.Actions = append(r.Actions, fileAction("CLAUDE.md", action))
-
-	// Skill files — .claude/skills/avc-<name>/SKILL.md
+	r.Actions = append(r.Actions, fileAction(claudeMDFile, action))
 	return writeClaudeSkillFiles(projectRoot, r)
 }
 
 func writeCursor(projectRoot string, r *WriteResult) error {
-	// MCP config — project-level .cursor/mcp.json
-	rel := filepath.Join(".cursor", "mcp.json")
-	action, err := mergeMCPConfig(filepath.Join(projectRoot, rel), "avc", resolveProjectCommand(r), nil)
+	action, err := mergeJSONServer(projectServer(projectRoot, cursorMCPFile, r))
 	if err != nil {
 		return err
 	}
-	r.Actions = append(r.Actions, fileAction(filepath.ToSlash(rel), action))
+	r.Actions = append(r.Actions, fileAction(filepath.ToSlash(cursorMCPFile), action))
 	if globalMCP, err := cursorGlobalMCPPath(); err == nil {
 		warnStaleGlobalEntry(globalMCP, "avc", r)
 	}
 
-	// Rules file — .cursor/rules/avc.mdc (project-level, checked into repo)
-	rulesPath := filepath.Join(projectRoot, ".cursor", "rules", "avc.mdc")
-	action, err = writeFileIfAbsent(rulesPath, cursorRulesContent)
+	content := renderManagedFile(cursorFrontmatter, cursorLocation, configuredTier(FrameworkCursor, filepath.Join(projectRoot, cursorMCPFile)))
+	action, err = writeManagedFile(filepath.Join(projectRoot, cursorRulesFile), content, isLegacyRulesFile)
 	if err != nil {
 		return err
 	}
-	r.Actions = append(r.Actions, fileAction(".cursor/rules/avc.mdc", action))
+	r.Actions = append(r.Actions, fileAction(filepath.ToSlash(cursorRulesFile), action))
+	r.NextSteps = append(r.NextSteps, "Open Cursor Settings → MCP and enable the avc server.")
 	return nil
 }
 
+// writeWindsurf sets up Windsurf, which became Devin Desktop.
+//
+// Devin Desktop reads a project-level .devin/mcp_config.json (mcpServers),
+// shared through version control, so the server is scoped to this project.
+// Windsurf before the rename had only the global
+// ~/.codeium/windsurf/mcp_config.json; that entry is written only when such
+// an install exists. Rules go to .windsurf/rules/avc.md, which both read.
 func writeWindsurf(projectRoot string, r *WriteResult) error {
-	// MCP config — ~/.codeium/windsurf/mcp_config.json (global, loaded by all Windsurf interfaces)
+	action, err := mergeJSONServer(projectServer(projectRoot, devinMCPFile, r))
+	if err != nil {
+		return err
+	}
+	r.Actions = append(r.Actions, fileAction(filepath.ToSlash(devinMCPFile), action))
+
+	if err := writeLegacyWindsurfServer(projectRoot, r); err != nil {
+		return err
+	}
+
+	content := renderManagedFile(windsurfFrontmatter, windsurfLocation, configuredTier(FrameworkWindsurf, filepath.Join(projectRoot, devinMCPFile)))
+	action, err = writeManagedFile(filepath.Join(projectRoot, windsurfRulesFile), content, nil)
+	if err != nil {
+		return err
+	}
+	r.Actions = append(r.Actions, fileAction(filepath.ToSlash(windsurfRulesFile), action))
+
+	// Older versions wrote the rules into the legacy .windsurfrules file. Two
+	// copies would drift, so the old AVC section is removed.
+	removed, err := removeBlock(filepath.Join(projectRoot, legacyWindsurfRules))
+	if err != nil {
+		return err
+	}
+	if removed != "" {
+		r.Actions = append(r.Actions, fileAction(legacyWindsurfRules, removed))
+		r.Warnings = append(r.Warnings, "moved the AVC rules from the legacy .windsurfrules to "+filepath.ToSlash(windsurfRulesFile))
+	}
+	r.NextSteps = append(r.NextSteps, "In Devin Desktop (formerly Windsurf), open the MCP servers panel and refresh so it loads avc from .devin/mcp_config.json.")
+	return nil
+}
+
+// writeLegacyWindsurfServer adds this project to the avc entry in a
+// pre-rename Windsurf's global MCP config, when that install exists. That
+// config is shared by every project, so each project is appended as a search
+// root rather than replacing the last; the server also selects the open
+// project from MCP roots.
+func writeLegacyWindsurfServer(projectRoot string, r *WriteResult) error {
 	globalMCP, err := windsurfGlobalMCPPath()
 	if err != nil {
 		return err
 	}
-	action, err := mergeMCPConfig(globalMCP, "avc", resolveGlobalCommand(r), nil)
+	if !fileExists(filepath.Dir(globalMCP)) {
+		return nil // no pre-rename Windsurf on this machine
+	}
+	root, _, err := readJSONObject(globalMCP)
+	if err != nil {
+		return err
+	}
+	servers, _ := root[keyMCPServers].(map[string]any)
+	existing, _ := servers["avc"].(map[string]any)
+
+	command := resolveGlobalCommand(r)
+	action, err := mergeJSONServer(jsonServer{
+		path:       globalMCP,
+		serversKey: keyMCPServers,
+		name:       "avc",
+		entry:      map[string]any{"command": command, "args": serverArgs(windsurfRoots(existing, projectRoot)...)},
+		matches: func(e map[string]any) bool {
+			return e["command"] == command && argsContain(e, projectRoot)
+		},
+	})
 	if err != nil {
 		return err
 	}
 	r.Actions = append(r.Actions, fileAction(globalMCP, action))
+	if action != skipAlreadyConfigured {
+		r.Warnings = append(r.Warnings, "also registered avc in the pre-rename Windsurf global config; Devin Desktop uses .devin/mcp_config.json, so remove the global entry once you have moved to Devin Desktop")
+	}
+	return nil
+}
 
-	// Rules file — .windsurfrules (append, idempotent, project-level)
-	rulesPath := filepath.Join(projectRoot, ".windsurfrules")
-	action, err = appendRulesBlock(rulesPath, windsurfRulesBlock)
+func writeCodex(projectRoot string, r *WriteResult) error {
+	action, err := mergeCodexServer(filepath.Join(projectRoot, codexConfigFile), resolveProjectCommand(r))
 	if err != nil {
 		return err
 	}
-	r.Actions = append(r.Actions, fileAction(".windsurfrules", action))
+	r.Actions = append(r.Actions, fileAction(filepath.ToSlash(codexConfigFile), action))
+	if err := writeAgentsMD(projectRoot, configuredTier(FrameworkCodex, filepath.Join(projectRoot, codexConfigFile)), r); err != nil {
+		return err
+	}
+	r.NextSteps = append(r.NextSteps,
+		"Codex reads .codex/config.toml only for trusted projects — trust this project in Codex, or register the server globally with: codex mcp add avc -- avc mcp serve --tools "+defaultToolTier)
+	return nil
+}
+
+// copilotCodingAgentConfig is the JSON a user pastes into the repository's
+// Settings → Copilot → MCP servers box for the Copilot coding agent, which
+// reads no MCP file from the repository. "tools" is required there.
+const copilotCodingAgentConfig = `{"mcpServers": {"avc": {"type": "local", "command": "avc", "args": ["mcp", "serve", "--tools", "` + defaultToolTier + `"], "tools": ["*"]}}}`
+
+// writeCopilot sets up GitHub Copilot in VS Code.
+//
+// VS Code's Copilot agent reads the portable .mcp.json (mcpServers) at the
+// workspace root — the same file Claude Code reads. The older .vscode/mcp.json
+// (servers) belongs to VS Code's Local agent mode, deprecated for removal in
+// February 2027, and is kept until then so both modes find the server.
+func writeCopilot(projectRoot string, r *WriteResult) error {
+	command := resolveProjectCommand(r)
+	stdio := map[string]any{"type": "stdio", "command": command, "args": serverArgs()}
+
+	for _, target := range []struct{ rel, key string }{
+		{projectMCPFile, keyMCPServers},
+		{vscodeMCPFile, keyVSCode},
+	} {
+		action, err := mergeJSONServer(jsonServer{
+			path:       filepath.Join(projectRoot, target.rel),
+			serversKey: target.key,
+			name:       "avc",
+			entry:      stdio,
+			matches:    commandMatches(command, nil),
+		})
+		var syntaxErr *json.SyntaxError
+		if errors.As(err, &syntaxErr) {
+			// VS Code allows comments in its config files; rewriting such a
+			// file would strip them, so ask the user to add the entry instead.
+			r.Warnings = append(r.Warnings, fmt.Sprintf(
+				"%s is not plain JSON (it may contain comments), so it was left untouched — add an \"avc\" entry under %q with command %q and args %q",
+				filepath.ToSlash(target.rel), target.key, command, strings.Join(serverArgs(), " ")))
+			action, err = "skipped:not plain JSON", nil
+		}
+		if err != nil {
+			return err
+		}
+		r.Actions = append(r.Actions, fileAction(filepath.ToSlash(target.rel), action))
+	}
+
+	content := renderManagedFile(copilotFrontmatter, copilotLocation, configuredTier(FrameworkCopilot, filepath.Join(projectRoot, projectMCPFile)))
+	action, err := writeManagedFile(filepath.Join(projectRoot, copilotRulesFile), content, nil)
+	if err != nil {
+		return err
+	}
+	r.Actions = append(r.Actions, fileAction(filepath.ToSlash(copilotRulesFile), action))
+	r.NextSteps = append(r.NextSteps,
+		"VS Code's Copilot agent reads .mcp.json at the workspace root while the chat.mcp.workspaceRootConfig.enabled setting is on (experimental); its older Local mode reads .vscode/mcp.json. Start the avc server from the MCP servers list.",
+		"For the Copilot coding agent on GitHub, paste this into the repository's Settings → Copilot → MCP servers, and install avc in .github/workflows/copilot-setup-steps.yml: "+copilotCodingAgentConfig)
 	return nil
 }
 
 func writeGeneric(projectRoot string, r *WriteResult) error {
-	path := filepath.Join(projectRoot, "AGENT_INSTRUCTIONS.md")
-	action, err := writeFileIfAbsent(path, genericInstructions)
-	if err != nil {
+	if err := writeAgentsMD(projectRoot, defaultToolTier, r); err != nil {
 		return err
 	}
-	r.Actions = append(r.Actions, fileAction("AGENT_INSTRUCTIONS.md", action))
+	if _, err := os.Stat(filepath.Join(projectRoot, legacyGenericFile)); err == nil {
+		r.Warnings = append(r.Warnings, legacyGenericFile+" is no longer written — the AVC rules now live in AGENTS.md, which most agents read automatically; you can delete it")
+	}
+	r.NextSteps = append(r.NextSteps, "Point your agent's MCP settings at: avc mcp serve --tools "+defaultToolTier+" (run from this project's root).")
 	return nil
 }
 
-// fileAction constructs a FileAction from a relative path and raw action string.
-// action is one of "created", "updated", "skipped:already exists",
-// "skipped:already configured", "skipped:marker present".
+// writeAgentsMD writes the AVC section into AGENTS.md, the instruction file
+// read by Codex, Copilot, Cursor, Windsurf and other agents.
+func writeAgentsMD(projectRoot, tier string, r *WriteResult) error {
+	action, err := upsertBlock(filepath.Join(projectRoot, agentsMDFile), renderBlock(agentsMDServerNote, tier))
+	if err != nil {
+		return err
+	}
+	r.Actions = append(r.Actions, fileAction(agentsMDFile, action))
+	return nil
+}
+
+// configuredTier returns the tool tier in the framework's MCP config after it
+// was written, so the rules describe the tools the server actually exposes —
+// including a tier the user changed by hand.
+func configuredTier(framework, mcpPath string) string {
+	return tierOf(readServerEntry(framework, mcpPath))
+}
+
+// projectServer describes the standard project-level "avc" entry in an
+// mcpServers-style config.
+func projectServer(projectRoot, rel string, r *WriteResult) jsonServer {
+	command := resolveProjectCommand(r)
+	return jsonServer{
+		path:       filepath.Join(projectRoot, rel),
+		serversKey: keyMCPServers,
+		name:       "avc",
+		entry:      map[string]any{"command": command, "args": serverArgs()},
+		matches:    commandMatches(command, nil),
+	}
+}
+
+// fileAction constructs a FileAction from a relative path and raw action
+// string: "created", "updated", "removed", or "skipped:<reason>".
 func fileAction(rel, action string) FileAction {
 	parts := strings.SplitN(action, ":", 2)
 	fa := FileAction{Path: rel, Status: parts[0]}
@@ -250,74 +497,13 @@ func fileAction(rel, action string) FileAction {
 	return fa
 }
 
-// ─── Content: CLAUDE.md block ────────────────────────────────────────────────
-
-const claudeMDMarker = "<!-- AVC — Agentic Version Control -->"
-
-// avcBlockEndMarker closes both the CLAUDE.md block and the Windsurf rules
-// block, delimiting the AVC section so it can be located precisely in files
-// that may contain other content.
-const avcBlockEndMarker = "<!-- /AVC — Agentic Version Control -->"
-
-const claudeMDBlock = `
-<!-- AVC — Agentic Version Control -->
-## AVC — Agentic Version Control
-
-AVC is active on this project. You MUST use it. The MCP server starts automatically and exposes ` + "`avc_*`" + ` tools.
-
-### Mandatory actions
-
-**ALWAYS call ` + "`avc_snapshot`" + ` before making any code change. No exceptions.**
-Do not assess whether the change is "small enough" or "easily reversible" — that judgement is not yours to make. The cost of an unnecessary snapshot is negligible. The cost of skipping one when it was needed is not.
-
-Label format — always use the ` + "`auto:`" + ` prefix so agent snapshots are distinguishable in ` + "`avc list`" + `:
-- ` + "`auto: before <2–5 word description>`" + `
-
-**ALWAYS call ` + "`avc_branch_create`" + ` before starting any task. No exceptions.**
-Do not assess whether the task is "simple enough" to skip a branch — that judgement is not yours to make. After creating a branch, set your working directory to the ` + "`workspace`" + ` path in the response. NEVER edit files in the real project root while on a branch.
-
-**ALWAYS call ` + "`avc_restore`" + ` when:**
-- Tests fail after your changes
-- The build breaks
-- The user says "undo", "revert", "roll back", or "start over"
-- Do NOT attempt repeated fixes on broken state — restore first, then retry.
-
-**NEVER call ` + "`avc_merge`" + `** without the user saying yes explicitly.
-` + "`avc_merge`" + ` checks for conflicts automatically before writing anything — no separate preview step needed. If conflicts are found, it returns them without modifying main.
-
-**NEVER call ` + "`avc_run_in_workspace`" + `** without first:
-1. Showing the user the exact command you intend to run
-2. Explaining what it does
-3. Receiving explicit approval
-
-### Quick reference
-
-| Trigger | Tool |
-|---------|------|
-| About to make changes | ` + "`avc_snapshot`" + ` |
-| Multi-step or multi-file task | ` + "`avc_branch_create`" + ` |
-| Something broke | ` + "`avc_restore`" + ` |
-| Ready to review branch work | ` + "`avc_branch_diff`" + ` |
-| Ready to merge (with approval) | ` + "`avc_merge`" + ` |
-| Need to run tests or build | ` + "`avc_run_in_workspace`" + ` (approval required) |
-<!-- /AVC — Agentic Version Control -->
-`
-
-// projectMCPFile is Claude Code's project-scoped MCP config, auto-discovered
-// at the project root and safe to commit.
-const projectMCPFile = ".mcp.json"
-
-// ─── Claude Code global settings path ────────────────────────────────────────
+// ─── Global config paths ──────────────────────────────────────────────────────
 
 // claudeGlobalSettingsPath returns the path to ~/.claude.json.
 // This is the global Claude Code config file read by all interfaces (VSCode
 // extension, desktop app, CLI) regardless of the current project or CWD.
 func claudeGlobalSettingsPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve home directory: %w", err)
-	}
-	return filepath.Join(home, ".claude.json"), nil
+	return homePath(".claude.json")
 }
 
 // claudeDesktopConfigPath returns the OS-specific path to the Claude Desktop
@@ -329,11 +515,7 @@ func claudeGlobalSettingsPath() (string, error) {
 func claudeDesktopConfigPath() (string, error) {
 	switch runtime.GOOS {
 	case "darwin":
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("resolve home directory: %w", err)
-		}
-		return filepath.Join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json"), nil
+		return homePath("Library", "Application Support", "Claude", "claude_desktop_config.json")
 	case "windows":
 		appdata := os.Getenv("APPDATA")
 		if appdata == "" {
@@ -341,41 +523,37 @@ func claudeDesktopConfigPath() (string, error) {
 		}
 		return filepath.Join(appdata, "Claude", "claude_desktop_config.json"), nil
 	default:
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("resolve home directory: %w", err)
-		}
-		return filepath.Join(home, ".config", "Claude", "claude_desktop_config.json"), nil
+		return homePath(".config", "Claude", "claude_desktop_config.json")
 	}
 }
 
 // cursorGlobalMCPPath returns the path to ~/.cursor/mcp.json.
-// This file is loaded by all Cursor interfaces regardless of project CWD.
 func cursorGlobalMCPPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve home directory: %w", err)
-	}
-	return filepath.Join(home, ".cursor", "mcp.json"), nil
+	return homePath(".cursor", "mcp.json")
 }
 
-// windsurfGlobalMCPPath returns the path to ~/.codeium/windsurf/mcp_config.json.
-// This file is loaded by all Windsurf interfaces regardless of project CWD.
+// windsurfGlobalMCPPath returns the path to ~/.codeium/windsurf/mcp_config.json,
+// the one MCP config every Windsurf window loads.
 func windsurfGlobalMCPPath() (string, error) {
+	return homePath(".codeium", "windsurf", "mcp_config.json")
+}
+
+// homePath joins elems under the user's home directory.
+func homePath(elems ...string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve home directory: %w", err)
 	}
-	return filepath.Join(home, ".codeium", "windsurf", "mcp_config.json"), nil
+	return filepath.Join(append([]string{home}, elems...)...), nil
 }
 
-// ─── MCP config helpers ───────────────────────────────────────────────────────
+// ─── MCP command resolution ───────────────────────────────────────────────────
 
 // resolveBinaryPath returns the absolute path to the running avc binary.
 // EvalSymlinks is applied so Homebrew and similar symlink installations resolve
 // to the real binary path that the OS can execute without a shell PATH lookup.
-// Returns ("avc", true) if the path cannot be resolved or looks like a temp
-// directory (i.e. the binary was run via `go run` and won't be stable).
+// isTmp reports a binary in a temp directory (i.e. run via `go run`), whose
+// path won't be stable.
 func resolveBinaryPath() (path string, isTmp bool) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -385,13 +563,7 @@ func resolveBinaryPath() (path string, isTmp bool) {
 	if err != nil {
 		resolved = exe
 	}
-	// Warn callers when the binary lives in a temp directory — this happens
-	// when the user runs `go run .` instead of a real installed binary.
-	tmp := os.TempDir()
-	if strings.HasPrefix(resolved, tmp) {
-		return resolved, true
-	}
-	return resolved, false
+	return resolved, strings.HasPrefix(resolved, os.TempDir())
 }
 
 // resolveGlobalCommand returns the command for a global (machine-local) MCP
@@ -425,165 +597,7 @@ func resolveProjectCommand(r *WriteResult) string {
 
 const tmpBinaryWarning = "avc binary appears to be a temporary build (go run) — the MCP server path in the config may not be stable. Install avc to a permanent location and re-run `avc init --skills`."
 
-// mergeMCPConfig merges an AVC server entry into the JSON config at path.
-// env is optional (used by Claude Desktop to pass AVC_PROJECT).
-// Returns "created", "updated", or "skipped:already configured".
-func mergeMCPConfig(path, serverKey, command string, env map[string]any) (string, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return "", err
-	}
-
-	entry := map[string]any{
-		"command": command,
-		// --tools standard is the default; change to "core" or "full" as needed.
-		"args": []string{"mcp", "serve", "--tools", "standard"},
-	}
-	if env != nil {
-		entry["env"] = env
-	}
-
-	var root map[string]any
-	existed := false
-	data, err := os.ReadFile(path)
-	if err == nil {
-		existed = true
-		if jsonErr := json.Unmarshal(data, &root); jsonErr != nil {
-			return "", fmt.Errorf("parse %s: %w", path, jsonErr)
-		}
-	} else if os.IsNotExist(err) {
-		root = map[string]any{}
-	} else {
-		return "", err
-	}
-
-	servers, ok := root["mcpServers"].(map[string]any)
-	if !ok {
-		servers = map[string]any{}
-		root["mcpServers"] = servers
-	}
-
-	if existing, exists := servers[serverKey]; exists {
-		if existingMap, ok := existing.(map[string]any); ok {
-			if existingMap["command"] == command && envMatches(existingMap["env"], env) {
-				return "skipped:already configured", nil
-			}
-		}
-		// Stale entry (bare "avc", old install location, old env) — update it.
-		servers[serverKey] = entry
-		return "updated", writeJSON(path, root)
-	}
-
-	servers[serverKey] = entry
-	if err := writeJSON(path, root); err != nil {
-		return "", err
-	}
-	if existed {
-		return "updated", nil
-	}
-	return "created", nil
-}
-
-// envMatches reports whether an existing config's env block equals the desired
-// one. A nil desired env matches anything — env is not managed for that entry.
-func envMatches(existing any, desired map[string]any) bool {
-	if desired == nil {
-		return true
-	}
-	existingMap, ok := existing.(map[string]any)
-	if !ok {
-		return false
-	}
-	return reflect.DeepEqual(existingMap, desired)
-}
-
-// writeJSON writes root to path as indented JSON with a trailing newline.
-func writeJSON(path string, root map[string]any) error {
-	out, err := json.MarshalIndent(root, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, append(out, '\n'), 0644)
-}
-
-// warnStaleGlobalEntry warns when serverKey is still registered in a global
-// config file (from an older AVC version that wrote global configs), which
-// would register the server twice.
-func warnStaleGlobalEntry(globalPath, serverKey string, r *WriteResult) {
-	data, err := os.ReadFile(globalPath)
-	if err != nil {
-		return
-	}
-	var root map[string]any
-	if json.Unmarshal(data, &root) != nil {
-		return
-	}
-	servers, ok := root["mcpServers"].(map[string]any)
-	if !ok {
-		return
-	}
-	if _, exists := servers[serverKey]; exists {
-		r.Warnings = append(r.Warnings, fmt.Sprintf(
-			"a global '%s' MCP entry also exists in %s — the server would be registered twice; remove that entry", serverKey, globalPath))
-	}
-}
-
-// ─── Rules-file helpers ───────────────────────────────────────────────────────
-
-const avcRulesMarker = "# AVC — Agentic Version Control"
-
-// appendRulesBlock appends the AVC block to a rules file.
-// Returns "created", "updated", or "skipped:marker present".
-// Checks for both the markdown marker and the HTML comment marker so it works
-// correctly for both .windsurfrules and CLAUDE.md.
-func appendRulesBlock(path, block string) (string, error) {
-	existing, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return "", err
-	}
-	content := string(existing)
-	if strings.Contains(content, avcRulesMarker) || strings.Contains(content, claudeMDMarker) {
-		return "skipped:marker present", nil
-	}
-
-	existed := len(existing) > 0
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-
-	prefix := ""
-	if existed && existing[len(existing)-1] != '\n' {
-		prefix = "\n"
-	}
-	if _, err := f.WriteString(prefix + block); err != nil {
-		return "", err
-	}
-
-	if existed {
-		return "updated", nil
-	}
-	return "created", nil
-}
-
-// ─── File helper ─────────────────────────────────────────────────────────────
-
-// writeFileIfAbsent writes content only if path does not exist.
-// Returns "created" or "skipped:already exists".
-func writeFileIfAbsent(path, content string) (string, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return "", err
-	}
-	if _, err := os.Stat(path); err == nil {
-		return "skipped:already exists", nil
-	}
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		return "", err
-	}
-	return "created", nil
-}
-
-// ─── Content: Claude Code skill files ────────────────────────────────────────
+// ─── Claude Code skill files ──────────────────────────────────────────────────
 
 // skillAssets holds the Claude skill files bundled into the binary. The AVC
 // Claude plugin publishes this same directory, so the skills installed by
@@ -641,109 +655,3 @@ func writeClaudeSkillFiles(projectRoot string, r *WriteResult) error {
 	}
 	return nil
 }
-
-// ─── Content: Cursor rules ────────────────────────────────────────────────────
-
-const cursorRulesContent = `# AVC — Agentic Version Control
-
-AVC is active on this project. You MUST use it. The MCP server is configured in .cursor/mcp.json and starts automatically.
-
-## Mandatory rules
-
-**ALWAYS call avc_snapshot before making any code change. No exceptions.**
-Do not assess whether the change is "small enough" or "easily reversible" — that judgement is not yours to make. The cost of an unnecessary snapshot is negligible. The cost of skipping one when it was needed is not.
-Label format: always prefix with "auto:" — use "auto: before <action>" (2–5 words).
-
-**ALWAYS call avc_branch_create before starting any task. No exceptions.**
-Do not assess whether the task is "simple enough" to skip a branch — that judgement is not yours to make.
-After creating a branch, work ONLY inside the workspace path returned in the response.
-NEVER edit files in the real project root while on a branch.
-
-**ALWAYS call avc_restore when something breaks** — do not attempt repeated fixes on broken state.
-
-**NEVER call avc_merge** without the user explicitly saying yes.
-avc_merge checks for conflicts automatically — no separate preview step needed.
-
-**NEVER call avc_run_in_workspace** without first showing the user the exact command and receiving explicit approval.
-System package managers (brew, apt, choco, sudo) are blocked. Use pip install (no --user), npm install (no -g).
-`
-
-// ─── Content: Windsurf rules ──────────────────────────────────────────────────
-
-const windsurfRulesBlock = `
-# AVC — Agentic Version Control
-
-AVC is active on this project. You MUST use it. The MCP server is configured globally and starts automatically.
-
-## Mandatory rules
-
-**ALWAYS call avc_snapshot before making any code change. No exceptions.**
-Do not assess whether the change is "small enough" or "easily reversible" — that judgement is not yours to make. The cost of an unnecessary snapshot is negligible. The cost of skipping one when it was needed is not.
-Label format: always prefix with "auto:" — use "auto: before <action>" (2–5 words).
-
-**ALWAYS call avc_branch_create before starting any task. No exceptions.**
-Do not assess whether the task is "simple enough" to skip a branch — that judgement is not yours to make.
-After creating a branch, work ONLY inside the workspace path returned in the response.
-NEVER edit files in the real project root while on a branch.
-
-**ALWAYS call avc_restore when something breaks** — do not attempt repeated fixes on broken state.
-
-**NEVER call avc_merge** without the user explicitly saying yes.
-avc_merge checks for conflicts automatically — no separate preview step needed.
-
-**NEVER call avc_run_in_workspace** without first showing the user the exact command and receiving explicit approval.
-System package managers (brew, apt, choco, sudo) are blocked. Use pip install (no --user), npm install (no -g).
-<!-- /AVC — Agentic Version Control -->
-`
-
-// ─── Content: Generic agent instructions ─────────────────────────────────────
-
-const workspaceCommandBlock = `
-
-## Running commands in the workspace
-
-NEVER call ` + "`avc_run_in_workspace`" + ` without:
-1. Stating the exact command to the user
-2. Explaining what it does and why
-3. Receiving explicit user approval ("yes", "go ahead", "run it")
-
-If the user declines, do not call the tool.
-
-Sandbox rules:
-- System package managers (brew, apt, choco, sudo) are blocked — they are not available
-- Python: ` + "`pip install <pkg>`" + ` — workspace venv created automatically; NEVER use ` + "`--user`" + ` or ` + "`--system`" + `
-- Node: ` + "`npm install`" + ` — packages go into workspace node_modules; NEVER use ` + "`-g`" + ` or ` + "`--global`" + `
-`
-
-const genericInstructions = `# AVC Agent Instructions
-
-AVC is active on this project. You MUST use it. Start the MCP server with: ` + "`avc mcp serve`" + `
-
----
-
-## Tools
-
-| Tool | Purpose |
-|------|---------|
-| ` + "`avc_snapshot`" + ` | Save current state — call proactively, not on request |
-| ` + "`avc_list`" + ` | List available snapshots |
-| ` + "`avc_restore`" + ` | Roll back to a previous snapshot |
-| ` + "`avc_diff`" + ` | Show what changed between two snapshots |
-| ` + "`avc_branch_create`" + ` | Start an isolated workspace for a multi-step task |
-| ` + "`avc_branch_diff`" + ` | Show cumulative changes on a branch |
-| ` + "`avc_merge`" + ` | Apply branch to main — checks conflicts first, requires explicit user approval |
-| ` + "`avc_merge_abort`" + ` | Undo a merge — restores main from pre-merge snapshot |
-| ` + "`avc_run_in_workspace`" + ` | Run a command in the branch workspace (approval required) |
-
----
-
-## Mandatory rules
-
-**ALWAYS call ` + "`avc_snapshot`" + ` before making any code change. No exceptions.** Do not assess whether the change is "small enough" or "easily reversible" — that judgement is not yours to make. The cost of an unnecessary snapshot is negligible. The cost of skipping one when it was needed is not.
-
-**ALWAYS call ` + "`avc_branch_create`" + ` before starting any task. No exceptions.** Do not assess whether the task is "simple enough" to skip a branch — that judgement is not yours to make. After creating the branch, work ONLY inside the ` + "`workspace`" + ` path returned — NEVER edit the real project root while on a branch.
-
-**ALWAYS call ` + "`avc_restore`" + `** when something breaks. Do NOT attempt repeated fixes on broken state — restore first, then retry.
-
-**NEVER call ` + "`avc_merge`" + `** without the user explicitly saying yes. ` + "`avc_merge`" + ` checks for conflicts automatically before writing anything — no separate preview step needed.
-` + workspaceCommandBlock

@@ -36,6 +36,27 @@ avc init --json
 
 Safe to run more than once — re-running on an already-initialized project is a no-op.
 
+**Agent setup flags:**
+
+| Flag | Effect |
+|------|--------|
+| `--skills <list>` | Set up agent tools: `claude-code`, `claude-desktop`, `cursor`, `windsurf`, `codex`, `copilot`, `generic`. Unknown names fail before anything is written. |
+| `--local` | Add the generated agent files to `.gitignore` (by default they are left trackable) |
+| `--hooks` | Also install the tool's pre-edit checkpoint hook (claude-code, cursor, windsurf, codex, copilot) |
+
+With `--json`, each entry in `skills` carries `actions`, `warnings` and `next_steps`.
+
+---
+
+## `avc doctor [--agents]`
+
+Checks every agent tool set up in the project: the MCP entry exists and its command runs, the rules match the configured tool tier, whether the files are gitignored, and whether the pre-edit hook is installed. Exits 1 when any check fails.
+
+```bash
+avc doctor
+avc doctor --json   # {"project": "...", "agents": [{"framework": "codex", "checks": [...]}], "ok": true}
+```
+
 ---
 
 ## `avc snapshot <label>`

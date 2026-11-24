@@ -104,6 +104,7 @@ To wire up your agent framework at the same time:
 ```bash
 avc init --skills claude-code
 avc init --skills claude-code,cursor,windsurf
+avc init --skills codex,copilot --hooks
 ```
 
 This writes the MCP server config and agent instruction files for each framework. See [Agent integration](#agent-integration) below.
@@ -250,19 +251,25 @@ The bundle contains the `avc` binary, so there is nothing else to install. On fi
 
 `avc init --skills <framework>` writes the MCP config and agent instruction files for your framework:
 
-| Framework | MCP config written | Instructions written |
-|-----------|--------------------|----------------------|
-| `claude-code` | `.mcp.json` (project-level) | `.claude/skills/avc-*/SKILL.md` |
-| `claude-desktop` | Claude Desktop config (global, with `AVC_PROJECT` env) | `.claude/skills/avc-*/SKILL.md` |
-| `cursor` | `.cursor/mcp.json` (project-level) | `.cursor/rules/avc.mdc` |
-| `windsurf` | `~/.codeium/windsurf/mcp_config.json` (global) | `.windsurfrules` |
-| `generic` | — | `AGENT_INSTRUCTIONS.md` |
+| Framework | MCP config written | Instructions written | `--hooks` installs |
+|-----------|--------------------|----------------------|--------------------|
+| `claude-code` | `.mcp.json` (project-level) | `CLAUDE.md` section + `.claude/skills/avc-*/SKILL.md` | `.claude/settings.json` PreToolUse |
+| `claude-desktop` | Claude Desktop config (global, with `AVC_PROJECT` env) | `CLAUDE.md` section + `.claude/skills/avc-*/SKILL.md` | — |
+| `cursor` | `.cursor/mcp.json` (project-level) | `.cursor/rules/avc.mdc` (`alwaysApply: true`) | `.cursor/hooks.json` preToolUse (Write) |
+| `windsurf` (Devin Desktop) | `.devin/mcp_config.json` (project-level); pre-rename Windsurf also gets `~/.codeium/windsurf/mcp_config.json` | `.windsurf/rules/avc.md` (`trigger: always_on`) | `.devin/hooks.v1.json` PreToolUse, plus legacy `.windsurf/hooks.json` pre_write_code |
+| `codex` | `.codex/config.toml` (project-level; Codex reads it for trusted projects) | `AGENTS.md` section | `.codex/hooks.json` PreToolUse (`apply_patch\|Edit\|Write`) |
+| `copilot` | `.mcp.json` (`mcpServers`, read by VS Code's Copilot agent) and `.vscode/mcp.json` (`servers`, VS Code's older Local mode); coding agent: JSON printed for repo settings | `.github/instructions/avc.instructions.md` (`applyTo: "**"`) | `.github/hooks/avc.json` PreToolUse |
+| `generic` | — (point your agent at `avc mcp serve`) | `AGENTS.md` section | — |
 
 Project-level configs are auto-discovered by the framework in that project — the AVC server is never registered machine-wide for frameworks that support project scope.
 
-Every file AVC creates is added to `.gitignore` automatically (in git projects) — generated agent files are local tooling, not repo content. If you authored the project's `.gitignore`, your tracking policy is respected: a pre-existing `CLAUDE.md` or MCP settings file that AVC appends to or merges into keeps its tracked status, and only files AVC itself created are added. Without a `.gitignore` of your own, AVC creates one and gitignores all the agent files it touched. To share an AVC-generated config with your team, remove its entry from `.gitignore` and commit it.
+Every rules file comes from one template and describes the tools the configured tier (`--tools`) actually exposes. Hosts with one global server config (Windsurf, Codex or VS Code user settings) are covered by MCP roots: the server asks the client which folders are open and selects the AVC project they belong to.
 
-Running `--skills` multiple times is safe — existing files are never overwritten, JSON configs are merged (not replaced), and rules files are append-only with a deduplication marker.
+Generated files are left trackable, so a teammate who clones the repository gets the same agent setup. Pass `--local` to add them to `.gitignore` instead. If you authored the project's `.gitignore`, only files AVC itself created are added.
+
+Running `--skills` more than once is safe. JSON and TOML configs are merged, not replaced, and your comments and other entries are kept. A VS Code config containing comments is left untouched, with a note on what to add. Hooks print what each tool expects on stdout (an explicit allow for Cursor, nothing for the others), so a checkpoint hook can never block an edit. Rules AVC wrote are refreshed when the rules change: a marked section in `CLAUDE.md` or `AGENTS.md`, or a file carrying the AVC-managed marker. Files you wrote are never overwritten. An unknown framework name fails before anything is written.
+
+`avc doctor --agents` checks each configured tool: that its MCP entry exists and the command runs, that its rules match the configured tier, whether its files are gitignored, and whether the pre-edit hook is installed. It exits 1 when a check fails.
 
 ### MCP tools
 

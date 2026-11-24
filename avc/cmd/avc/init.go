@@ -20,6 +20,8 @@ import (
 var (
 	initSkills []string
 	initYes    bool
+	initLocal  bool
+	initHooks  bool
 )
 
 var initCmd = &cobra.Command{
@@ -41,23 +43,39 @@ Accepts a comma-separated list of frameworks:
   avc init --skills claude-code
   avc init --skills claude-desktop
   avc init --skills claude-code,cursor
-  avc init --skills claude-code,cursor,windsurf,generic
+  avc init --skills codex,copilot,windsurf,generic
 
 MCP configs are written at the project level where the framework supports it
-(claude-code: .mcp.json, cursor: .cursor/mcp.json), so the server is scoped to
-this project and the config can be committed. claude-desktop and windsurf only
-support global configs and write to their home-directory config file.
+(claude-code: .mcp.json, cursor: .cursor/mcp.json, codex: .codex/config.toml,
+copilot: .mcp.json plus .vscode/mcp.json, windsurf/Devin Desktop:
+.devin/mcp_config.json), so the server is scoped to this project. claude-desktop
+only supports a global config; a pre-rename Windsurf install also gets an entry
+in its global config.
 
-Supported frameworks: claude-code, claude-desktop, cursor, windsurf, generic`,
+Agent rules go where each tool reads them: CLAUDE.md, .cursor/rules/avc.mdc,
+.windsurf/rules/avc.md, .github/instructions/avc.instructions.md, and AGENTS.md
+(codex, generic). Re-running refreshes rules AVC wrote; files you wrote are
+never overwritten.
+
+The generated files are left trackable so teammates get the same setup. Pass
+--local to add them to .gitignore instead. Pass --hooks to also install the
+tool's pre-edit hook, which checkpoints before an agent session's first edit
+(claude-code, cursor, windsurf, codex, copilot).
+
+Supported frameworks: ` + strings.Join(skills.SupportedFrameworks, ", "),
 	Args: cobra.MaximumNArgs(1),
 	RunE: runInit,
 }
 
 func init() {
 	initCmd.Flags().StringSliceVar(&initSkills, "skills", nil,
-		"Comma-separated list of agent frameworks to configure (claude-code, claude-desktop, cursor, windsurf, generic)")
+		"Comma-separated list of agent frameworks to configure ("+strings.Join(skills.SupportedFrameworks, ", ")+")")
 	initCmd.Flags().BoolVarP(&initYes, "yes", "y", false,
 		"Skip the confirmation prompt when no AVC project exists at the path yet")
+	initCmd.Flags().BoolVar(&initLocal, "local", false,
+		"Add the generated agent files to .gitignore instead of leaving them trackable")
+	initCmd.Flags().BoolVar(&initHooks, "hooks", false,
+		"Also install each framework's pre-edit checkpoint hook")
 }
 
 // confirmNewProject asks the user whether to create a new AVC project at path.
@@ -84,6 +102,12 @@ func runInit(cmd *cobra.Command, args []string) error {
 	absPath, err := filepath.Abs(projectPath)
 	if err != nil {
 		return fmt.Errorf("invalid project path: %w", err)
+	}
+
+	// Reject an unknown framework before anything is created, so a typo never
+	// leaves a half-initialized project behind.
+	if err := skills.Validate(initSkills); err != nil {
+		return fmt.Errorf("--skills: %w", err)
 	}
 
 	alreadyInit := isAVCDir(absPath)
@@ -125,8 +149,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	// Write framework-specific MCP configs and agent instruction files.
 	var skillResults []*skills.WriteResult
+	opts := skills.Options{Local: initLocal, Hooks: initHooks}
 	for _, framework := range initSkills {
-		result, err := skills.Write(absPath, framework)
+		result, err := skills.WriteWithOptions(absPath, framework, opts)
 		if err != nil {
 			return fmt.Errorf("--skills %s: %w", framework, err)
 		}
@@ -143,6 +168,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 			Framework string       `json:"framework"`
 			Actions   []actionJSON `json:"actions"`
 			Warnings  []string     `json:"warnings,omitempty"`
+			NextSteps []string     `json:"next_steps,omitempty"`
 		}
 		srJSON := make([]skillJSON, len(skillResults))
 		for i, sr := range skillResults {
@@ -150,7 +176,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 			for j, a := range sr.Actions {
 				actions[j] = actionJSON{a.Path, a.Status, a.Reason}
 			}
-			srJSON[i] = skillJSON{sr.Framework, actions, sr.Warnings}
+			srJSON[i] = skillJSON{sr.Framework, actions, sr.Warnings, sr.NextSteps}
 		}
 		return json.NewEncoder(os.Stdout).Encode(map[string]any{
 			"id":                  project.ID,
@@ -180,13 +206,15 @@ func runInit(cmd *cobra.Command, args []string) error {
 				fmt.Printf("  %s  %s\n", success("✓ created"), cyan(a.Path))
 			case "updated":
 				fmt.Printf("  %s  %s\n", warn("↑ updated"), yellow(a.Path))
+			case "removed":
+				fmt.Printf("  %s  %s\n", warn("− removed"), yellow(a.Path))
 			case "skipped":
 				fmt.Printf("  %s  %s  %s\n", dim("  skipped"), dim(a.Path), dim("("+a.Reason+")"))
 			}
 		}
-	}
-	if len(skillResults) > 0 {
-		fmt.Printf("\n%s\n", dim("Start the MCP server with: avc mcp serve"))
+		for _, step := range sr.NextSteps {
+			fmt.Printf("  %s %s\n", accent("→"), step)
+		}
 	}
 	return nil
 }
